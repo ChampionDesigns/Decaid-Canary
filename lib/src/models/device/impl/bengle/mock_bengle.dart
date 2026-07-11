@@ -6,6 +6,7 @@ import 'package:reaprime/src/models/device/impl/simulated_shot_weight_model.dart
 import 'package:reaprime/src/models/device/led_strip.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/models/device/scale.dart';
+import 'package:reaprime/src/models/device/scale_calibration.dart';
 import 'package:reaprime/src/models/device/simulated_device.dart';
 import 'package:reaprime/src/models/device/device_implementation.dart';
 import 'package:rxdart/rxdart.dart';
@@ -168,6 +169,61 @@ class MockBengle extends MockDe1 implements BengleInterface, SimulatedDevice {
     _emit();
   }
 
+  // --- load-cell calibration (two-point) ---
+  // Behavioural mock: each step "succeeds" immediately (no real load cells to
+  // settle). Emits a terminal status so progress subscribers see a completion,
+  // then returns a successful result. Left latch => Incomplete (awaiting
+  // right); right latch / zero => Ok / none. NB: the seeded idle/done status
+  // is mock-only convenience — the real mixin starts an EMPTY BehaviorSubject
+  // (no synthetic initial status); do not copy the seed there.
+  final BehaviorSubject<ScaleCalStatus> _calProgress =
+      BehaviorSubject<ScaleCalStatus>.seeded(
+        const ScaleCalStatus(
+          step: ScaleCalStep.idle,
+          subState: ScaleCalSubState.done,
+          remainingSeconds: 0,
+          pointStatus: ScaleCalPointStatus.none,
+          raw: 0,
+        ),
+      );
+
+  @override
+  Stream<ScaleCalStatus> get scaleCalibrationProgress => _calProgress.stream;
+
+  @override
+  Future<ScaleCalResult> calibrateScaleZero() async =>
+      _mockCalComplete(ScaleCalPointStatus.none);
+
+  @override
+  Future<ScaleCalResult> calibrateScaleWeightLeft(double grams) async =>
+      _mockCalComplete(ScaleCalPointStatus.incomplete);
+
+  @override
+  Future<ScaleCalResult> calibrateScaleWeightRight(double grams) async =>
+      _mockCalComplete(ScaleCalPointStatus.ok);
+
+  @override
+  Future<void> abortScaleCalibration() async {}
+
+  ScaleCalResult _mockCalComplete(ScaleCalPointStatus pointStatus) {
+    if (!_calProgress.isClosed) {
+      _calProgress.add(
+        ScaleCalStatus(
+          step: ScaleCalStep.complete,
+          subState: ScaleCalSubState.done,
+          remainingSeconds: 0,
+          pointStatus: pointStatus,
+          raw: 0,
+        ),
+      );
+    }
+    return ScaleCalResult(
+      success: true,
+      finalStep: ScaleCalStep.complete,
+      pointStatus: pointStatus,
+    );
+  }
+
   void _emit() {
     if (_weight.isClosed) return;
     _weight.add(
@@ -272,6 +328,9 @@ class MockBengle extends MockDe1 implements BengleInterface, SimulatedDevice {
     }
     if (!_probeTemperatureSubject.isClosed) {
       await _probeTemperatureSubject.close();
+    }
+    if (!_calProgress.isClosed) {
+      await _calProgress.close();
     }
     await super.onDisconnect();
   }

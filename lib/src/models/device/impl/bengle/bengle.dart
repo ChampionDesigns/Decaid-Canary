@@ -9,7 +9,10 @@ import 'package:reaprime/src/models/errors.dart';
 import 'package:rxdart/rxdart.dart';
 
 class Bengle extends UnifiedDe1
-    with IntegratedScaleCapability, LedStripCapability
+    with
+        IntegratedScaleCapability,
+        LedStripCapability,
+        ScaleCalibrationCapability
     implements BengleInterface {
   Bengle({required super.transport});
 
@@ -117,12 +120,14 @@ class Bengle extends UnifiedDe1
       );
     }
     await initIntegratedScale();
+    await initScaleCalibration();
     await initLedStrip();
   }
 
   @override
   Future<void> onDisconnect() async {
     await disposeLedStrip();
+    await disposeScaleCalibration();
     await disposeIntegratedScale();
     if (!_stopAtTempTarget.isClosed) {
       await _stopAtTempTarget.close();

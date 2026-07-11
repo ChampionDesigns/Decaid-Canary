@@ -38,12 +38,7 @@ enum BengleScaleMmr implements MmrAddress {
   /// returns 0. Confirm the tare by watching `Weight` drop toward 0,
   /// never the `0xA013` Flags bit (a `LastTARE` value proxy at best;
   /// older firmware hardcodes it to 0).
-  scaleTare(
-    0x0080388C,
-    4,
-    MmrValueKind.int32,
-    'ScaleTare',
-  );
+  scaleTare(0x0080388C, 4, MmrValueKind.int32, 'ScaleTare');
 
   const BengleScaleMmr(
     this.address,
