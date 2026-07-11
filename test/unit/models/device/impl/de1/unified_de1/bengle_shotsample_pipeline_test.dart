@@ -87,54 +87,51 @@ void main() {
       },
     );
 
-    test(
-      'every MachineSnapshot field maps from the 0xA013 frame + state frame '
-      '(incl. steamTemperature rounding)',
-      () async {
-        final snapshots = <MachineSnapshot>[];
-        final sub = bengle.currentSnapshot.listen(snapshots.add);
-        await pumpEventQueue();
-        final baseline = snapshots.length;
+    test('every MachineSnapshot field maps from the 0xA013 frame + state frame '
+        '(incl. steamTemperature rounding)', () async {
+      final snapshots = <MachineSnapshot>[];
+      final sub = bengle.currentSnapshot.listen(snapshots.add);
+      await pumpEventQueue();
+      final baseline = snapshots.length;
 
-        // Latest state frame: espresso (0x04) / pour (0x05) — read exactly
-        // like the 0xA00D path (state layout is transport-shared).
-        transport.subscribers[Endpoint.stateInfo.uuid]!(
-          Uint8List.fromList([0x04, 0x05]),
-        );
-        // Golden frame with SteamTemp raw 13550 (0x34EE) -> 135.5 °C: the
-        // int snapshot field must carry `.round()` = 136, matching the
-        // whole-degree 0xA00D field (G14 — don't widen the shared type).
-        final frame = Uint8List.fromList(_golden0xA013);
-        frame[23] = 0x34;
-        frame[24] = 0xEE;
-        transport.subscribers[Endpoint.bengleShotSample.uuid]!(frame);
-        await pumpEventQueue();
+      // Latest state frame: espresso (0x04) / pour (0x05) — read exactly
+      // like the 0xA00D path (state layout is transport-shared).
+      transport.subscribers[Endpoint.stateInfo.uuid]!(
+        Uint8List.fromList([0x04, 0x05]),
+      );
+      // Golden frame with SteamTemp raw 13550 (0x34EE) -> 135.5 °C: the
+      // int snapshot field must carry `.round()` = 136, matching the
+      // whole-degree 0xA00D field (G14 — don't widen the shared type).
+      final frame = Uint8List.fromList(_golden0xA013);
+      frame[23] = 0x34;
+      frame[24] = 0xEE;
+      transport.subscribers[Endpoint.bengleShotSample.uuid]!(frame);
+      await pumpEventQueue();
 
-        expect(snapshots.length, baseline + 1);
-        final snap = snapshots.last;
-        expect(snap.state.state, MachineState.espresso);
-        expect(snap.state.substate, MachineSubstate.pouring);
-        expect(snap.pressure, closeTo(9.00, 1e-9));
-        expect(snap.flow, closeTo(2.50, 1e-9));
-        expect(snap.mixTemperature, closeTo(92.50, 1e-9));
-        expect(snap.groupTemperature, closeTo(88.00, 1e-9));
-        expect(snap.targetMixTemperature, closeTo(93.00, 1e-9));
-        expect(snap.targetGroupTemperature, closeTo(90.00, 1e-9));
-        expect(snap.targetPressure, closeTo(6.00, 1e-9));
-        expect(snap.targetFlow, closeTo(2.00, 1e-9));
-        expect(snap.profileFrame, 7);
-        expect(
-          snap.steamTemperature,
-          136,
-          reason: '135.5 °C must round, not truncate',
-        );
-        expect(snap.weight, closeTo(36.5, 1e-9));
-        expect(snap.weightFlow, closeTo(1.80, 1e-9));
-        expect(snap.milkTemperature, closeTo(0.0, 1e-9));
+      expect(snapshots.length, baseline + 1);
+      final snap = snapshots.last;
+      expect(snap.state.state, MachineState.espresso);
+      expect(snap.state.substate, MachineSubstate.pouring);
+      expect(snap.pressure, closeTo(9.00, 1e-9));
+      expect(snap.flow, closeTo(2.50, 1e-9));
+      expect(snap.mixTemperature, closeTo(92.50, 1e-9));
+      expect(snap.groupTemperature, closeTo(88.00, 1e-9));
+      expect(snap.targetMixTemperature, closeTo(93.00, 1e-9));
+      expect(snap.targetGroupTemperature, closeTo(90.00, 1e-9));
+      expect(snap.targetPressure, closeTo(6.00, 1e-9));
+      expect(snap.targetFlow, closeTo(2.00, 1e-9));
+      expect(snap.profileFrame, 7);
+      expect(
+        snap.steamTemperature,
+        136,
+        reason: '135.5 °C must round, not truncate',
+      );
+      expect(snap.weight, closeTo(36.5, 1e-9));
+      expect(snap.weightFlow, closeTo(1.80, 1e-9));
+      expect(snap.milkTemperature, closeTo(0.0, 1e-9));
 
-        await sub.cancel();
-      },
-    );
+      await sub.cancel();
+    });
 
     test(
       'a truncated (<28 byte) 0xA013 frame is dropped, not decoded',

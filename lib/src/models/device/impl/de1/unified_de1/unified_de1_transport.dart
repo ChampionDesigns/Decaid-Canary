@@ -223,7 +223,9 @@ class UnifiedDe1Transport {
     await _transport.subscribe(de1ServiceUUID, Endpoint.bengleShotSample.uuid, (
       d,
     ) {
-      _bengleShotSampleNotification(ByteData.sublistView(Uint8List.fromList(d)));
+      _bengleShotSampleNotification(
+        ByteData.sublistView(Uint8List.fromList(d)),
+      );
     });
   }
 
