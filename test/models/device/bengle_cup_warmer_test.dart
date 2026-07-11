@@ -56,13 +56,15 @@ void main() {
       },
     );
 
-    test('getCupWarmerTemperature reads a whole-°C uint32 back from the wire', () async {
-      // Pre-queue a 50 °C reading (raw uint32, mult=1) at the matSetPoint addr.
-      final bytes = ByteData(4)..setUint32(0, 50, Endian.little);
-      transport.queueMmrResponseRaw(
-        BengleMmr.matSetPoint,
-        List<int>.generate(4, (i) => bytes.getUint8(i)),
-      );
+    test(
+      'getCupWarmerTemperature reads a whole-°C uint32 back from the wire',
+      () async {
+        // Pre-queue a 50 °C reading (raw uint32, mult=1) at the matSetPoint addr.
+        final bytes = ByteData(4)..setUint32(0, 50, Endian.little);
+        transport.queueMmrResponseRaw(
+          BengleMmr.matSetPoint,
+          List<int>.generate(4, (i) => bytes.getUint8(i)),
+        );
 
         final result = await bengle.getCupWarmerTemperature();
         expect(result, closeTo(50.0, 1e-6));
@@ -84,11 +86,13 @@ void main() {
 
     Iterable<FakeBleWrite> writesTo(int address) {
       final ba = ByteData(4)..setInt32(0, address, Endian.big);
-      return transport.writes.where((w) =>
-          w.characteristicUUID == Endpoint.writeToMMR.uuid &&
-          w.data[1] == ba.getUint8(1) &&
-          w.data[2] == ba.getUint8(2) &&
-          w.data[3] == ba.getUint8(3));
+      return transport.writes.where(
+        (w) =>
+            w.characteristicUUID == Endpoint.writeToMMR.uuid &&
+            w.data[1] == ba.getUint8(1) &&
+            w.data[2] == ba.getUint8(2) &&
+            w.data[3] == ba.getUint8(3),
+      );
     }
 
     int payloadOf(FakeBleWrite w) =>
@@ -98,34 +102,45 @@ void main() {
       transport.writes.clear();
       await bengle.setCupWarmerTemperature(70.0);
       final mode = writesTo(BengleMmr.cupWarmerMode.address);
-      expect(mode, isNotEmpty,
-          reason: 'CupWarmerMode (0x008038AC) must be written — temperature '
-              'alone does nothing');
+      expect(
+        mode,
+        isNotEmpty,
+        reason:
+            'CupWarmerMode (0x008038AC) must be written — temperature '
+            'alone does nothing',
+      );
       expect(payloadOf(mode.last), equals(1));
     });
 
     test('setCupWarmerTemperature(0) disables CupWarmerMode', () async {
       transport.writes.clear();
       await bengle.setCupWarmerTemperature(0.0);
-      expect(payloadOf(writesTo(BengleMmr.cupWarmerMode.address).last),
-          equals(0));
+      expect(
+        payloadOf(writesTo(BengleMmr.cupWarmerMode.address).last),
+        equals(0),
+      );
     });
 
-    test('CupWarmerMode + target are re-asserted on reconnect when enabled',
-        () async {
-      await bengle.setCupWarmerTemperature(70.0); // enable
-      await bengle.disconnect();
+    test(
+      'CupWarmerMode + target are re-asserted on reconnect when enabled',
+      () async {
+        await bengle.setCupWarmerTemperature(70.0); // enable
+        await bengle.disconnect();
 
-      transport.queueOnConnectResponses(v13Model: 128);
-      transport.writes.clear();
-      await bengle.onConnect();
+        transport.queueOnConnectResponses(v13Model: 128);
+        transport.writes.clear();
+        await bengle.onConnect();
 
-      expect(writesTo(BengleMmr.matSetPoint.address), isNotEmpty,
-          reason: 'matSetPoint re-pushed on connect');
-      final mode = writesTo(BengleMmr.cupWarmerMode.address);
-      expect(mode, isNotEmpty, reason: 'CupWarmerMode re-pushed on connect');
-      expect(payloadOf(mode.last), equals(1));
-    });
+        expect(
+          writesTo(BengleMmr.matSetPoint.address),
+          isNotEmpty,
+          reason: 'matSetPoint re-pushed on connect',
+        );
+        final mode = writesTo(BengleMmr.cupWarmerMode.address);
+        expect(mode, isNotEmpty, reason: 'CupWarmerMode re-pushed on connect');
+        expect(payloadOf(mode.last), equals(1));
+      },
+    );
 
     test('a disabled warmer does not re-push on reconnect', () async {
       // never enabled → _cupWarmerTarget stays 0
@@ -138,27 +153,35 @@ void main() {
   });
 
   group('cup-warmer registers stay Bengle-only', () {
-    test('a plain DE1 connect never touches MatSetPoint or CupWarmerMode',
-        () async {
-      final transport = FakeBleTransport();
-      final de1 = UnifiedDe1(transport: transport);
-      transport.queueOnConnectResponses(); // v13Model: 1 — plain DE1
-      await de1.onConnect();
+    test(
+      'a plain DE1 connect never touches MatSetPoint or CupWarmerMode',
+      () async {
+        final transport = FakeBleTransport();
+        final de1 = UnifiedDe1(transport: transport);
+        transport.queueOnConnectResponses(); // v13Model: 1 — plain DE1
+        await de1.onConnect();
 
-      Iterable<FakeBleWrite> writesTo(int address) {
-        final ba = ByteData(4)..setInt32(0, address, Endian.big);
-        return transport.writes.where((w) =>
-            w.characteristicUUID == Endpoint.writeToMMR.uuid &&
-            w.data[1] == ba.getUint8(1) &&
-            w.data[2] == ba.getUint8(2) &&
-            w.data[3] == ba.getUint8(3));
-      }
+        Iterable<FakeBleWrite> writesTo(int address) {
+          final ba = ByteData(4)..setInt32(0, address, Endian.big);
+          return transport.writes.where(
+            (w) =>
+                w.characteristicUUID == Endpoint.writeToMMR.uuid &&
+                w.data[1] == ba.getUint8(1) &&
+                w.data[2] == ba.getUint8(2) &&
+                w.data[3] == ba.getUint8(3),
+          );
+        }
 
-      expect(writesTo(BengleMmr.matSetPoint.address), isEmpty,
-          reason: 'cup-warmer re-assert is Bengle.onConnect machinery — the '
-              'shared DE1 connect path must never write it');
-      expect(writesTo(BengleMmr.cupWarmerMode.address), isEmpty);
-      transport.dispose();
-    });
+        expect(
+          writesTo(BengleMmr.matSetPoint.address),
+          isEmpty,
+          reason:
+              'cup-warmer re-assert is Bengle.onConnect machinery — the '
+              'shared DE1 connect path must never write it',
+        );
+        expect(writesTo(BengleMmr.cupWarmerMode.address), isEmpty);
+        transport.dispose();
+      },
+    );
   });
 }

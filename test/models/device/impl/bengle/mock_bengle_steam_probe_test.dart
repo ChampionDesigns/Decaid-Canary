@@ -22,12 +22,15 @@ void main() {
       expect(streamed, 60.0);
     });
 
-    test('setStopAtTemperatureTarget clamps to 0..80', () async {
-      await bengle.setStopAtTemperatureTarget(120.0);
-      expect(await bengle.getStopAtTemperatureTarget(), 80.0);
-      await bengle.setStopAtTemperatureTarget(-5.0);
-      expect(await bengle.getStopAtTemperatureTarget(), 0.0);
-    });
+    test(
+      'setStopAtTemperatureTarget clamps to 0..85 (matches real Bengle)',
+      () async {
+        await bengle.setStopAtTemperatureTarget(120.0);
+        expect(await bengle.getStopAtTemperatureTarget(), 85.0);
+        await bengle.setStopAtTemperatureTarget(-5.0);
+        expect(await bengle.getStopAtTemperatureTarget(), 0.0);
+      },
+    );
 
     test('probeAttached defaults to true', () async {
       final value = await bengle.probeAttached.first;
