@@ -108,6 +108,12 @@ Discovery services are responsible for scanning and creating device instances. E
   - Notification liveness uses the existing snapshot watchdog and normal
     `ConnectionManager` reconnect lifecycle. Serial has no separate keepalive
     or reconnect loop.
+  - On a confirmed Bengle the redundant `[M]` (0xA00D) stream is
+    unsubscribed (`<-M>`) as soon as the identity is known: 0xA013 is the
+    sole snapshot source there, and the dual 15 Hz stream overruns the
+    ~1920 B/s downlink ceiling (hw-confirmed: truncated frames, weight
+    flicker). BLE has the headroom and keeps 0xA00D subscribed
+    (parse-and-dropped).
 
 #### 3. SimulatedDeviceService
 - **Platform:** All
