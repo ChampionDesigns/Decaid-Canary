@@ -12,6 +12,8 @@ import 'package:reaprime/src/models/device/transport/logical_endpoint.dart';
 import 'package:reaprime/src/models/errors.dart';
 import 'package:reaprime/src/models/device/transport/serial_port.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/serial_response_correlator.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_shot_sample.dart'
+    show bengleShotSampleBytes;
 import 'package:rxdart/rxdart.dart';
 
 class UnifiedDe1Transport {
@@ -50,12 +52,22 @@ class UnifiedDe1Transport {
   final PublishSubject<ByteData> _mmrSubject = PublishSubject();
   BehaviorSubject<ByteData> _fwMapRequestSubject = BehaviorSubject();
 
+  // Bengle 0xA013 BengleShotSample (28 bytes). Only fed on a Bengle — the
+  // subscription is gated (BLE via [subscribeBengleShotSample], serial via the
+  // `<+S>` in `_serialConnect`). Seeded 28 zero bytes so late subscribers get a
+  // valid-length frame.
+  BehaviorSubject<ByteData> _bengleShotSampleSubject = BehaviorSubject.seeded(
+    ByteData(bengleShotSampleBytes),
+  );
+
   Stream<ByteData> get state => _stateSubject.asBroadcastStream();
   Stream<ByteData> get shotSample => _shotSampleSubject.asBroadcastStream();
   Stream<ByteData> get shotSettings => _shotSettingsSubject.asBroadcastStream();
   Stream<ByteData> get waterLevels => _waterLevelsSubject.asBroadcastStream();
   Stream<ByteData> get mmr => _mmrSubject.asBroadcastStream();
   Stream<ByteData> get fwMapRequest => _fwMapRequestSubject.asBroadcastStream();
+  Stream<ByteData> get bengleShotSample =>
+      _bengleShotSampleSubject.asBroadcastStream();
 
   // Serial only
   String _currentBuffer = "";
@@ -183,6 +195,38 @@ class UnifiedDe1Transport {
     });
   }
 
+  /// Subscribe to the Bengle 0xA013 BengleShotSample characteristic over BLE.
+  ///
+  /// Called by `UnifiedDe1.onConnect` **after** the Bengle identity is
+  /// confirmed (`v13Model >= 128`), never blind-enabled: enabling a
+  /// characteristic a plain DE1 lacks throws and permanently stalls the BLE
+  /// command queue (de1plus `de1_comms.tcl:777-785`). Idempotent: [subscribe]
+  /// replaces (not stacks) a prior listener for the same characteristic.
+  ///
+  /// On serial the `<+S>` enable already happened in `_serialConnect`;
+  /// instead this post-detection hook drops the now-redundant base stream: on
+  /// a Bengle, 0xA013 is the sole snapshot source, so `[M]` (0xA00D) is pure
+  /// wasted bandwidth — and the dual 15 Hz stream overruns the firmware's
+  /// ~1920 B/s serial downlink ceiling (hw-confirmed 2026-07-09:
+  /// truncated/odd-length frames, weight flicker). `_serialConnect` must keep
+  /// subscribing `<+M>` unconditionally because it runs before the identity is
+  /// known and `[M]` is how the serial probe recognises a DE1-family device at
+  /// all. BLE has the headroom and keeps 0xA00D subscribed (parse-and-drop).
+  Future<void> subscribeBengleShotSample() async {
+    final t = _transport;
+    if (transportType == TransportType.serial && t is SerialTransport) {
+      await t.writeCommand("<-${Endpoint.shotSample.representation}>");
+      return;
+    }
+    if (transportType != TransportType.ble) return;
+    if (_transport is! BLETransport) return;
+    await _transport.subscribe(de1ServiceUUID, Endpoint.bengleShotSample.uuid, (
+      d,
+    ) {
+      _bengleShotSampleNotification(ByteData.sublistView(Uint8List.fromList(d)));
+    });
+  }
+
   Future<void> _serialConnect() async {
     if (_transport is! SerialTransport) {
       throw "Wrong transport type";
@@ -210,6 +254,12 @@ class UnifiedDe1Transport {
     await _transport.writeCommand("<+${Endpoint.shotSettings.representation}>");
     await _transport.writeCommand("<+${Endpoint.readFromMMR.representation}>");
     await _transport.writeCommand("<+${Endpoint.fwMapRequest.representation}>");
+    // Bengle 0xA013. Unconditional on serial (unlike the gated BLE subscribe):
+    // the serial parser has no CCCD-on-missing-characteristic stall hazard,
+    // and a plain DE1 simply never emits `[S]` frames.
+    await _transport.writeCommand(
+      "<+${Endpoint.bengleShotSample.representation}>",
+    );
 
     // needed to know which state we're at - request idle state
     await _transport.writeCommand("<B>02");
@@ -233,6 +283,7 @@ class UnifiedDe1Transport {
     if (!_waterLevelsSubject.isClosed) _waterLevelsSubject.close();
     if (!_mmrSubject.isClosed) _mmrSubject.close();
     if (!_fwMapRequestSubject.isClosed) _fwMapRequestSubject.close();
+    if (!_bengleShotSampleSubject.isClosed) _bengleShotSampleSubject.close();
 
     await _transport.dispose();
   }
@@ -268,6 +319,9 @@ class UnifiedDe1Transport {
         await _transport.writeCommand(
           "<-${Endpoint.fwMapRequest.representation}>",
         );
+        await _transport.writeCommand(
+          "<-${Endpoint.bengleShotSample.representation}>",
+        );
         break;
       case TransportType.ble:
         // BLE doesn't need special disconnect handling
@@ -292,11 +346,18 @@ class UnifiedDe1Transport {
     _shotSettingsSubject.close();
     _waterLevelsSubject.close();
     _fwMapRequestSubject.close();
+    _bengleShotSampleSubject.close();
     _stateSubject = BehaviorSubject();
     _shotSampleSubject = BehaviorSubject();
     _shotSettingsSubject = BehaviorSubject();
     _waterLevelsSubject = BehaviorSubject();
     _fwMapRequestSubject = BehaviorSubject();
+    // Re-seeded, like the field initialiser: a reconnect must not leave late
+    // subscribers waiting on a subject that only emits once a Bengle frame
+    // arrives.
+    _bengleShotSampleSubject = BehaviorSubject.seeded(
+      ByteData(bengleShotSampleBytes),
+    );
   }
 
   // Matches a complete message: [X] prefix + hex payload, terminated by
@@ -393,6 +454,8 @@ class UnifiedDe1Transport {
           _mmrNotification(data);
         case "I":
           _fwMapNotification(data);
+        case "S":
+          _bengleShotSampleNotification(data);
         default:
           if (!_serialResponses.complete(representation, data)) {
             _log.warning("unhandled de1 message: $input");
@@ -433,6 +496,21 @@ class UnifiedDe1Transport {
       return;
     }
     _shotSampleSubject.add(d);
+  }
+
+  // a truncated 0xA013 frame (e.g. a stale/undersized ATT MTU) is
+  // dropped rather than forwarded, so the downstream decoder never hits a
+  // RangeError. Applies to both transports — serial `[S]` frames route here
+  // too.
+  void _bengleShotSampleNotification(ByteData d) {
+    if (d.lengthInBytes < bengleShotSampleBytes) {
+      _log.warning(
+        'Dropping short bengleShotSample frame '
+        '(${d.lengthInBytes} < $bengleShotSampleBytes bytes)',
+      );
+      return;
+    }
+    _bengleShotSampleSubject.add(d);
   }
 
   void _stateNotification(ByteData d) {
@@ -559,6 +637,8 @@ class UnifiedDe1Transport {
         throw UnsupportedError('Endpoint ${e.name} has no serial read path');
       case Endpoint.shotSample:
         return _latestSerialFrame(e, _shotSampleSubject, timeout);
+      case Endpoint.bengleShotSample:
+        return _latestSerialFrame(e, _bengleShotSampleSubject, timeout);
       case Endpoint.stateInfo:
         return _latestSerialFrame(e, _stateSubject, timeout);
       case Endpoint.headerWrite:

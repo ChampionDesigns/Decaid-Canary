@@ -15,6 +15,7 @@ import 'package:reaprime/src/models/device/firmware_update_state.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.utils.dart';
 import 'package:reaprime/src/models/device/impl/de1/mmr_address.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_shot_sample.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1_transport.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/models/device/led_strip.dart';
@@ -66,26 +67,56 @@ class UnifiedDe1 implements De1Interface {
   @override
   Stream<ConnectionState> get connectionState => _transport.connectionState;
 
-  late final Stream<MachineSnapshot> _currentSnapshot = _transport.shotSample
-      .map((d) {
-        notifyFrom(Endpoint.shotSample, d.buffer.asUint8List());
-        return d;
-      })
-      .withLatestFrom(
-        _transport.state.map((d) {
-          notifyFrom(Endpoint.stateInfo, d.buffer.asUint8List());
-          return d;
-        }),
-        (snp, st) {
-          final snapshot = _parseStateAndShotSample(st, snp);
-          _log.finest("new state: ${snapshot.toJson()}");
-          return snapshot;
-        },
-      )
-      .shareReplay(maxSize: 1);
+  // DE1 snapshots come from the 0xA00D shot sample (fixed-point layout). This
+  // is the only source on a plain DE1.
+  late final Stream<MachineSnapshot> _de1Snapshot = _buildSnapshotStream(
+    _transport.shotSample,
+    Endpoint.shotSample,
+    _parseStateAndShotSample,
+  );
 
+  // on a Bengle the 0xA013 BengleShotSample is the SOLE snapshot
+  // source (weight + gravimetric flow + milk). 0xA00D stays subscribed at the
+  // transport but is never turned into snapshots ("parse-and-drop") because
+  // nothing listens to [_de1Snapshot] on a Bengle. Firmware streams both at
+  // 15 Hz; charting both would double-sample. Lazily built (late final), so on
+  // a plain DE1 this never subscribes to the 0xA013 stream.
+  late final Stream<MachineSnapshot> _bengleSnapshot = _buildSnapshotStream(
+    _transport.bengleShotSample,
+    Endpoint.bengleShotSample,
+    _parseStateAndBengleShotSample,
+  );
+
+  Stream<MachineSnapshot> _buildSnapshotStream(
+    Stream<ByteData> source,
+    Endpoint sourceEndpoint,
+    MachineSnapshot Function(ByteData state, ByteData shot) parse,
+  ) {
+    return source
+        .map((d) {
+          notifyFrom(sourceEndpoint, d.buffer.asUint8List());
+          return d;
+        })
+        .withLatestFrom(
+          _transport.state.map((d) {
+            notifyFrom(Endpoint.stateInfo, d.buffer.asUint8List());
+            return d;
+          }),
+          (snp, st) {
+            final snapshot = parse(st, snp);
+            _log.finest("new state: ${snapshot.toJson()}");
+            return snapshot;
+          },
+        )
+        .shareReplay(maxSize: 1);
+  }
+
+  // Picked at access time (post-onConnect, once [_isBengle] is known) rather
+  // than captured in a field initialiser, so the DE1/Bengle choice is always
+  // correct. _isBengle only ever transitions false->true (during onConnect).
   @override
-  Stream<MachineSnapshot> get currentSnapshot => _currentSnapshot;
+  Stream<MachineSnapshot> get currentSnapshot =>
+      _isBengle ? _bengleSnapshot : _de1Snapshot;
 
   @override
   String get deviceId => _transport.id;
@@ -217,8 +248,28 @@ class UnifiedDe1 implements De1Interface {
   double? _cachedFlowEstimation;
   int? _connectedModelValue;
 
+  // Wire truth from v13Model, not the class picked at discovery: 0xA013 is the
+  // sole snapshot source whenever the firmware reports Bengle. Only ever
+  // transitions false->true, during onConnect.
+  bool _isBengle = false;
+
+  bool get isBengle => _isBengle;
+
   @protected
   int get connectedModelValue => _connectedModelValue!;
+
+  /// Enable the Bengle 0xA013 BengleShotSample stream. Gated on the
+  /// confirmed Bengle identity by the caller. Non-fatal: a failed subscribe
+  /// must not abort connect — the serial `<+S>` is already enabled in
+  /// `_serialConnect`, and on BLE a stalled subscribe would only lose
+  /// telemetry, not the connection.
+  Future<void> _enableBengleShotSample() async {
+    try {
+      await _transport.subscribeBengleShotSample();
+    } catch (e) {
+      _log.warning('Could not subscribe to 0xA013 BengleShotSample: $e');
+    }
+  }
 
   @override
   Future<void> onConnect() async {
@@ -230,17 +281,36 @@ class UnifiedDe1 implements De1Interface {
     // setProfile must perform a complete upload.
     _currentProfile = null;
 
+    // (re)enable the 0xA013 stream on every connect. On the FIRST
+    // connect _isBengle is still false here (set below from v13Model), so this
+    // no-ops and the enable happens in the post-detection block. On a RECONNECT
+    // the flag is already known and `_transport.connect()` just re-subscribed
+    // the base characteristics, so re-subscribe 0xA013 alongside them (the
+    // reconnect short-circuits below before reaching the detection block). On
+    // serial this also re-sends the `<-M>` after `_serialConnect`
+    // re-subscribed `<+M>` — without it a reconnected link saturates again.
+    if (_isBengle) {
+      await _enableBengleShotSample();
+    }
+
     if (_info != null) {
       return;
     }
 
     final model = _unpackMMRInt(await _mmrRead(MMRItem.v13Model));
     _connectedModelValue = model;
-    if (isBengleModelValue(model) && implementation != .bengle) {
+    _isBengle = isBengleModelValue(model);
+    if (_isBengle && implementation != .bengle) {
       _log.warning(
         'Device model $model indicates Bengle hardware; '
         'continuing in degraded DE1-compatible mode.',
       );
+    }
+    if (_isBengle) {
+      // first-connect enable of the 0xA013 stream, now that the Bengle
+      // identity is confirmed. Feeds both the snapshot pipeline and the
+      // integrated scale.
+      await _enableBengleShotSample();
     }
     final ghcInfo = _unpackMMRInt(await _mmrRead(MMRItem.ghcInfo));
     final serial = _unpackMMRInt(await _mmrRead(MMRItem.serialN));
@@ -749,6 +819,8 @@ class UnifiedDe1 implements De1Interface {
           return _mmr;
         case Endpoint.fwMapRequest:
           return _transport.fwMapRequest;
+        case Endpoint.bengleShotSample:
+          return _transport.bengleShotSample;
         default:
           throw UnimplementedError(
             'UnifiedDe1.notificationsFor: Endpoint.${endpoint.name} is '
