@@ -56,9 +56,9 @@ class BengleScheduleSync {
       Duration(seconds: 10),
       Duration(seconds: 30),
     ],
-  })  : _de1 = de1Controller,
-        _settings = settingsController,
-        _clock = clock ?? DateTime.now;
+  }) : _de1 = de1Controller,
+       _settings = settingsController,
+       _clock = clock ?? DateTime.now;
 
   final De1Controller _de1;
   final SettingsController _settings;
@@ -143,9 +143,9 @@ class BengleScheduleSync {
   /// are not licence to disarm the MACHINE. See `sleep_timeout_safety.dart` for
   /// the full reasoning — please read it before changing this.
   int get _desiredTimeout => machineSleepTimeoutMinutes(
-        userPresenceEnabled: _settings.userPresenceEnabled,
-        userTimeoutMinutes: _settings.sleepTimeoutMinutes,
-      );
+    userPresenceEnabled: _settings.userPresenceEnabled,
+    userTimeoutMinutes: _settings.sleepTimeoutMinutes,
+  );
 
   /// The wake table the machine should hold, packed for `ScheduleEntry`.
   ///
@@ -163,9 +163,9 @@ class BengleScheduleSync {
   /// write `ScheduleControl = 0` (clear + disable). That is respecting a
   /// deliberate setting, not second-guessing the tablet's presence.
   List<int> get _desiredTable => _settings.userPresenceEnabled
-      ? windowsFromSettingsJson(_settings.wakeSchedules)
-          .map((w) => w.packed)
-          .toList(growable: false)
+      ? windowsFromSettingsJson(
+          _settings.wakeSchedules,
+        ).map((w) => w.packed).toList(growable: false)
       : const <int>[];
 
   // ---------------------------------------------------------------------------
@@ -305,8 +305,10 @@ class BengleScheduleSync {
       final echo = await machine.readLocalTimeOfWeekEcho();
       if (generation != _generation) return;
       if (echo == 0) {
-        _log.warning('Machine clock reads 0 — it rebooted; re-pushing '
-            'clock, sleep timeout and schedule');
+        _log.warning(
+          'Machine clock reads 0 — it rebooted; re-pushing '
+          'clock, sleep timeout and schedule',
+        );
         _forgetDeviceState();
         return; // the drain in `finally` re-pushes everything
       }
@@ -317,8 +319,10 @@ class BengleScheduleSync {
         final control = await machine.readScheduleControl();
         if (generation != _generation) return;
         if (control == 0) {
-          _log.warning('ScheduleControl reads 0 but a schedule is expected — '
-              're-pushing the table');
+          _log.warning(
+            'ScheduleControl reads 0 but a schedule is expected — '
+            're-pushing the table',
+          );
           _forgetDeviceState();
           return;
         }

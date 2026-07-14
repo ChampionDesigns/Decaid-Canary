@@ -14,10 +14,10 @@ import 'package:reaprime/src/models/wake_schedule_windows.dart';
 /// Mirrors the firmware decoder verbatim, so the tests
 /// can assert that every value the app emits is one the firmware ACCEPTS.
 ({int dow, int startMin, int endMin}) fwDecode(int packed) => (
-      dow: (packed >> 22) & 0x7,
-      startMin: (packed >> 11) & 0x7FF,
-      endMin: packed & 0x7FF,
-    );
+  dow: (packed >> 22) & 0x7,
+  startMin: (packed >> 11) & 0x7FF,
+  endMin: packed & 0x7FF,
+);
 
 /// The firmware's own accept test (`scheduleAddEntry`): anything else is
 /// SILENTLY dropped.
@@ -33,15 +33,14 @@ WakeSchedule schedule({
   Set<int> days = const {},
   bool enabled = true,
   int? keepAwakeFor,
-}) =>
-    WakeSchedule(
-      id: id,
-      hour: hour,
-      minute: minute,
-      daysOfWeek: days,
-      enabled: enabled,
-      keepAwakeFor: keepAwakeFor,
-    );
+}) => WakeSchedule(
+  id: id,
+  hour: hour,
+  minute: minute,
+  daysOfWeek: days,
+  enabled: enabled,
+  keepAwakeFor: keepAwakeFor,
+);
 
 void main() {
   group('fwDayOfWeek (ISO -> firmware day index)', () {
@@ -88,16 +87,21 @@ void main() {
       expect(windows.last.packed, 21647780);
     });
 
-    test('the bitmask trap: a Mon-Fri bitmask would decode to Saturday only',
-        () {
-      // Documents WHY the goldens above are per-day. 0b0111110 = 62.
-      const bitmask = 62;
-      expect((bitmask >> 22) & 0x7, 0, reason: 'the days vanish entirely');
-      // And if a caller shifted the bitmask into the dow field:
-      final packedMask = (bitmask << 22) | (330 << 11) | 420;
-      expect(fwDecode(packedMask).dow, 6,
-          reason: 'the firmware would schedule Saturday, silently');
-    });
+    test(
+      'the bitmask trap: a Mon-Fri bitmask would decode to Saturday only',
+      () {
+        // Documents WHY the goldens above are per-day. 0b0111110 = 62.
+        const bitmask = 62;
+        expect((bitmask >> 22) & 0x7, 0, reason: 'the days vanish entirely');
+        // And if a caller shifted the bitmask into the dow field:
+        final packedMask = (bitmask << 22) | (330 << 11) | 420;
+        expect(
+          fwDecode(packedMask).dow,
+          6,
+          reason: 'the firmware would schedule Saturday, silently',
+        );
+      },
+    );
 
     test('every emitted entry round-trips through the firmware decoder', () {
       final windows = expandWindows([
@@ -108,9 +112,13 @@ void main() {
       ]);
       expect(windows, isNotEmpty);
       for (final w in windows) {
-        expect(fwAccepts(w.packed), isTrue,
-            reason: '$w packs to 0x${w.packed.toRadixString(16)} which the '
-                'firmware would silently DROP');
+        expect(
+          fwAccepts(w.packed),
+          isTrue,
+          reason:
+              '$w packs to 0x${w.packed.toRadixString(16)} which the '
+              'firmware would silently DROP',
+        );
         final d = fwDecode(w.packed);
         expect(d.dow, w.dow);
         expect(d.startMin, w.startMin);
@@ -122,7 +130,10 @@ void main() {
       final windows = expandWindows([
         schedule(hour: 23, minute: 59, days: {1}, keepAwakeFor: 1),
       ]);
-      expect(windows.single, const WakeWindow(dow: 1, startMin: 1439, endMin: 1440));
+      expect(
+        windows.single,
+        const WakeWindow(dow: 1, startMin: 1439, endMin: 1440),
+      );
       expect(fwAccepts(windows.single.packed), isTrue);
     });
   });
@@ -132,20 +143,23 @@ void main() {
       final windows = expandWindows([
         schedule(hour: 7, minute: 0, days: {1}),
       ]);
-      expect(windows.single,
-          const WakeWindow(dow: 1, startMin: 420, endMin: 450));
+      expect(
+        windows.single,
+        const WakeWindow(dow: 1, startMin: 420, endMin: 450),
+      );
     });
 
     test('keepAwakeFor at both bounds (1 and 720)', () {
       expect(
-        expandWindows([schedule(hour: 6, minute: 0, days: {2}, keepAwakeFor: 1)])
-            .single,
+        expandWindows([
+          schedule(hour: 6, minute: 0, days: {2}, keepAwakeFor: 1),
+        ]).single,
         const WakeWindow(dow: 2, startMin: 360, endMin: 361),
       );
       expect(
-        expandWindows(
-                [schedule(hour: 6, minute: 0, days: {2}, keepAwakeFor: 720)])
-            .single,
+        expandWindows([
+          schedule(hour: 6, minute: 0, days: {2}, keepAwakeFor: 720),
+        ]).single,
         const WakeWindow(dow: 2, startMin: 360, endMin: 1080),
       );
     });
@@ -156,18 +170,15 @@ void main() {
         schedule(hour: 7, minute: 0, days: const {}, keepAwakeFor: 45),
       ]);
       expect(windows.map((w) => w.dow).toList(), [0, 1, 2, 3, 4, 5, 6]);
-      expect(
-        windows.map((w) => w.packed).toList(),
-        [
-          0x000D21D1,
-          0x004D21D1,
-          0x008D21D1,
-          0x00CD21D1,
-          0x010D21D1,
-          0x014D21D1,
-          0x018D21D1,
-        ],
-      );
+      expect(windows.map((w) => w.packed).toList(), [
+        0x000D21D1,
+        0x004D21D1,
+        0x008D21D1,
+        0x00CD21D1,
+        0x010D21D1,
+        0x014D21D1,
+        0x018D21D1,
+      ]);
     });
 
     test('disabled schedules contribute nothing', () {
@@ -190,8 +201,14 @@ void main() {
       ]);
       expect(windows, hasLength(2));
       // Sorted by (dow, startMin): Sunday (dow 0) sorts before Saturday (6).
-      expect(windows, contains(const WakeWindow(dow: 6, startMin: 1380, endMin: 1440)));
-      expect(windows, contains(const WakeWindow(dow: 0, startMin: 0, endMin: 60)));
+      expect(
+        windows,
+        contains(const WakeWindow(dow: 6, startMin: 1380, endMin: 1440)),
+      );
+      expect(
+        windows,
+        contains(const WakeWindow(dow: 0, startMin: 0, endMin: 60)),
+      );
       final packed = windows.map((w) => w.packed).toSet();
       expect(packed, containsAll(<int>[0x01AB25A0, 0x0000003C]));
       expect(packed, containsAll(<int>[27993504, 60]));
@@ -207,14 +224,18 @@ void main() {
       }
     });
 
-    test('endMinRaw == 1440 exactly makes ONE entry, not a zero-length second',
-        () {
-      final windows = expandWindows([
-        schedule(hour: 23, minute: 0, days: {3}, keepAwakeFor: 60),
-      ]);
-      expect(windows.single,
-          const WakeWindow(dow: 3, startMin: 1380, endMin: 1440));
-    });
+    test(
+      'endMinRaw == 1440 exactly makes ONE entry, not a zero-length second',
+      () {
+        final windows = expandWindows([
+          schedule(hour: 23, minute: 0, days: {3}, keepAwakeFor: 60),
+        ]);
+        expect(
+          windows.single,
+          const WakeWindow(dow: 3, startMin: 1380, endMin: 1440),
+        );
+      },
+    );
   });
 
   group('mergeWindows', () {
@@ -223,8 +244,10 @@ void main() {
         schedule(id: 'a', hour: 7, minute: 0, days: {1}, keepAwakeFor: 60),
         schedule(id: 'b', hour: 7, minute: 30, days: {1}, keepAwakeFor: 60),
       ]);
-      expect(windows.single,
-          const WakeWindow(dow: 1, startMin: 420, endMin: 510));
+      expect(
+        windows.single,
+        const WakeWindow(dow: 1, startMin: 420, endMin: 510),
+      );
     });
 
     test('touching windows (end == start) merge too', () {
@@ -232,8 +255,10 @@ void main() {
         schedule(id: 'a', hour: 7, minute: 0, days: {1}, keepAwakeFor: 60),
         schedule(id: 'b', hour: 8, minute: 0, days: {1}, keepAwakeFor: 60),
       ]);
-      expect(windows.single,
-          const WakeWindow(dow: 1, startMin: 420, endMin: 540));
+      expect(
+        windows.single,
+        const WakeWindow(dow: 1, startMin: 420, endMin: 540),
+      );
     });
 
     test('a fully-contained window does not shrink its container', () {
@@ -271,7 +296,12 @@ void main() {
       // 5 every-day schedules, one of them crossing midnight, all disjoint so
       // nothing merges: 4 x 7 + 7 x 2 = 42 raw windows for a 32-slot table.
       final schedules = [
-        schedule(id: 'a', hour: 22, minute: 0, keepAwakeFor: 180), // 22:00-01:00
+        schedule(
+          id: 'a',
+          hour: 22,
+          minute: 0,
+          keepAwakeFor: 180,
+        ), // 22:00-01:00
         schedule(id: 'b', hour: 6, minute: 0, keepAwakeFor: 30),
         schedule(id: 'c', hour: 9, minute: 0, keepAwakeFor: 30),
         schedule(id: 'd', hour: 12, minute: 0, keepAwakeFor: 30),
@@ -320,8 +350,10 @@ void main() {
     test('Saturday 23:59:59 is 604799 (the firmware rejects >= 604800)', () {
       // 2026-07-18 is a Saturday.
       expect(localSecondsOfWeek(DateTime(2026, 7, 18, 23, 59, 59)), 604799);
-      expect(localSecondsOfWeek(DateTime(2026, 7, 18, 23, 59, 59)),
-          lessThan(kSecondsPerWeek));
+      expect(
+        localSecondsOfWeek(DateTime(2026, 7, 18, 23, 59, 59)),
+        lessThan(kSecondsPerWeek),
+      );
     });
 
     test('the spec\'s Tuesday 07:20:00 example is 199200', () {
@@ -338,8 +370,10 @@ void main() {
 
       final monMidnight = DateTime(2026, 7, 13, 0, 0, 0); // Monday
       final sunMidnight = DateTime(2026, 7, 12, 0, 0, 30);
-      expect(localSecondsOfWeek(monMidnight) - localSecondsOfWeek(sunMidnight),
-          86400 - 30);
+      expect(
+        localSecondsOfWeek(monMidnight) - localSecondsOfWeek(sunMidnight),
+        86400 - 30,
+      );
     });
 
     test('every minute of a week stays in the writable range', () {
@@ -468,14 +502,24 @@ void main() {
 
     test('end is on the wall clock on every day of the year', () {
       final windows = expandWindows([
-        schedule(hour: 5, minute: 30, days: {1, 2, 3, 4, 5, 6, 7}, keepAwakeFor: 90),
+        schedule(
+          hour: 5,
+          minute: 30,
+          days: {1, 2, 3, 4, 5, 6, 7},
+          keepAwakeFor: 90,
+        ),
       ]);
       // Whatever the host zone, and whichever day it shifts on, an open
       // 05:30–07:00 window always closes at wall-clock 07:00.
-      for (var day = DateTime(2026, 1, 1);
-          day.year == 2026;
-          day = DateTime(2026, day.month, day.day + 1)) {
-        final end = windowEnd(windows, DateTime(day.year, day.month, day.day, 6, 0));
+      for (
+        var day = DateTime(2026, 1, 1);
+        day.year == 2026;
+        day = DateTime(2026, day.month, day.day + 1)
+      ) {
+        final end = windowEnd(
+          windows,
+          DateTime(day.year, day.month, day.day, 6, 0),
+        );
         expect(end, isNotNull, reason: '$day');
         expect(end!.hour, 7, reason: '$day');
         expect(end.minute, 0, reason: '$day');

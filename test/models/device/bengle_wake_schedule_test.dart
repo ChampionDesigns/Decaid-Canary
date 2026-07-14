@@ -38,8 +38,7 @@ void main() {
       final d = w.data;
       // Frame: [len, addrHi, addrMid, addrLo, payload LE...]
       final address = 0x00800000 | (d[2] << 8) | d[3];
-      final value =
-          d[4] | (d[5] << 8) | (d[6] << 16) | (d[7] << 24);
+      final value = d[4] | (d[5] << 8) | (d[6] << 16) | (d[7] << 24);
       out.add((address: address, value: value));
     }
     return out;
@@ -71,8 +70,9 @@ void main() {
   group('setInactivitySleepTimeout', () {
     test('writes the minutes as an LE int32 to 0x008038BC', () async {
       await bengle.setInactivitySleepTimeout(30);
-      final w = transport.writes
-          .lastWhere((w) => w.characteristicUUID == Endpoint.writeToMMR.uuid);
+      final w = transport.writes.lastWhere(
+        (w) => w.characteristicUUID == Endpoint.writeToMMR.uuid,
+      );
       expect(w.data[0], 4);
       expect(w.data.sublist(1, 4), [0x80, 0x38, 0xBC]);
       expect(w.data.sublist(4, 8), [0x1E, 0x00, 0x00, 0x00]); // 30
@@ -98,17 +98,21 @@ void main() {
       expect(w.data.sublist(4, 8), [0x20, 0x0A, 0x03, 0x00]);
     });
 
-    test('never writes 0 — 0 is the "rebooted, never synced" sentinel',
-        () async {
-      await bengle.setLocalTimeOfWeek(0);
-      expect(mmrWrites().single.value, 1);
-    });
+    test(
+      'never writes 0 — 0 is the "rebooted, never synced" sentinel',
+      () async {
+        await bengle.setLocalTimeOfWeek(0);
+        expect(mmrWrites().single.value, 1);
+      },
+    );
 
-    test('never writes 604800 — the firmware setter rejects it outright',
-        () async {
-      await bengle.setLocalTimeOfWeek(604800);
-      expect(mmrWrites().single.value, 604799);
-    });
+    test(
+      'never writes 604800 — the firmware setter rejects it outright',
+      () async {
+        await bengle.setLocalTimeOfWeek(604800);
+        expect(mmrWrites().single.value, 604799);
+      },
+    );
   });
 
   group('pushWakeSchedule — the firmware write protocol', () {
@@ -142,24 +146,29 @@ void main() {
       expect(entry.data.sublist(4, 8), [0xA4, 0x51, 0x4A, 0x00]);
     });
 
-    test('an empty table writes ONLY control(0) — clear + disable, no enable',
-        () async {
-      await bengle.pushWakeSchedule(const []);
-      expect(
-        mmrWrites(),
-        [(address: 0x008038C8, value: 0)],
-        reason: 'enabling an empty table would be a lie, and writing entries '
-            'after a clear with no enable would be dead state',
-      );
-    });
+    test(
+      'an empty table writes ONLY control(0) — clear + disable, no enable',
+      () async {
+        await bengle.pushWakeSchedule(const []);
+        expect(
+          mmrWrites(),
+          [(address: 0x008038C8, value: 0)],
+          reason:
+              'enabling an empty table would be a lie, and writing entries '
+              'after a clear with no enable would be dead state',
+        );
+      },
+    );
 
-    test('caps at the 32-entry firmware table (the 33rd is dropped silently)',
-        () async {
-      await bengle.pushWakeSchedule(List<int>.generate(40, (i) => i + 1));
-      final entries = mmrWrites().where((w) => w.address == 0x008038C4);
-      expect(entries, hasLength(32));
-      expect(entries.last.value, 32);
-    });
+    test(
+      'caps at the 32-entry firmware table (the 33rd is dropped silently)',
+      () async {
+        await bengle.pushWakeSchedule(List<int>.generate(40, (i) => i + 1));
+        final entries = mmrWrites().where((w) => w.address == 0x008038C4);
+        expect(entries, hasLength(32));
+        expect(entries.last.value, 32);
+      },
+    );
   });
 
   group('read-backs (write echoes, not device state)', () {

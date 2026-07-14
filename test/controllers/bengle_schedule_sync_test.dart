@@ -12,6 +12,7 @@ import 'package:reaprime/src/models/device/scan_filter.dart';
 import 'package:reaprime/src/models/wake_schedule.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
 import 'package:reaprime/src/settings/sleep_timeout_safety.dart';
+import 'package:reaprime/src/models/device/remembered_device.dart';
 import 'package:rxdart/subjects.dart';
 
 import '../helpers/mock_settings_service.dart';
@@ -153,6 +154,11 @@ class _FakeDiscoveryService implements DeviceDiscoveryService {
   Future<void> scanForDevices({ScanFilter? filter}) async {}
   @override
   void stopScan() {}
+  // `implements` (not `extends`), so the default-bodied member upstream added
+  // to DeviceDiscoveryService must be overridden explicitly. Mirrors
+  // test/helpers/mock_device_discovery_service.dart.
+  @override
+  Future<Device?> tryQuickConnect(RememberedDevice remembered) async => null;
 }
 
 /// De1Controller with a directly-drivable machine stream.
@@ -204,38 +210,40 @@ void main() {
   });
 
   BengleScheduleSync makeSync() => BengleScheduleSync(
-        de1Controller: de1Controller,
-        settingsController: settings,
-        clock: () => now,
-        retryDelays: const [Duration(seconds: 3)],
-      );
+    de1Controller: de1Controller,
+    settingsController: settings,
+    clock: () => now,
+    retryDelays: const [Duration(seconds: 3)],
+  );
 
-  test('Bengle connect: clock -> timeout -> control(0) -> entries -> control(1)',
-      () {
-    fakeAsync((async) {
-      settings.setSleepTimeoutMinutes(30);
-      settings.setWakeSchedules(WakeSchedule.serializeList([benSchedule]));
-      async.flushMicrotasks();
+  test(
+    'Bengle connect: clock -> timeout -> control(0) -> entries -> control(1)',
+    () {
+      fakeAsync((async) {
+        settings.setSleepTimeoutMinutes(30);
+        settings.setWakeSchedules(WakeSchedule.serializeList([benSchedule]));
+        async.flushMicrotasks();
 
-      final sync = makeSync()..initialize();
-      final bengle = _RecordingBengle();
-      de1Controller.setDe1(bengle);
-      async.flushMicrotasks();
+        final sync = makeSync()..initialize();
+        final bengle = _RecordingBengle();
+        de1Controller.setDe1(bengle);
+        async.flushMicrotasks();
 
-      // Spec §5.1, verbatim: the clock FIRST (the firmware ignores an enabled
-      // table while its clock is invalid), then the persisted sleep timeout,
-      // then the clear -> entries -> enable sequence.
-      expect(bengle.log, [
-        'clock:$nowSecOfWeek',
-        'timeout:30',
-        'control:0',
-        ...benEntries,
-        'control:1',
-      ]);
+        // Spec §5.1, verbatim: the clock FIRST (the firmware ignores an enabled
+        // table while its clock is invalid), then the persisted sleep timeout,
+        // then the clear -> entries -> enable sequence.
+        expect(bengle.log, [
+          'clock:$nowSecOfWeek',
+          'timeout:30',
+          'control:0',
+          ...benEntries,
+          'control:1',
+        ]);
 
-      sync.dispose();
-    });
-  });
+        sync.dispose();
+      });
+    },
+  );
 
   test('a non-Bengle DE1 gets NOTHING — not one call', () {
     fakeAsync((async) {
@@ -255,7 +263,8 @@ void main() {
       expect(
         de1.calls,
         isEmpty,
-        reason: 'these registers do not exist on a stock DE1 — the whole '
+        reason:
+            'these registers do not exist on a stock DE1 — the whole '
             'feature is Bengle-gated',
       );
 
@@ -265,9 +274,9 @@ void main() {
 
   test('no enabled schedules: control(0) only — no entries, no enable', () {
     fakeAsync((async) {
-      settings.setWakeSchedules(WakeSchedule.serializeList([
-        benSchedule.copyWith(enabled: false),
-      ]));
+      settings.setWakeSchedules(
+        WakeSchedule.serializeList([benSchedule.copyWith(enabled: false)]),
+      );
       async.flushMicrotasks();
 
       final sync = makeSync()..initialize();
@@ -324,16 +333,14 @@ void main() {
       bengle.log.clear();
 
       // Drop Friday.
-      settings.setWakeSchedules(WakeSchedule.serializeList([
-        benSchedule.copyWith(daysOfWeek: const {1, 2, 3, 4}),
-      ]));
+      settings.setWakeSchedules(
+        WakeSchedule.serializeList([
+          benSchedule.copyWith(daysOfWeek: const {1, 2, 3, 4}),
+        ]),
+      );
       async.flushMicrotasks();
 
-      expect(bengle.log, [
-        'control:0',
-        ...benEntries.take(4),
-        'control:1',
-      ]);
+      expect(bengle.log, ['control:0', ...benEntries.take(4), 'control:1']);
       // The clock and the timeout are unchanged, so they are NOT re-written.
       expect(bengle.log.where((e) => e.startsWith('clock:')), isEmpty);
       expect(bengle.log.where((e) => e.startsWith('timeout:')), isEmpty);
@@ -342,27 +349,29 @@ void main() {
     });
   });
 
-  test('editing the sleep timeout writes the timeout ONLY — no table churn',
-      () {
-    fakeAsync((async) {
-      settings.setSleepTimeoutMinutes(30);
-      settings.setWakeSchedules(WakeSchedule.serializeList([benSchedule]));
-      async.flushMicrotasks();
+  test(
+    'editing the sleep timeout writes the timeout ONLY — no table churn',
+    () {
+      fakeAsync((async) {
+        settings.setSleepTimeoutMinutes(30);
+        settings.setWakeSchedules(WakeSchedule.serializeList([benSchedule]));
+        async.flushMicrotasks();
 
-      final sync = makeSync()..initialize();
-      final bengle = _RecordingBengle();
-      de1Controller.setDe1(bengle);
-      async.flushMicrotasks();
-      bengle.log.clear();
+        final sync = makeSync()..initialize();
+        final bengle = _RecordingBengle();
+        de1Controller.setDe1(bengle);
+        async.flushMicrotasks();
+        bengle.log.clear();
 
-      settings.setSleepTimeoutMinutes(90);
-      async.flushMicrotasks();
+        settings.setSleepTimeoutMinutes(90);
+        async.flushMicrotasks();
 
-      expect(bengle.log, ['timeout:90']);
+        expect(bengle.log, ['timeout:90']);
 
-      sync.dispose();
-    });
-  });
+        sync.dispose();
+      });
+    },
+  );
 
   /// SAFETY. `InactivitySleepTimeout` is the machine's thermal cut-out for when
   /// this tablet is gone — dead battery, crashed app, blackout. The firmware
@@ -444,7 +453,8 @@ void main() {
         expect(
           bengle.log,
           isNot(contains('control:1')),
-          reason: 'the UI hides the schedule section when the master toggle is '
+          reason:
+              'the UI hides the schedule section when the master toggle is '
               'off, so the user believes wake is off — it must BE off',
         );
         expect(bengle.scheduleControl, 0);
@@ -510,13 +520,19 @@ void main() {
           async.flushMicrotasks();
 
           final written = timeoutsWritten(bengle);
-          expect(written, hasLength(1),
-              reason: 'rogue input $rogue: the machine is always told a value');
+          expect(
+            written,
+            hasLength(1),
+            reason: 'rogue input $rogue: the machine is always told a value',
+          );
           expect(
             written.single,
             inInclusiveRange(
-                kMinMachineSleepTimeoutMinutes, kMaxSleepTimeoutMinutes),
-            reason: 'rogue input $rogue must land in the firmware\'s 1..240 — '
+              kMinMachineSleepTimeoutMinutes,
+              kMaxSleepTimeoutMinutes,
+            ),
+            reason:
+                'rogue input $rogue must land in the firmware\'s 1..240 — '
                 'never 0 (= never sleep), never a value the FW would reject',
           );
 
@@ -536,12 +552,21 @@ void main() {
         async.flushMicrotasks();
 
         final written = timeoutsWritten(bengle);
-        expect(written, hasLength(1),
-            reason: 'the timeout is pushed PROACTIVELY on every connect, not '
-                'only when the user has configured something');
+        expect(
+          written,
+          hasLength(1),
+          reason:
+              'the timeout is pushed PROACTIVELY on every connect, not '
+              'only when the user has configured something',
+        );
         expect(written.single, greaterThan(0));
-        expect(written.single,
-            inInclusiveRange(kMinMachineSleepTimeoutMinutes, kMaxSleepTimeoutMinutes));
+        expect(
+          written.single,
+          inInclusiveRange(
+            kMinMachineSleepTimeoutMinutes,
+            kMaxSleepTimeoutMinutes,
+          ),
+        );
 
         sync.dispose();
       });
@@ -568,7 +593,8 @@ void main() {
       expect(
         bengle.log.where((e) => e.startsWith('control:')),
         isEmpty,
-        reason: 'a table re-push on a timer would re-arm the firmware wake '
+        reason:
+            'a table re-push on a timer would re-arm the firmware wake '
             'edge every 15 minutes',
       );
 
@@ -576,38 +602,40 @@ void main() {
     });
   });
 
-  test('reboot detected on the verify poll (clock echoes 0) => full re-push',
-      () {
-    fakeAsync((async) {
-      settings.setSleepTimeoutMinutes(30);
-      settings.setWakeSchedules(WakeSchedule.serializeList([benSchedule]));
-      async.flushMicrotasks();
+  test(
+    'reboot detected on the verify poll (clock echoes 0) => full re-push',
+    () {
+      fakeAsync((async) {
+        settings.setSleepTimeoutMinutes(30);
+        settings.setWakeSchedules(WakeSchedule.serializeList([benSchedule]));
+        async.flushMicrotasks();
 
-      final sync = makeSync()..initialize();
-      final bengle = _RecordingBengle();
-      de1Controller.setDe1(bengle);
-      async.flushMicrotasks();
-      bengle.log.clear();
+        final sync = makeSync()..initialize();
+        final bengle = _RecordingBengle();
+        de1Controller.setDe1(bengle);
+        async.flushMicrotasks();
+        bengle.log.clear();
 
-      // The machine power-cycles without the link dropping (possible on USB
-      // serial). Its clock and table are RAM-only and are gone.
-      bengle.reboot();
+        // The machine power-cycles without the link dropping (possible on USB
+        // serial). Its clock and table are RAM-only and are gone.
+        bengle.reboot();
 
-      now = now.add(const Duration(minutes: 15));
-      async.elapse(const Duration(minutes: 15));
-      async.flushMicrotasks();
+        now = now.add(const Duration(minutes: 15));
+        async.elapse(const Duration(minutes: 15));
+        async.flushMicrotasks();
 
-      expect(bengle.log, [
-        'clock:${nowSecOfWeek + 15 * 60}',
-        'timeout:30',
-        'control:0',
-        ...benEntries,
-        'control:1',
-      ]);
+        expect(bengle.log, [
+          'clock:${nowSecOfWeek + 15 * 60}',
+          'timeout:30',
+          'control:0',
+          ...benEntries,
+          'control:1',
+        ]);
 
-      sync.dispose();
-    });
-  });
+        sync.dispose();
+      });
+    },
+  );
 
   test('ScheduleControl echoing 0 while a schedule is expected => re-push', () {
     fakeAsync((async) {
@@ -688,35 +716,37 @@ void main() {
     });
   });
 
-  test('a failed write is retried, not crashed on, and the order still holds',
-      () {
-    fakeAsync((async) {
-      settings.setSleepTimeoutMinutes(30);
-      settings.setWakeSchedules(WakeSchedule.serializeList([benSchedule]));
-      async.flushMicrotasks();
+  test(
+    'a failed write is retried, not crashed on, and the order still holds',
+    () {
+      fakeAsync((async) {
+        settings.setSleepTimeoutMinutes(30);
+        settings.setWakeSchedules(WakeSchedule.serializeList([benSchedule]));
+        async.flushMicrotasks();
 
-      final sync = makeSync()..initialize();
-      // The very first write (the clock) fails: nothing may be stamped as
-      // pushed, and the connect flow must survive it.
-      final bengle = _RecordingBengle(failWritesUntil: 1);
-      de1Controller.setDe1(bengle);
-      async.flushMicrotasks();
-      expect(bengle.log, isEmpty);
+        final sync = makeSync()..initialize();
+        // The very first write (the clock) fails: nothing may be stamped as
+        // pushed, and the connect flow must survive it.
+        final bengle = _RecordingBengle(failWritesUntil: 1);
+        de1Controller.setDe1(bengle);
+        async.flushMicrotasks();
+        expect(bengle.log, isEmpty);
 
-      async.elapse(const Duration(seconds: 3)); // the retry delay
-      async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 3)); // the retry delay
+        async.flushMicrotasks();
 
-      expect(bengle.log, [
-        'clock:$nowSecOfWeek',
-        'timeout:30',
-        'control:0',
-        ...benEntries,
-        'control:1',
-      ]);
+        expect(bengle.log, [
+          'clock:$nowSecOfWeek',
+          'timeout:30',
+          'control:0',
+          ...benEntries,
+          'control:1',
+        ]);
 
-      sync.dispose();
-    });
-  });
+        sync.dispose();
+      });
+    },
+  );
 
   test('dispose cancels everything and stops listening to settings', () {
     fakeAsync((async) {

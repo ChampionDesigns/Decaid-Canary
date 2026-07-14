@@ -125,14 +125,16 @@ List<WakeWindow> expandWindows(List<WakeSchedule> schedules) {
     if (!schedule.enabled) continue;
     final startMin = schedule.hour * 60 + schedule.minute;
     if (startMin < 0 || startMin >= kMinutesPerDay) {
-      _log.warning('Skipping schedule ${schedule.id}: start minute $startMin '
-          'is outside 0..1439');
+      _log.warning(
+        'Skipping schedule ${schedule.id}: start minute $startMin '
+        'is outside 0..1439',
+      );
       continue;
     }
     // WakeSchedule already normalises `0` to null; clamp defensively so a
     // hand-edited settings blob can never emit an entry the firmware drops.
-    final windowMinutes =
-        (schedule.keepAwakeFor ?? kDefaultWakeWindowMinutes).clamp(1, 720);
+    final windowMinutes = (schedule.keepAwakeFor ?? kDefaultWakeWindowMinutes)
+        .clamp(1, 720);
     final endMinRaw = startMin + windowMinutes;
 
     final isoDays = schedule.daysOfWeek.isEmpty
@@ -141,8 +143,10 @@ List<WakeWindow> expandWindows(List<WakeSchedule> schedules) {
 
     for (final iso in isoDays) {
       if (iso < 1 || iso > 7) {
-        _log.warning('Skipping day $iso of schedule ${schedule.id}: not an '
-            'ISO weekday (1..7)');
+        _log.warning(
+          'Skipping day $iso of schedule ${schedule.id}: not an '
+          'ISO weekday (1..7)',
+        );
         continue;
       }
       final dow = fwDayOfWeek(iso);
@@ -153,16 +157,16 @@ List<WakeWindow> expandWindows(List<WakeSchedule> schedules) {
         // app splits the window across two consecutive day indices. Saturday
         // wraps to Sunday — the table is a weekly repeat, so "next Sunday"
         // and "this Sunday" are the same slot.
-        raw.add(WakeWindow(
-          dow: dow,
-          startMin: startMin,
-          endMin: kMinutesPerDay,
-        ));
-        raw.add(WakeWindow(
-          dow: (dow + 1) % 7,
-          startMin: 0,
-          endMin: endMinRaw - kMinutesPerDay,
-        ));
+        raw.add(
+          WakeWindow(dow: dow, startMin: startMin, endMin: kMinutesPerDay),
+        );
+        raw.add(
+          WakeWindow(
+            dow: (dow + 1) % 7,
+            startMin: 0,
+            endMin: endMinRaw - kMinutesPerDay,
+          ),
+        );
       }
     }
   }
@@ -191,10 +195,11 @@ List<WakeWindow> mergeWindows(List<WakeWindow> windows) {
   final merged = <WakeWindow>[];
   final days = byDay.keys.toList()..sort();
   for (final dow in days) {
-    final day = byDay[dow]!..sort((a, b) {
-      final byStart = a.startMin.compareTo(b.startMin);
-      return byStart != 0 ? byStart : a.endMin.compareTo(b.endMin);
-    });
+    final day = byDay[dow]!
+      ..sort((a, b) {
+        final byStart = a.startMin.compareTo(b.startMin);
+        return byStart != 0 ? byStart : a.endMin.compareTo(b.endMin);
+      });
     var start = day.first.startMin;
     var end = day.first.endMin;
     for (final w in day.skip(1)) {
@@ -293,7 +298,8 @@ DateTime? windowEnd(List<WakeWindow> windows, DateTime now) {
 /// 00:00:00 therefore reports 1 — a ≤ 1 s lie once a week, in exchange for an
 /// unambiguous reboot signal.
 int localSecondsOfWeek(DateTime now) {
-  final seconds = fwDayOfWeek(now.weekday) * 86400 +
+  final seconds =
+      fwDayOfWeek(now.weekday) * 86400 +
       now.hour * 3600 +
       now.minute * 60 +
       now.second;
