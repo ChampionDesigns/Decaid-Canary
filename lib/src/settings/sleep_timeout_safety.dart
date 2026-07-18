@@ -71,3 +71,47 @@ int machineSleepTimeoutMinutes({
     kMaxSleepTimeoutMinutes,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Stored-preference bounds (from PR #457).
+//
+// Distinct concern from the machine-write floor above: this half decides what
+// may be STORED as the user's preference (0 is a legal preference meaning
+// "the app will not sleep the machine on its own idle timer"), and coerces
+// untrusted input (REST JSON, imported settings blobs) instead of hard-casting
+// it. The floor above still governs what is written TO the machine, so a
+// stored 0 never reaches the firmware as "never sleep".
+// ---------------------------------------------------------------------------
+
+/// The widest range the stored user preference may take.
+///
+/// `0` is legal and means "Disabled" — the app will not sleep the machine on its
+/// own idle timer. It is a statement about *the app's* behaviour only.
+const int kMinSleepTimeoutSetting = 0;
+const int kMaxSleepTimeoutSetting = kMaxSleepTimeoutMinutes;
+
+/// True if [minutes] is a storable sleep-timeout preference (`0..240`).
+bool isValidSleepTimeoutSetting(int minutes) =>
+    minutes >= kMinSleepTimeoutSetting && minutes <= kMaxSleepTimeoutSetting;
+
+/// Coerces an untrusted value (REST JSON, an imported settings blob) into a
+/// storable sleep-timeout preference, or `null` if it is not a usable number at
+/// all — so the caller can reject it rather than store garbage.
+///
+/// Note `0` survives this: it is a legal *preference*, not a rejection.
+int? sanitizeSleepTimeoutSetting(Object? raw) {
+  final int value;
+  switch (raw) {
+    case final int i:
+      value = i;
+    case final double d:
+      value = d.round();
+    case final String s:
+      final parsed = int.tryParse(s.trim());
+      if (parsed == null) return null;
+      value = parsed;
+    default:
+      return null; // null, bool, list, … — not a timeout.
+  }
+  return value.clamp(kMinSleepTimeoutSetting, kMaxSleepTimeoutSetting);
+}
