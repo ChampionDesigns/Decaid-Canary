@@ -202,6 +202,7 @@ class De1Controller {
         // (test/controllers/de1_controller_resolve_test.dart locks this).
         if (machine is Bengle) {
           await machine.disposeIntegratedScale();
+          await machine.disposeScaleCalibration();
           await machine.disposeLedStrip();
         }
         if (machine is UnifiedDe1) {
