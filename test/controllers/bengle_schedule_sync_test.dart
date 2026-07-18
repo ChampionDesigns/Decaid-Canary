@@ -8,6 +8,7 @@ import 'package:reaprime/src/controllers/device_controller.dart';
 import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/device.dart';
+import 'package:reaprime/src/models/device/remembered_device.dart';
 import 'package:reaprime/src/models/device/scan_filter.dart';
 import 'package:reaprime/src/models/wake_schedule.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
@@ -153,6 +154,11 @@ class _FakeDiscoveryService implements DeviceDiscoveryService {
   Future<void> scanForDevices({ScanFilter? filter}) async {}
   @override
   void stopScan() {}
+  // Added post-merge: upstream introduced tryQuickConnect on
+  // DeviceDiscoveryService after this fake was written. Matches the null
+  // stub every other fake in the suite uses.
+  @override
+  Future<Device?> tryQuickConnect(RememberedDevice remembered) async => null;
 }
 
 /// De1Controller with a directly-drivable machine stream.
