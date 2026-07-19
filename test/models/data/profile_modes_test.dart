@@ -192,6 +192,84 @@ void main() {
     });
   });
 
+  group('power exit condition', () {
+    // A pressure step exiting early on hydraulic power (W = 0.1*P*F).
+    Map<String, dynamic> pressureStepPowerOverJson() => {
+      'name': 'ramp to power',
+      'pump': 'pressure',
+      'transition': 'fast',
+      'volume': 0,
+      'seconds': 30,
+      'temperature': 92,
+      'sensor': 'coffee',
+      'pressure': 9.0,
+      'exit': {'type': 'power', 'condition': 'over', 'value': 4.5},
+    };
+
+    test('parses exit type:"power" into ExitType.power', () {
+      final step = ProfileStep.fromJson(pressureStepPowerOverJson());
+      expect(step.exit, isNotNull);
+      expect(step.exit!.type, ExitType.power);
+      expect(step.exit!.condition, ExitCondition.over);
+      expect(step.exit!.value, 4.5);
+    });
+
+    test('round-trips a pressure-step power-over exit losslessly', () {
+      final original = ProfileStep.fromJson(pressureStepPowerOverJson());
+      final restored = ProfileStep.fromJson(original.toJson());
+      expect(restored, equals(original));
+      expect(restored.exit!.type, ExitType.power);
+    });
+
+    test('round-trips a flow-step power-under exit losslessly', () {
+      final json = {
+        'name': 'flow to power',
+        'pump': 'flow',
+        'transition': 'fast',
+        'volume': 0,
+        'seconds': 20,
+        'temperature': 90,
+        'sensor': 'coffee',
+        'flow': 2.0,
+        'exit': {'type': 'power', 'condition': 'under', 'value': 2.0},
+      };
+      final original = ProfileStep.fromJson(json);
+      final restored = ProfileStep.fromJson(original.toJson());
+      expect(restored, equals(original));
+      expect(restored.exit!.type, ExitType.power);
+      expect(restored.exit!.condition, ExitCondition.under);
+    });
+
+    test('toJson re-emits type:"power" (not dropped, not degraded to P/F)', () {
+      final json = ProfileStep.fromJson(pressureStepPowerOverJson()).toJson();
+      // The load-bearing guarantee: a power exit survives round-trip on ANY
+      // machine and NEVER silently becomes a pressure/flow exit.
+      expect(json['exit']['type'], 'power');
+    });
+
+    test('StepExitCondition round-trips directly', () {
+      const exit = StepExitCondition(
+        type: ExitType.power,
+        condition: ExitCondition.over,
+        value: 4.5,
+      );
+      expect(StepExitCondition.fromJson(exit.toJson()), equals(exit));
+    });
+
+    test('SKEW: an ExitType lacking "power" THROWS on byName (an old client '
+        'gives a VISIBLE 400, never a silent pressure/flow exit)', () {
+      // The same mechanism that makes `type:"power"` an enum value rather than
+      // an additive key: byName on an unknown name throws ArgumentError, which
+      // fromJson propagates to a clean 400.
+      expect(
+        () => ExitType.values.byName('definitely-not-an-exit-type'),
+        throwsA(isA<ArgumentError>()),
+      );
+      // A knowing client resolves it fine.
+      expect(ExitType.values.byName('power'), ExitType.power);
+    });
+  });
+
   group('whole-Profile round-trip with novel pump-mode steps', () {
     test('a profile mixing flow / power / lever round-trips', () {
       final profileJson = {

@@ -5567,8 +5567,9 @@ components:
               type: integer
               description: >
                 Per-frame profile-step capability bitmask: 0x1 = Power,
-                0x2 = Lever, 0x4 = HOLD. 0 or absent means the machine cannot
-                run those profile steps, and arming one is refused with a 400.
+                0x2 = Lever, 0x4 = HOLD, 0x8 = cross-variable power exit.
+                0 or absent means the machine cannot run those profile steps,
+                and arming one — or a power exit — is refused with a 400.
                 Only firmware that implements the new pump modes defines the
                 register; stock firmware and every DE1 report 0.
           example:
@@ -6034,8 +6035,14 @@ components:
       properties:
         type:
           type: string
-          enum: [pressure, flow]
-          description: Which measurement to evaluate
+          enum: [pressure, flow, power]
+          description: >-
+            Which measurement to evaluate. `power` is hydraulic watts
+            (0.1 * pressure * flow) and requires a capable machine
+            (ProfileModeCaps bit3 = 0x8); arming a power exit on a machine
+            without it is refused with a 400. The exit variable is normally the
+            step's non-own variable (e.g. a pressure step exits on flow or
+            power).
         condition:
           type: string
           enum: [over, under]

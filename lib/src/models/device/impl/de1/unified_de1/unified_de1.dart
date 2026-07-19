@@ -283,10 +283,10 @@ class UnifiedDe1 implements De1Interface {
     _refillKitDetected = _unpackMMRInt(
       await _mmrRead(MMRItem.refillKitPresent),
     );
-    // Per-frame Power/Lever/HOLD capability bitmask. Only firmware that
-    // implements the new pump modes defines this register; stock firmware and
-    // every DE1 do not. ANY failure — timeout, short buffer, or a stray word
-    // with bits outside 0x7 — must yield 0, so the read can never hang or fail
+    // Per-frame Power/Lever/HOLD/power-exit capability bitmask. Only firmware
+    // that implements the new pump modes defines this register; stock firmware
+    // and every DE1 do not. ANY failure — timeout, short buffer, or a stray word
+    // with bits outside 0xF — must yield 0, so the read can never hang or fail
     // the connect flow and the arm-time refusal gate then fail-closes on any
     // new-mode step.
     final profileModeCaps = await _readProfileModeCaps();
@@ -328,22 +328,23 @@ class UnifiedDe1 implements De1Interface {
   /// Read the ProfileModeCaps bitmask, fail-closed to 0.
   /// Every failure mode collapses to 0 (no new modes offered): a missing
   /// register (timeout/omit on firmware without the capability), a short
-  /// buffer, or a stray word with bits outside the defined 0x7 mask. The source
+  /// buffer, or a stray word with bits outside the defined 0xF mask. The source
   /// read's late retry-timeout is swallowed (`catchError`) so it can never
   /// surface as an unhandled async error after the outer timeout wins.
   ///
-  /// The mask is 0x7 (bit0 Power / bit1 Lever / bit2 HOLD) and MUST track the
-  /// highest defined capability bit: a HOLD-capable machine returns 0x7, and a
-  /// mask left at 0x3 would treat that legitimate word as garbage and zero it,
-  /// hiding Power/Lever/HOLD entirely. Bits above 0x7 remain undefined and
-  /// still fail-close to 0.
+  /// The mask is 0xF (bit0 Power / bit1 Lever / bit2 HOLD / bit3 power exit) and
+  /// MUST track the highest defined capability bit: a power-exit-capable machine
+  /// returns 0xF, and a mask left at 0x7 would treat that legitimate word as
+  /// garbage and zero it, hiding Power/Lever/HOLD/power-exit entirely. This is
+  /// why the mask MUST widen to 0xF before any firmware advertises bit3. Bits
+  /// above 0xF remain undefined and still fail-close to 0.
   Future<int> _readProfileModeCaps() async {
     try {
       final caps = await _mmrRead(MMRItem.profileModeCaps)
           .then(_unpackMMRInt)
           .catchError((Object _) => 0)
           .timeout(_profileModeCapsReadTimeout, onTimeout: () => 0);
-      if (caps < 0 || (caps & ~0x7) != 0) return 0;
+      if (caps < 0 || (caps & ~0xF) != 0) return 0;
       return caps;
     } catch (_) {
       return 0;
@@ -489,17 +490,21 @@ class UnifiedDe1 implements De1Interface {
     return upload;
   }
 
-  /// Refuse to upload a profile that uses a per-frame Power/Lever step or a
-  /// HOLD transition to a machine that cannot run it — either the device is not
-  /// a Bengle (the modes reinterpret the base-frame U8D1 SetVal as watts / P0,
-  /// or latch a live measurement for HOLD — all protocol-v2 semantics) or its
+  /// Refuse to upload a profile that uses a per-frame Power/Lever step, a HOLD
+  /// transition, or a cross-variable power exit to a machine that cannot run it
+  /// — either the device is not a Bengle (the modes reinterpret the base-frame
+  /// U8D1 SetVal as watts / P0, latch a live measurement for HOLD, or compare
+  /// hydraulic watts for a power exit — all protocol-v2 semantics) or its
   /// firmware did not advertise the matching capability bit (bit0 Power, bit1
-  /// Lever, bit2 HOLD). A HOLD-capable machine returns 0x7; stock
-  /// firmware and every DE1 return 0 (see [onConnect]), so this fail-closes.
-  /// Thrown as a [ProfileModeUnsupportedException] (a PERMANENT refusal for
-  /// the connection) so the REST boundary surfaces a clean 400 instead of a
-  /// silent mis-command (watts read as bar, a P0 as constant pressure), and so
-  /// `WorkflowDeviceSync` parks instead of retrying forever.
+  /// Lever, bit2 HOLD, bit3 power exit). A HOLD-capable machine returns 0x7, a
+  /// power-exit-capable machine 0xF; stock firmware and every DE1 return 0 (see
+  /// [onConnect]), so this fail-closes. A power exit is an orthogonal per-step
+  /// property (any step type can carry one), so it gets its own predicate and
+  /// its own bit — pressure/flow cross-exits stay ungated, since they already
+  /// run on a stock DE1. Thrown as a [ProfileModeUnsupportedException] (a
+  /// PERMANENT refusal for the connection) so the REST boundary surfaces a clean
+  /// 400 instead of a silent mis-command (watts read as bar, a P0 as constant
+  /// pressure), and so `WorkflowDeviceSync` parks instead of retrying forever.
   void _assertProfileModeSupported(Profile profile) {
     final hasPower = profile.steps.any((s) => s is ProfileStepPower);
     final hasLever = profile.steps.any((s) => s is ProfileStepLever);
@@ -509,7 +514,11 @@ class UnifiedDe1 implements De1Interface {
     final hasHold = profile.steps.any(
       (s) => s.transition == TransitionType.hold && s is! ProfileStepLever,
     );
-    if (!hasPower && !hasLever && !hasHold) return;
+    // A power exit is orthogonal to the step type: any step may carry one.
+    final hasPowerExit = profile.steps.any(
+      (s) => s.exit?.type == ExitType.power,
+    );
+    if (!hasPower && !hasLever && !hasHold && !hasPowerExit) return;
 
     // HOLD on the FIRST step is invalid on EVERY machine — there is no previous
     // step whose achieved value could be latched. Refuse it up front (before
@@ -532,13 +541,15 @@ class UnifiedDe1 implements De1Interface {
         ? xs.join()
         : '${xs.sublist(0, xs.length - 1).join(', ')} and ${xs.last}';
     // Describe each refused capability with the RIGHT noun: Power and Lever are
-    // pump MODES, HOLD is a TRANSITION. e.g. "Power and Lever pump modes and
-    // the HOLD transition".
-    String describe(List<String> pumpModes, bool hold) {
+    // pump MODES, HOLD is a TRANSITION, a power exit is an EXIT CONDITION (never
+    // a "pump mode"). e.g. "Power and Lever pump modes and the HOLD transition
+    // and the power exit condition".
+    String describe(List<String> pumpModes, bool hold, bool powerExit) {
       final parts = <String>[
         if (pumpModes.isNotEmpty)
           '${andJoin(pumpModes)} pump mode${pumpModes.length > 1 ? 's' : ''}',
         if (hold) 'HOLD transition',
+        if (powerExit) 'power exit condition',
       ];
       return parts.join(' and the ');
     }
@@ -550,11 +561,16 @@ class UnifiedDe1 implements De1Interface {
     // only AFTER header + base frames were on the wire, stranding a half-written
     // profile. The ext-loop isBengle guard stays as belt-and-suspenders.
     if (!isBengle) {
-      final desc = describe([
-        if (hasPower) 'Power',
-        if (hasLever) 'Lever',
-      ], hasHold);
-      final count = (hasPower ? 1 : 0) + (hasLever ? 1 : 0) + (hasHold ? 1 : 0);
+      final desc = describe(
+        [if (hasPower) 'Power', if (hasLever) 'Lever'],
+        hasHold,
+        hasPowerExit,
+      );
+      final count =
+          (hasPower ? 1 : 0) +
+          (hasLever ? 1 : 0) +
+          (hasHold ? 1 : 0) +
+          (hasPowerExit ? 1 : 0);
       throw ProfileModeUnsupportedException(
         'This machine is not a Bengle; the $desc used by profile '
         '"${profile.title}" require${count == 1 ? 's' : ''} Bengle firmware '
@@ -566,9 +582,11 @@ class UnifiedDe1 implements De1Interface {
     if (hasPower && (caps & 0x1) == 0) missingModes.add('Power');
     if (hasLever && (caps & 0x2) == 0) missingModes.add('Lever');
     final missingHold = hasHold && (caps & 0x4) == 0;
-    if (missingModes.isEmpty && !missingHold) return;
+    final missingPowerExit = hasPowerExit && (caps & 0x8) == 0;
+    if (missingModes.isEmpty && !missingHold && !missingPowerExit) return;
     throw ProfileModeUnsupportedException(
-      'This machine does not support the ${describe(missingModes, missingHold)} '
+      'This machine does not support the '
+      '${describe(missingModes, missingHold, missingPowerExit)} '
       'used by profile "${profile.title}" — the firmware did not advertise the '
       'capability (ProfileModeCaps bit missing). Update the machine firmware '
       'to run these profiles.',
