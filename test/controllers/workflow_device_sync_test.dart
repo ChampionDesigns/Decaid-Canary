@@ -1329,5 +1329,48 @@ void main() {
         reason: 'parked on the same refused profile — no re-attempt',
       );
     });
+
+    test('a power-exit refusal parks identically (the park is exception-driven, '
+        'so it inherits for a power exit with no park-side change)', () async {
+      // The gate throws the same ProfileModeUnsupportedException for a power
+      // exit as for a lever step, so the park path needs no per-reason branch.
+      final refusing = _RefusingDe1(refuseTitle: 'Power exit demo');
+      final controller = await connect(refusing);
+      final s = WorkflowDeviceSync(
+        workflowController: wf,
+        de1Controller: controller,
+        retryDelays: const [
+          Duration(milliseconds: 20),
+          Duration(milliseconds: 40),
+        ],
+      );
+      activeSync = s;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      refusing.totalCalls = 0;
+      refusing.setProfileCalls.clear();
+
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Power exit demo')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(refusing.totalCalls, 1, reason: 'attempted exactly once');
+
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(
+        refusing.totalCalls,
+        1,
+        reason: 'a permanent power-exit refusal must never be retried',
+      );
+
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Adaptive')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(
+        refusing.setProfileCalls.map((p) => p.title),
+        ['Power exit demo', 'Adaptive'],
+        reason: 'a workflow change clears the park and re-attempts',
+      );
+    });
   });
 }
