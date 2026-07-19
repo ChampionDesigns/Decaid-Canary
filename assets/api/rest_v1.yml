@@ -5331,6 +5331,69 @@ components:
           description: >
             Milk-probe temperature in °C (Bengle 0xA013). 0 when the firmware
             does not provide it.
+        fusedR1:
+          type: number
+          description: >
+            Fused puck resistance, n=1 convention (R1, bar·s/mL), computed by
+            Bengle firmware and streamed on the 0xA014 sample (serial/CDC only).
+            Optional: the key is omitted when the value has not been observed
+            (no estimator frame yet, or the field's wire sentinel). Same
+            omit-when-absent rule applies on the live state and on re-read
+            history shots.
+        fusedR2:
+          type: number
+          description: >
+            Fused puck resistance, n=2 convention (R2, bar·s²/mL²), Bengle
+            0xA014. Optional; omitted when unobserved.
+        fusedC:
+          type: number
+          description: >
+            Fused compliance (C, mL/bar), Bengle 0xA014. Optional; omitted when
+            unobserved.
+        fusedConf:
+          type: number
+          description: >
+            Confidence, 0..1, for the fused resistance, Bengle 0xA014. Optional;
+            omitted before any estimator frame has arrived.
+        vAbs:
+          type: number
+          description: >
+            Absorbed / voids volume estimate (V_abs, mL), Bengle 0xA014.
+            Optional; omitted when unavailable.
+        estLag:
+          type: number
+          description: >
+            Estimated outflow lag (seconds), Bengle 0xA014. Optional; omitted
+            when there is no usable lag estimate.
+        estFlags:
+          type: integer
+          description: >
+            Opaque estimator status-flags byte, Bengle 0xA014. The individual
+            bits are firmware-internal; clients forward the value without
+            interpreting it. Optional; omitted before any estimator frame.
+        detEventCount:
+          type: integer
+          description: >
+            Count of R1-collapse events detected so far this shot, Bengle 0xA014
+            (Rev-2 detector summary). Optional: omitted when the firmware does
+            not emit the detector summary. When present, 0 is a real value
+            (detector active, none seen yet) and IS included.
+        detLastEventT:
+          type: number
+          description: >
+            Onset time of the most recent R1-collapse event (seconds), Bengle
+            0xA014. Optional; omitted when there is none.
+        detLastEventMag:
+          type: number
+          description: >
+            Drop magnitude of the most recent R1-collapse event (0..1), Bengle
+            0xA014. Optional; omitted when there is none.
+        detLastEventConc:
+          type: number
+          description: >
+            Drop concentration of the most recent R1-collapse event (0..1, ≈1
+            concentrated, ≈0.33 gradual), Bengle 0xA014. Optional; omitted when
+            there is none.
     MachineState:
       type: string
       enum:
