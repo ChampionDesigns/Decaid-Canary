@@ -5532,7 +5532,11 @@ components:
           description: Whether GroupHeadController is present and active
         extra:
           type: object
-          description: various extra information.
+          description: >-
+            Various extra information. May include `profileModeCaps` (integer
+            bitmask): 0x1 = per-frame Power, 0x2 = per-frame Lever, 0x4 =
+            per-frame HOLD supported. 0 (or absent) means the machine cannot run
+            those profile steps and arming one is refused with a 400.
 
     MachineCapabilities:
       type: object

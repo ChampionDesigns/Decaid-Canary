@@ -9,32 +9,32 @@ import 'package:reaprime/src/models/data/profile.dart';
 void main() {
   // A well-formed power-step JSON body (values-as-primitives).
   Map<String, dynamic> powerJson() => {
-        'name': 'power pour',
-        'pump': 'power',
-        'transition': 'smooth',
-        'volume': 100,
-        'seconds': 25,
-        'weight': 0.0,
-        'temperature': 93,
-        'sensor': 'coffee',
-        'power': 2.0,
-        'limiter': {'value': 9.0, 'range': 0.6},
-      };
+    'name': 'power pour',
+    'pump': 'power',
+    'transition': 'smooth',
+    'volume': 100,
+    'seconds': 25,
+    'weight': 0.0,
+    'temperature': 93,
+    'sensor': 'coffee',
+    'power': 2.0,
+    'limiter': {'value': 9.0, 'range': 0.6},
+  };
 
   // A well-formed lever-step JSON body (CLASSIC preset triple).
   Map<String, dynamic> leverJson() => {
-        'name': 'lever pour',
-        'pump': 'lever',
-        'transition': 'smooth',
-        'volume': 100,
-        'seconds': 40,
-        'weight': 0.0,
-        'temperature': 92,
-        'sensor': 'coffee',
-        'pressure': 9.0,
-        'leverSpring': 0.9,
-        'leverGive': 1.5,
-      };
+    'name': 'lever pour',
+    'pump': 'lever',
+    'transition': 'smooth',
+    'volume': 100,
+    'seconds': 40,
+    'weight': 0.0,
+    'temperature': 92,
+    'sensor': 'coffee',
+    'pressure': 9.0,
+    'leverSpring': 0.9,
+    'leverGive': 1.5,
+  };
 
   group('ProfileStepPower', () {
     test('dispatches from ProfileStep.fromJson on pump:"power"', () {
@@ -116,16 +116,16 @@ void main() {
     // A pressure step holding the previous achieved pressure, with a flow cap
     // (the canonical example) — target `pressure` stored as 0.
     Map<String, dynamic> holdPressureJson() => {
-          'name': 'hold pressure',
-          'pump': 'pressure',
-          'transition': 'hold',
-          'volume': 0,
-          'seconds': 30,
-          'temperature': 92,
-          'sensor': 'coffee',
-          'pressure': 0,
-          'limiter': {'value': 6.0, 'range': 0.6},
-        };
+      'name': 'hold pressure',
+      'pump': 'pressure',
+      'transition': 'hold',
+      'volume': 0,
+      'seconds': 30,
+      'temperature': 92,
+      'sensor': 'coffee',
+      'pressure': 0,
+      'limiter': {'value': 6.0, 'range': 0.6},
+    };
 
     test('parses transition:"hold" into TransitionType.hold', () {
       final step = ProfileStep.fromJson(holdPressureJson());
@@ -178,8 +178,7 @@ void main() {
       }
     });
 
-    test(
-        'SKEW: an enum lacking a transition name THROWS on byName '
+    test('SKEW: an enum lacking a transition name THROWS on byName '
         '(so an old client without "hold" gives a VISIBLE 400, never a '
         'silent JUMP)', () {
       // This is exactly the mechanism by which `transition:"hold"` was chosen
@@ -229,8 +228,7 @@ void main() {
       expect(restored, equals(profile));
     });
 
-    test(
-        'a profile with a HOLD step round-trips losslessly (the '
+    test('a profile with a HOLD step round-trips losslessly (the '
         '"viewed/synced on a DE1" case — model tolerance is NOT gated)', () {
       final profileJson = {
         'version': '2',
