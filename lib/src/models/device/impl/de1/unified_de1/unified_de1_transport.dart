@@ -7,6 +7,8 @@ import 'package:reaprime/src/models/device/ble_service_identifier.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_shot_sample.dart'
     show bengleShotSampleBytes;
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart'
+    show bengleEstSampleBytes;
 import 'package:reaprime/src/models/device/transport/ble_timeout_exception.dart';
 import 'package:reaprime/src/models/device/transport/ble_transport.dart';
 import 'package:reaprime/src/models/device/transport/data_transport.dart';
@@ -110,6 +112,15 @@ class UnifiedDe1Transport {
   // valid-length frame.
   final BehaviorSubject<ByteData> _bengleShotSampleSubject =
       BehaviorSubject.seeded(ByteData(bengleShotSampleBytes));
+  // Bengle 0xA014 fused puck-estimator sample (16 bytes, +5-byte Rev-2 tail).
+  // Serial/CDC only — fed by the `[T]` dispatch (subscribed via the `<+T>` in
+  // `_serialConnect`), never over BLE. Seeded with a ZERO-LENGTH frame on
+  // purpose: `parseBengleEstSample` drops anything under 16 bytes, so before
+  // any real `[T]` arrives the snapshot merge sees "no estimator data" and
+  // every fused key stays absent. A 16-zero seed would instead decode to fused
+  // fields pinned at 0.0.
+  final BehaviorSubject<ByteData> _estimatorSubject =
+      BehaviorSubject.seeded(ByteData(0));
 
   // single-notify serial read channels ([A] Versions,
   // [J] Temperatures, [R] Calibration). Plain broadcast controllers, NOT
@@ -130,6 +141,8 @@ class UnifiedDe1Transport {
   Stream<ByteData> get fwMapRequest => _fwMapRequestSubject.asBroadcastStream();
   Stream<ByteData> get bengleShotSample =>
       _bengleShotSampleSubject.asBroadcastStream();
+  // 0xA014 fused puck-estimator frames (serial `[T]` only).
+  Stream<ByteData> get estimator => _estimatorSubject.asBroadcastStream();
 
   // Serial only
   String _currentBuffer = "";
@@ -317,6 +330,13 @@ class UnifiedDe1Transport {
     await _transport.writeCommand(
       "<+${Endpoint.bengleShotSample.representation}>",
     );
+    // Bengle 0xA014 estimator stream. Serial-only, enabled here exactly like
+    // `<+S>` (unconditional): the serial parser has no missing-characteristic
+    // stall hazard, and a plain DE1 or an older Bengle firmware simply never
+    // emits `[T]`. Deliberately NOT subscribed over BLE.
+    await _transport.writeCommand(
+      "<+${Endpoint.estimator.representation}>",
+    );
 
     // needed to know which state we're at - request idle state
     await _transport.writeCommand("<B>02");
@@ -354,6 +374,7 @@ class UnifiedDe1Transport {
     if (!_mmrSubject.isClosed) _mmrSubject.close();
     if (!_fwMapRequestSubject.isClosed) _fwMapRequestSubject.close();
     if (!_bengleShotSampleSubject.isClosed) _bengleShotSampleSubject.close();
+    if (!_estimatorSubject.isClosed) _estimatorSubject.close();
     if (!_versionsController.isClosed) _versionsController.close();
     if (!_temperaturesController.isClosed) _temperaturesController.close();
     if (!_calibrationController.isClosed) _calibrationController.close();
@@ -381,6 +402,7 @@ class UnifiedDe1Transport {
     if (!_mmrSubject.isClosed) _mmrSubject.close();
     if (!_fwMapRequestSubject.isClosed) _fwMapRequestSubject.close();
     if (!_bengleShotSampleSubject.isClosed) _bengleShotSampleSubject.close();
+    if (!_estimatorSubject.isClosed) _estimatorSubject.close();
     if (!_versionsController.isClosed) _versionsController.close();
     if (!_temperaturesController.isClosed) _temperaturesController.close();
     if (!_calibrationController.isClosed) _calibrationController.close();
@@ -422,6 +444,9 @@ class UnifiedDe1Transport {
         );
         await _transport.writeCommand(
           "<-${Endpoint.bengleShotSample.representation}>",
+        );
+        await _transport.writeCommand(
+          "<-${Endpoint.estimator.representation}>",
         );
         break;
       case TransportType.ble:
@@ -530,6 +555,8 @@ class UnifiedDe1Transport {
           _fwMapNotification(data);
         case "[S]":
           _bengleShotSampleNotification(data);
+        case "[T]":
+          _estimatorNotification(data);
         // single-notify read replies. Only ever solicited by
         // _serialSingleNotifyRead's own `<+X>`, so no length guard here —
         // the awaiting reader owns interpretation.
@@ -593,6 +620,26 @@ class UnifiedDe1Transport {
     }
     _bengleShotSampleSubject.add(d);
   }
+
+  // Route a 0xA014 `[T]` estimator frame to the subject, dropping a truncated
+  // frame (< 16 bytes) so the downstream decoder never hits a RangeError.
+  void _estimatorNotification(ByteData d) {
+    if (d.lengthInBytes < bengleEstSampleBytes) {
+      _log.warning(
+        'Dropping short estimator frame '
+        '(${d.lengthInBytes} < $bengleEstSampleBytes bytes)',
+      );
+      return;
+    }
+    _estimatorSubject.add(d);
+  }
+
+  /// Test seam behind [UnifiedDe1.debugInjectEstimator]: push a raw 0xA014
+  /// frame into the pipeline exactly as the serial `[T]` dispatch would.
+  /// Production only ever feeds this subject over serial; the snapshot-merge
+  /// pipeline test runs a Bengle over BLE (where identity gating is
+  /// straightforward) and injects estimator frames without a live serial link.
+  void debugInjectEstimator(ByteData frame) => _estimatorNotification(frame);
 
   void _stateNotification(ByteData d) {
     if (d.lengthInBytes < _minStateBytes) {
@@ -721,6 +768,8 @@ class UnifiedDe1Transport {
         return _waterLevelsSubject.first;
       case Endpoint.bengleShotSample:
         return _bengleShotSampleSubject.first;
+      case Endpoint.estimator:
+        return _estimatorSubject.first;
 
       // -- single-notify round trips.
       case Endpoint.versions:
@@ -775,6 +824,48 @@ class UnifiedDe1Transport {
     } finally {
       await t.writeCommand('<-${e.representation}>');
     }
+  }
+
+  /// Force a FRESH read of the firmware-map register ([Endpoint.fwMapRequest] /
+  /// A009 / `[I]`), for the firmware erase/verify poll fallback. Some firmwares
+  /// never emit the post-erase / post-verify notification, so the verify flow
+  /// has to actively re-read the register instead of waiting for it to be
+  /// pushed.
+  ///
+  ///  * **serial**: [_serialRead] would hand back the last *pushed* `[I]`
+  ///    frame, which never updates once the firmware stops emitting the notify.
+  ///    fwMapRequest is already continuously `<+I>`-subscribed, and the firmware
+  ///    treats an add-notify as a force-update, so re-sending `<+I>` reprovokes
+  ///    a fresh `[I]` into [_fwMapRequestSubject]. We deliberately do NOT send a
+  ///    matching `<-I>` (unlike [_serialSingleNotifyRead]): dropping the
+  ///    continuous subscription mid-update would blind the notify path a stock
+  ///    DE1 still relies on. Bounded by [serialSingleReadTimeout].
+  ///  * **BLE**: a genuine GATT read of A009 returns the current register
+  ///    value. It goes through [_bleRead], NOT the public [read]: this is a poll
+  ///    fired repeatedly across the flash-busy erase/verify windows, and it must
+  ///    not inherit [read]'s timeout disconnect->reconnect recovery — tearing
+  ///    the link down and re-establishing it mid-update would corrupt the
+  ///    in-flight firmware write. A failed/timed-out poll read simply throws to
+  ///    the caller, which is expected to log and retry; the outer stage timeout
+  ///    still bounds the overall wait. Bounded by [serialSingleReadTimeout] so
+  ///    one read can never hang the loop.
+  Future<ByteData> readFwMapRequestFresh() async {
+    final t = _transport;
+    if (transportType == TransportType.serial && t is SerialTransport) {
+      // Arm for the NEXT [I] frame before reprovoking — `skip(1)` drops the
+      // BehaviorSubject's replayed current value so we wait for the fresh one.
+      final next = _fwMapRequestSubject.stream
+          .skip(1)
+          .first
+          .timeout(serialSingleReadTimeout);
+      next.ignore();
+      await t.writeCommand('<+${Endpoint.fwMapRequest.representation}>');
+      return next;
+    }
+    if (transportType == TransportType.ble) {
+      return _bleRead(Endpoint.fwMapRequest, timeout: serialSingleReadTimeout);
+    }
+    return read(Endpoint.fwMapRequest);
   }
 
   Future<void> write(LogicalEndpoint endpoint, Uint8List data) async {

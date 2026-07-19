@@ -16,6 +16,7 @@ import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.utils.dart';
 import 'package:reaprime/src/models/device/impl/de1/mmr_address.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_shot_sample.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1_transport.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/models/device/led_strip.dart';
@@ -83,11 +84,32 @@ class UnifiedDe1 implements De1Interface {
   // nothing listens to [_de1Snapshot] on a Bengle. Firmware streams both at
   // 15 Hz; charting both would double-sample. Lazily built (late final), so on
   // a plain DE1 this never subscribes to the 0xA013 stream.
-  late final Stream<MachineSnapshot> _bengleSnapshot = _buildSnapshotStream(
-    _transport.bengleShotSample,
-    Endpoint.bengleShotSample,
-    _parseStateAndBengleShotSample,
-  );
+  //
+  // Unlike the shared [_buildSnapshotStream] (one data stream + latest state),
+  // the Bengle snapshot ALSO folds the latest 0xA014 estimator frame via
+  // `withLatestFrom2`. The estimator stream is seeded (a zero-length frame
+  // decodes to "no estimator"), so this still emits on the first 0xA013 frame
+  // even before any `[T]` arrives. The estimator writes nothing the control
+  // path reads — it only decorates the snapshot.
+  late final Stream<MachineSnapshot> _bengleSnapshot = _transport
+      .bengleShotSample
+      .map((d) {
+        notifyFrom(Endpoint.bengleShotSample, d.buffer.asUint8List());
+        return d;
+      })
+      .withLatestFrom2(
+        _transport.state.map((d) {
+          notifyFrom(Endpoint.stateInfo, d.buffer.asUint8List());
+          return d;
+        }),
+        _transport.estimator,
+        (ByteData shot, ByteData st, ByteData est) {
+          final snapshot = _parseStateAndBengleShotSample(st, shot, est);
+          _log.finest("new state: ${snapshot.toJson()}");
+          return snapshot;
+        },
+      )
+      .shareReplay(maxSize: 1);
 
   Stream<MachineSnapshot> _buildSnapshotStream(
     Stream<ByteData> source,
@@ -290,6 +312,15 @@ class UnifiedDe1 implements De1Interface {
   /// to tear down the discarded name-picked interim after a model-based
   /// class swap. See `resolveMachineForModel`.
   Future<void> detachTransport() => _transport.detach();
+
+  /// Test seam: feed a raw 0xA014 estimator frame into the snapshot pipeline
+  /// exactly as a serial `[T]` dispatch would. Production streams the estimator
+  /// serial-only; the snapshot-merge test runs a Bengle over BLE (identity
+  /// gating is straightforward there) and injects estimator frames through this
+  /// without a live serial link.
+  @visibleForTesting
+  void debugInjectEstimator(ByteData frame) =>
+      _transport.debugInjectEstimator(frame);
 
   /// Enable the Bengle 0xA013 BengleShotSample stream. Gated on the
   /// confirmed Bengle identity by the caller. Non-fatal: a failed subscribe
@@ -1002,6 +1033,8 @@ class UnifiedDe1 implements De1Interface {
           return _transport.fwMapRequest;
         case Endpoint.bengleShotSample:
           return _transport.bengleShotSample;
+        case Endpoint.estimator:
+          return _transport.estimator;
         default:
           throw UnimplementedError(
             'UnifiedDe1.notificationsFor: Endpoint.${endpoint.name} is '
