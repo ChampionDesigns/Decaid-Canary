@@ -65,6 +65,7 @@ const List<ContractEntry> entriesUnderTest = <ContractEntry>[
   ContractEntry(MMRItem.appFeatureFlags, 'AppFeatureFlags'),
   ContractEntry(MMRItem.refillKitPresent, 'RefillKitPresent'),
   ContractEntry(MMRItem.userPresent, 'UserPresent'),
+  ContractEntry(MMRItem.profileModeCaps, 'ProfileModeCaps'),
   ContractEntry(BengleScaleMmr.endOfShotWeight, 'EndOfShotWeight'),
   ContractEntry(BengleScaleMmr.scaleTare, 'ScaleTare'),
   ContractEntry(BengleMmr.matSetPoint, 'MatSetPoint'),

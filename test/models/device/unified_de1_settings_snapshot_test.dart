@@ -337,6 +337,7 @@ void main() {
           MMRItem.cpuFirmwareBuild: 1358,
           MMRItem.heaterV: 230,
           MMRItem.refillKitPresent: 0,
+          MMRItem.profileModeCaps: 0,
           MMRItem.calFlowEst: 1000,
         }.entries) {
           await pumpEventQueue();
