@@ -86,8 +86,11 @@ void main() {
   group('Lever Classic demo (bundled lever pump-mode demo)', () {
     Profile leverDemo() {
       final p = profiles['lever_classic_demo.json'];
-      expect(p, isNotNull,
-          reason: 'lever_classic_demo.json must be listed in the manifest');
+      expect(
+        p,
+        isNotNull,
+        reason: 'lever_classic_demo.json must be listed in the manifest',
+      );
       return p!;
     }
 
