@@ -5542,7 +5542,7 @@ components:
           description: >
             Machine details read from MMR once at connect. The object stays
             open — a firmware or model may contribute keys not listed here —
-            but these two are always present for a DE1.
+            but the first two are always present for a DE1.
           additionalProperties: true
           properties:
             refillKit:
@@ -5563,6 +5563,14 @@ components:
             voltage:
               type: integer
               description: Heater supply voltage in volts, as reported by the machine.
+            profileModeCaps:
+              type: integer
+              description: >
+                Per-frame profile-step capability bitmask: 0x1 = Power,
+                0x2 = Lever, 0x4 = HOLD. 0 or absent means the machine cannot
+                run those profile steps, and arming one is refused with a 400.
+                Only firmware that implements the new pump modes defines the
+                register; stock firmware and every DE1 report 0.
           example:
             refillKit: true
             voltage: 220
