@@ -51,6 +51,7 @@ extension MessageParsing on UnifiedDe1 {
   MachineSnapshot _parseStateAndBengleShotSample(
     ByteData stateSample,
     ByteData shotSample,
+    ByteData estimatorSample,
   ) {
     final state = De1StateEnum.fromHexValue(stateSample.getUint8(0));
     final subState =
@@ -60,6 +61,26 @@ extension MessageParsing on UnifiedDe1 {
       state: mapDe1ToMachineState(state),
       substate: mapDe1SubToMachineSubstate(subState),
     );
+
+    // Decode the latest fused-estimator frame (folded in via `withLatestFrom`
+    // on the Bengle snapshot stream). `null` when no `[T]` has arrived (the
+    // seed is a zero-length frame) or the wire sentinel says a field is
+    // unobserved — either way the corresponding MachineSnapshot key stays
+    // absent (nullable field -> omit-when-null).
+    final est = parseBengleEstSample(estimatorSample);
+    final double? fusedR1 = est?.r1;
+    final double? fusedR2 = est?.r2;
+    final double? fusedC = est?.c;
+    final double? fusedConf = est?.confR;
+    final double? vAbs = est?.vAbs;
+    final double? estLag = est?.lag;
+    final int? estFlags = est?.flags;
+    // R1-collapse detector tail. Null on pre-Rev-2 frames (or field sentinels)
+    // -> the snapshot keys stay absent.
+    final int? detEventCount = est?.detEventCount;
+    final double? detLastEventT = est?.detLastEventT;
+    final double? detLastEventMag = est?.detLastEventMag;
+    final double? detLastEventConc = est?.detLastEventConc;
 
     final s = parseBengleShotSample(shotSample);
     if (s == null) {
@@ -78,6 +99,17 @@ extension MessageParsing on UnifiedDe1 {
         targetFlow: 0,
         profileFrame: 0,
         steamTemperature: 0,
+        fusedR1: fusedR1,
+        fusedR2: fusedR2,
+        fusedC: fusedC,
+        fusedConf: fusedConf,
+        vAbs: vAbs,
+        estLag: estLag,
+        estFlags: estFlags,
+        detEventCount: detEventCount,
+        detLastEventT: detLastEventT,
+        detLastEventMag: detLastEventMag,
+        detLastEventConc: detLastEventConc,
       );
     }
 
@@ -100,6 +132,17 @@ extension MessageParsing on UnifiedDe1 {
       weight: s.weight,
       weightFlow: s.gFlow,
       milkTemperature: s.milkTemp,
+      fusedR1: fusedR1,
+      fusedR2: fusedR2,
+      fusedC: fusedC,
+      fusedConf: fusedConf,
+      vAbs: vAbs,
+      estLag: estLag,
+      estFlags: estFlags,
+      detEventCount: detEventCount,
+      detLastEventT: detLastEventT,
+      detLastEventMag: detLastEventMag,
+      detLastEventConc: detLastEventConc,
     );
   }
 

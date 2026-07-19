@@ -60,6 +60,59 @@ class MachineSnapshot {
   /// does not provide it (no probe / no fresh reading).
   final double milkTemperature;
 
+  // Fused puck-estimator outputs streamed from the Bengle `0xA014` sample.
+  // These are STORED, not recomputed on read: they are firmware-computed and
+  // cannot be reconstructed from pressure/flow, so they must survive a history
+  // round-trip. `null` = the estimator has not observed that quantity (no
+  // estimator frame yet, or the field's wire sentinel). Each is omitted from
+  // [toJson] when null and read-if-present in [fromJson].
+
+  /// Fused puck resistance, n=1 convention (R1, bar·s/mL). `null` = unobserved.
+  final double? fusedR1;
+
+  /// Fused puck resistance, n=2 convention (R2, bar·s²/mL²). `null` =
+  /// unobserved.
+  final double? fusedR2;
+
+  /// Fused compliance (C, mL/bar). `null` = unobserved.
+  final double? fusedC;
+
+  /// Fused resistance confidence 0..1. `null` = no estimator frame yet.
+  final double? fusedConf;
+
+  /// Absorbed / voids volume estimate V_abs (mL). `null` = n/a.
+  final double? vAbs;
+
+  /// Estimated Qout lag (seconds). `null` = no usable lag estimate.
+  final double? estLag;
+
+  /// Opaque estimator status-flags byte (see `bengle_est_sample.dart`). `null`
+  /// = no estimator frame yet.
+  final int? estFlags;
+
+  // R1-collapse detector summary carried on the Bengle `0xA014` Rev-2 tail.
+  // Pure observer output — the detector drives no machine behaviour. Like the
+  // fused fields these are STORED so a history round-trip keeps them. `null` =
+  // no Rev-2 detector tail on the estimator frame (or, for the three
+  // descriptors, the field's own wire sentinel). [detEventCount] `0` is a REAL
+  // value — no R1 collapse yet this shot — and is emitted, not omitted, so a
+  // consumer can tell "detector ran, none seen" from "no detector".
+
+  /// Confirmed R1-collapse events so far this shot. `null` = no detector tail.
+  final int? detEventCount;
+
+  /// Onset time t0 of the most recent R1-collapse event (seconds). `null` =
+  /// none yet or no detector tail.
+  final double? detLastEventT;
+
+  /// Drop magnitude of the most recent R1-collapse event, `1 − R1/R1_ref` in
+  /// 0..1. `null` = none or no detector tail.
+  final double? detLastEventMag;
+
+  /// Drop concentration of the most recent R1-collapse event, 0..1 (≈1 cliff,
+  /// ≈0.33 ramp). `null` = none / undefined or no detector tail.
+  final double? detLastEventConc;
+
   MachineSnapshot({
     required this.timestamp,
     required this.state,
@@ -76,6 +129,17 @@ class MachineSnapshot {
     this.weight = 0.0,
     this.weightFlow = 0.0,
     this.milkTemperature = 0.0,
+    this.fusedR1,
+    this.fusedR2,
+    this.fusedC,
+    this.fusedConf,
+    this.vAbs,
+    this.estLag,
+    this.estFlags,
+    this.detEventCount,
+    this.detLastEventT,
+    this.detLastEventMag,
+    this.detLastEventConc,
   });
 
   // CopyWith Method
@@ -95,6 +159,17 @@ class MachineSnapshot {
     double? weight,
     double? weightFlow,
     double? milkTemperature,
+    double? fusedR1,
+    double? fusedR2,
+    double? fusedC,
+    double? fusedConf,
+    double? vAbs,
+    double? estLag,
+    int? estFlags,
+    int? detEventCount,
+    double? detLastEventT,
+    double? detLastEventMag,
+    double? detLastEventConc,
   }) {
     return MachineSnapshot(
       timestamp: timestamp ?? this.timestamp,
@@ -113,6 +188,20 @@ class MachineSnapshot {
       weight: weight ?? this.weight,
       weightFlow: weightFlow ?? this.weightFlow,
       milkTemperature: milkTemperature ?? this.milkTemperature,
+      // Nullable additive estimator + detector fields follow the weight-style
+      // `?? this` carry-forward; copyWith cannot null them back out (no caller
+      // needs to), matching the other additive fields' convention.
+      fusedR1: fusedR1 ?? this.fusedR1,
+      fusedR2: fusedR2 ?? this.fusedR2,
+      fusedC: fusedC ?? this.fusedC,
+      fusedConf: fusedConf ?? this.fusedConf,
+      vAbs: vAbs ?? this.vAbs,
+      estLag: estLag ?? this.estLag,
+      estFlags: estFlags ?? this.estFlags,
+      detEventCount: detEventCount ?? this.detEventCount,
+      detLastEventT: detLastEventT ?? this.detLastEventT,
+      detLastEventMag: detLastEventMag ?? this.detLastEventMag,
+      detLastEventConc: detLastEventConc ?? this.detLastEventConc,
     );
   }
 
@@ -133,6 +222,23 @@ class MachineSnapshot {
       'weight': weight,
       'weightFlow': weightFlow,
       'milkTemperature': milkTemperature,
+      // Fused-estimator keys: emitted only when observed. Absence (not null) is
+      // the version-skew contract — old consumers never see them, and a
+      // consumer can read key presence as the "observed" signal.
+      if (fusedR1 != null) 'fusedR1': fusedR1,
+      if (fusedR2 != null) 'fusedR2': fusedR2,
+      if (fusedC != null) 'fusedC': fusedC,
+      if (fusedConf != null) 'fusedConf': fusedConf,
+      if (vAbs != null) 'vAbs': vAbs,
+      if (estLag != null) 'estLag': estLag,
+      if (estFlags != null) 'estFlags': estFlags,
+      // R1-collapse detector keys: same omit-when-null rule, but detEventCount
+      // 0 IS emitted (0 != null) so a consumer can tell "detector ran, no
+      // collapse" from "no detector at all".
+      if (detEventCount != null) 'detEventCount': detEventCount,
+      if (detLastEventT != null) 'detLastEventT': detLastEventT,
+      if (detLastEventMag != null) 'detLastEventMag': detLastEventMag,
+      if (detLastEventConc != null) 'detLastEventConc': detLastEventConc,
     };
   }
 
@@ -161,6 +267,20 @@ class MachineSnapshot {
       weight: (json["weight"] ?? 0.0).toDouble(),
       weightFlow: (json["weightFlow"] ?? 0.0).toDouble(),
       milkTemperature: (json["milkTemperature"] ?? 0.0).toDouble(),
+      // Nullable additive estimator + detector fields — read-if-present so both
+      // pre-estimator history and gated frames (key absent) round-trip to null
+      // rather than a fabricated 0.
+      fusedR1: (json["fusedR1"] as num?)?.toDouble(),
+      fusedR2: (json["fusedR2"] as num?)?.toDouble(),
+      fusedC: (json["fusedC"] as num?)?.toDouble(),
+      fusedConf: (json["fusedConf"] as num?)?.toDouble(),
+      vAbs: (json["vAbs"] as num?)?.toDouble(),
+      estLag: (json["estLag"] as num?)?.toDouble(),
+      estFlags: (json["estFlags"] as num?)?.toInt(),
+      detEventCount: (json["detEventCount"] as num?)?.toInt(),
+      detLastEventT: (json["detLastEventT"] as num?)?.toDouble(),
+      detLastEventMag: (json["detLastEventMag"] as num?)?.toDouble(),
+      detLastEventConc: (json["detLastEventConc"] as num?)?.toDouble(),
     );
   }
 }
