@@ -342,6 +342,9 @@ class Helper {
   static int interpolate = 0x20;
   // ignore: constant_identifier_names
   static int ignoreLimit = 0x40;
+  // ignore: constant_identifier_names
+  static int comparePower =
+      0x80; // Exit when measured hydraulic power (0.1*P*F) crosses TriggerVal
 
   static int convertProfileFlags(ProfileStep step) {
     int flag = ignoreLimit;
@@ -355,10 +358,21 @@ class Helper {
     if (step.transition == TransitionType.smooth) flag |= interpolate;
 
     if (step.exit != null) {
-      flag |= doCompare;
-
-      if (step.exit!.type == ExitType.flow) flag |= dcCompF;
-      if (step.exit!.condition == ExitCondition.over) flag |= dcGT;
+      if (step.exit!.type == ExitType.power) {
+        // A power exit uses the independent comparePower bit and deliberately
+        // does NOT set doCompare or dcCompF: firmware/apps that predate the
+        // power exit gate the pressure/flow compare block on doCompare, so with
+        // doCompare clear they skip that block entirely and run the frame to its
+        // time/volume limits (a benign base frame) rather than comparing a
+        // watts TriggerVal against pressure/flow and exiting at the wrong time.
+        // over/under still ride dcGT; TriggerVal (data[5]) is U8D1 watts.
+        flag |= comparePower;
+        if (step.exit!.condition == ExitCondition.over) flag |= dcGT;
+      } else {
+        flag |= doCompare;
+        if (step.exit!.type == ExitType.flow) flag |= dcCompF;
+        if (step.exit!.condition == ExitCondition.over) flag |= dcGT;
+      }
     }
 
     return flag;
