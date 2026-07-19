@@ -775,21 +775,39 @@ class De1Handler {
   }
 
   Future<Response> _profileHandler(Request request) async {
-    return withDe1((_) async {
-      final payload = await request.readAsString();
+    final payload = await request.readAsString();
+    // Parse OUTSIDE withDe1 so a malformed profile is a clean 400, not the
+    // opaque 500 the withDe1 catch-all produces. A power step without its
+    // mandatory pressure limiter throws a FormatException here — also a client
+    // error.
+    Profile profile;
+    try {
+      final Map<String, dynamic> json = jsonDecode(payload);
+      profile = Profile.fromJson(json);
+    } on FormatException catch (e) {
+      return jsonBadRequest({'error': 'Invalid profile', 'message': '$e'});
+    } on ArgumentError catch (e) {
+      return jsonBadRequest({'error': 'Invalid profile', 'message': '$e'});
+    }
 
-      Map<String, dynamic> json;
+    return withDe1((_) async {
       try {
-        json = jsonDecode(payload);
-      } catch (e) {
-        return jsonBadRequest({'error': 'Invalid JSON body'});
+        await _controller.runDeviceWrite(
+          (device) => device.setProfile(profile),
+          retryOnReplacement: true,
+        );
+        return jsonOk(null);
+      } on ProfileModeUnsupportedException catch (e) {
+        // The machine cannot run a Power/Lever step or a HOLD transition in this
+        // profile (arm-time refusal gate). Surface as a clean 400 with the
+        // refusal message, not the opaque 500 the withDe1 catch-all would give.
+        // Any OTHER StateError escaping setProfile is a genuine internal fault
+        // and stays a 500 (the withDe1 catch-all), not a mislabeled client 400.
+        return jsonBadRequest({
+          'error': 'Unsupported profile',
+          'message': e.message,
+        });
       }
-      Profile profile = Profile.fromJson(json);
-      await _controller.runDeviceWrite(
-        (device) => device.setProfile(profile),
-        retryOnReplacement: true,
-      );
-      return jsonOk(null);
     });
   }
 
