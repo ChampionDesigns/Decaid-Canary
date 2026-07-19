@@ -5535,8 +5535,9 @@ components:
           description: >-
             Various extra information. May include `profileModeCaps` (integer
             bitmask): 0x1 = per-frame Power, 0x2 = per-frame Lever, 0x4 =
-            per-frame HOLD supported. 0 (or absent) means the machine cannot run
-            those profile steps and arming one is refused with a 400.
+            per-frame HOLD supported, 0x8 = cross-variable power exit supported.
+            0 (or absent) means the machine cannot run those profile steps and
+            arming one (or a power exit) is refused with a 400.
 
     MachineCapabilities:
       type: object
@@ -5997,8 +5998,14 @@ components:
       properties:
         type:
           type: string
-          enum: [pressure, flow]
-          description: Which measurement to evaluate
+          enum: [pressure, flow, power]
+          description: >-
+            Which measurement to evaluate. `power` is hydraulic watts
+            (0.1 * pressure * flow) and requires a capable machine
+            (ProfileModeCaps bit3 = 0x8); arming a power exit on a machine
+            without it is refused with a 400. The exit variable is normally the
+            step's non-own variable (e.g. a pressure step exits on flow or
+            power).
         condition:
           type: string
           enum: [over, under]
