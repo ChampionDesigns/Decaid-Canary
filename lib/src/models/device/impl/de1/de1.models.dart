@@ -291,11 +291,17 @@ enum MMRItem implements MmrAddress {
     readScale: 0.01,
     writeScale: 100.0,
   ),
+  // Scales fixed against firmware the firmware register table (mult = 100, seconds ×100 on the
+  // wire): this entry used to carry the default 1.0 scales, which was latent
+  // (nothing reads/writes it yet) but the first wired setter would have
+  // written 100× low. Pinned by the bengle_hw_v1.yml contract checker.
   steamStartSecs(
     0x0080382C,
     4,
     MmrValueKind.scaledFloat,
     "Seconds of high steam flow * 100. Valid range 0.0 - 4.0. 0 may result in an overheated heater. Be careful.",
+    readScale: 0.01,
+    writeScale: 100.0,
   ),
   serialN(0x00803830, 4, MmrValueKind.int32, "Current serial number"),
   heaterV(
@@ -415,10 +421,13 @@ enum DecentMachineModel {
         return DecentMachineModel.DE1XXL;
       case 6:
         return DecentMachineModel.DE1XXXL;
-      case 128:
-        return DecentMachineModel.Bengle;
       default:
-        return DecentMachineModel.Unknown;
+        // v13Model >= 128 => Bengle; the DE1 family is 1..7. Matches the
+        // detection gate (unified_de1 / serial_service both use `>= 128`),
+        // so a future Bengle model number resolves to Bengle, not Unknown.
+        return model >= 128
+            ? DecentMachineModel.Bengle
+            : DecentMachineModel.Unknown;
     }
   }
 }
