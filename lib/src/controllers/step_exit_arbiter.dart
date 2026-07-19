@@ -35,9 +35,15 @@ class StepExitArbiter {
   /// Proximity window as fraction of flow exit threshold.
   static const double flowProximityFraction = 0.25;
 
+  /// Proximity window as fraction of power exit threshold.
+  /// Power = 0.1*P*F is a product of two noisy signals, so its window mirrors
+  /// the flow fraction (the wider of the two P/F windows).
+  static const double powerProximityFraction = 0.25;
+
   /// Absolute floor so low-threshold exits still have meaningful windows.
   static const double pressureProximityMinimum = 0.3; // bar
   static const double flowProximityMinimum = 0.2; // ml/s
+  static const double powerProximityMinimum = 0.5; // W
 
   final Map<int, _DeferralState> _deferrals = {};
 
@@ -67,6 +73,7 @@ class StepExitArbiter {
     final sensorValue = switch (exit.type) {
       ExitType.pressure => currentPressure,
       ExitType.flow => currentFlow,
+      ExitType.power => 0.1 * currentPressure * currentFlow,
     };
 
     // Distance: how far the sensor is from triggering the firmware exit.
@@ -102,10 +109,12 @@ class StepExitArbiter {
     final proximityFraction = switch (exit.type) {
       ExitType.pressure => pressureProximityFraction,
       ExitType.flow => flowProximityFraction,
+      ExitType.power => powerProximityFraction,
     };
     final proximityMinimum = switch (exit.type) {
       ExitType.pressure => pressureProximityMinimum,
       ExitType.flow => flowProximityMinimum,
+      ExitType.power => powerProximityMinimum,
     };
     final proximityThreshold = (exit.value * proximityFraction)
         .clamp(proximityMinimum, double.infinity);
