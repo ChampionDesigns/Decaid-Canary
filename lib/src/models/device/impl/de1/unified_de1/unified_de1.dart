@@ -685,6 +685,8 @@ class UnifiedDe1 implements De1Interface {
           return _transport.bengleShotSample;
         case Endpoint.calibration:
           return _transport.calibration;
+        case Endpoint.estimator:
+          return _transport.estimator;
         default:
           throw UnimplementedError(
             'UnifiedDe1.notificationsFor: Endpoint.${endpoint.name} is '
