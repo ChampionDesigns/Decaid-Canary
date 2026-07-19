@@ -305,6 +305,11 @@ class FakeBleTransport extends BLETransport {
     int ledFrontSleep = 0,
     int ledRearAwake = 0,
     int ledRearSleep = 0,
+    // ProfileModeCaps, read on every connect. Default 0 (unsupported)
+    // mirrors stock firmware / a stock DE1 so existing tests answer the read
+    // instantly instead of eating the fail-closed read timeout; a test for the
+    // new pump modes passes 0x3 (Power|Lever) or 0x7 (+HOLD).
+    int profileModeCaps = 0,
   }) {
     queueMmrResponseInt(MMRItem.v13Model, v13Model);
     queueMmrResponseInt(MMRItem.ghcInfo, ghcInfo);
@@ -312,6 +317,7 @@ class FakeBleTransport extends BLETransport {
     queueMmrResponseInt(MMRItem.cpuFirmwareBuild, cpuFirmwareBuild);
     queueMmrResponseInt(MMRItem.heaterV, heaterV);
     queueMmrResponseInt(MMRItem.refillKitPresent, refillKitPresent);
+    queueMmrResponseInt(MMRItem.profileModeCaps, profileModeCaps);
     queueMmrResponseInt(BengleLedMmr.frontAwake, ledFrontAwake);
     queueMmrResponseInt(BengleLedMmr.frontSleep, ledFrontSleep);
     queueMmrResponseInt(BengleLedMmr.rearAwake, ledRearAwake);
