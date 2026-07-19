@@ -13,6 +13,11 @@ import 'package:reaprime/src/models/errors.dart';
 import 'package:reaprime/src/models/device/transport/serial_port.dart';
 import 'package:rxdart/rxdart.dart';
 
+/// Per-read bound for the firmware-verify poll ([readFwMapRequestFresh]) so a
+/// single stalled read can never hang the poll loop; the outer stage timeout
+/// still bounds the overall wait.
+const _firmwareMapPollReadTimeout = Duration(seconds: 2);
+
 class UnifiedDe1Transport {
   final DataTransport _transport;
   final TransportType transportType;
@@ -495,6 +500,31 @@ class UnifiedDe1Transport {
         await _transport.read(de1ServiceUUID, e.uuid!, timeout: timeout);
     ByteData response = ByteData.sublistView(Uint8List.fromList(data));
     return response;
+  }
+
+  /// Force a *fresh* read of the firmware-map register
+  /// ([Endpoint.fwMapRequest] / A009), used by the firmware-verify poll in
+  /// `unified_de1.firmware.dart`.
+  ///
+  /// On BLE this reads through [_bleRead] directly instead of the public
+  /// [read]: it must not inherit [read]'s `_handleBleTimeout`
+  /// disconnect->reconnect recovery. This is a poll read issued repeatedly
+  /// across the flash-busy erase/verify windows; a transient GATT failure
+  /// there (which [read] would surface as a [BleTimeoutException] and "recover"
+  /// from by tearing the link down and re-establishing it) would corrupt the
+  /// in-flight firmware update. Here a failed or timed-out read throws straight
+  /// back to the poll loop, which logs it and retries on the next tick, so the
+  /// link is never disturbed; the outer stage timeout still bounds the overall
+  /// wait, and [_firmwareMapPollReadTimeout] keeps one read from stalling the
+  /// loop.
+  Future<ByteData> readFwMapRequestFresh() async {
+    if (transportType == TransportType.ble) {
+      return _bleRead(
+        Endpoint.fwMapRequest,
+        timeout: _firmwareMapPollReadTimeout,
+      );
+    }
+    return read(Endpoint.fwMapRequest);
   }
 
   Future<ByteData> _serialRead(Endpoint e) async {
