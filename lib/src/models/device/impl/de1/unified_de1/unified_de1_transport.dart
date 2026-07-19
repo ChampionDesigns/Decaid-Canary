@@ -18,6 +18,11 @@ import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sampl
     show bengleEstSampleBytes;
 import 'package:rxdart/rxdart.dart';
 
+/// Per-read bound for the firmware-verify poll ([readFwMapRequestFresh]) so a
+/// single stalled read can never hang the poll loop; the outer stage timeout
+/// still bounds the overall wait.
+const _firmwareMapPollReadTimeout = Duration(seconds: 2);
+
 class UnifiedDe1Transport {
   final DataTransport _transport;
   final TransportType transportType;
@@ -801,7 +806,7 @@ class UnifiedDe1Transport {
   ///    a fresh `[I]` into [_fwMapRequestSubject]. We deliberately do NOT send a
   ///    matching `<-I>` (unlike [_serialSingleNotifyRead]): dropping the
   ///    continuous subscription mid-update would blind the notify path a stock
-  ///    DE1 still relies on. Bounded by [serialSingleReadTimeout].
+  ///    DE1 still relies on. Bounded by [_firmwareMapPollReadTimeout].
   ///  * **BLE**: a genuine GATT read of A009 returns the current register
   ///    value. It goes through [_bleRead], NOT the public [read]: this is a poll
   ///    fired repeatedly across the flash-busy erase/verify windows, and it must
@@ -809,7 +814,7 @@ class UnifiedDe1Transport {
   ///    the link down and re-establishing it mid-update would corrupt the
   ///    in-flight firmware write. A failed/timed-out poll read simply throws to
   ///    the caller, which is expected to log and retry; the outer stage timeout
-  ///    still bounds the overall wait. Bounded by [serialSingleReadTimeout] so
+  ///    still bounds the overall wait. Bounded by [_firmwareMapPollReadTimeout] so
   ///    one read can never hang the loop.
   Future<ByteData> readFwMapRequestFresh() async {
     final t = _transport;
@@ -819,13 +824,16 @@ class UnifiedDe1Transport {
       final next = _fwMapRequestSubject.stream
           .skip(1)
           .first
-          .timeout(serialSingleReadTimeout);
+          .timeout(_firmwareMapPollReadTimeout);
       next.ignore();
       await t.writeCommand('<+${Endpoint.fwMapRequest.representation}>');
       return next;
     }
     if (transportType == TransportType.ble) {
-      return _bleRead(Endpoint.fwMapRequest, timeout: serialSingleReadTimeout);
+      return _bleRead(
+        Endpoint.fwMapRequest,
+        timeout: _firmwareMapPollReadTimeout,
+      );
     }
     return read(Endpoint.fwMapRequest);
   }

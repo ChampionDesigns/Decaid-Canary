@@ -191,61 +191,65 @@ void main() {
 
     tearDown(() => transport.dispose());
 
-    test('a Rev-2 estimator frame populates the detector keys (in toJson)',
-        () async {
-      final snapshots = <MachineSnapshot>[];
-      final sub = bengle.currentSnapshot.listen(snapshots.add);
-      await pumpEventQueue();
+    test(
+      'a Rev-2 estimator frame populates the detector keys (in toJson)',
+      () async {
+        final snapshots = <MachineSnapshot>[];
+        final sub = bengle.currentSnapshot.listen(snapshots.add);
+        await pumpEventQueue();
 
-      bengle.debugInjectEstimator(_est(_golden0xA014V2));
-      await pumpEventQueue();
-      transport.subscribers[Endpoint.bengleShotSample.uuid]!(_golden0xA013);
-      await pumpEventQueue();
+        bengle.debugInjectEstimator(_est(_golden0xA014V2));
+        await pumpEventQueue();
+        transport.subscribers[Endpoint.bengleShotSample.uuid]!(_golden0xA013);
+        await pumpEventQueue();
 
-      final snap = snapshots.last;
-      expect(snap.detEventCount, 2);
-      expect(snap.detLastEventT, closeTo(30.0, 1e-9));
-      expect(snap.detLastEventMag, closeTo(0.45, 1e-9));
-      expect(snap.detLastEventConc, closeTo(0.85, 1e-9));
-      // The base fused fields (offsets 0–15) still fold through unchanged.
-      expect(snap.fusedR1, closeTo(1.77, 1e-9));
+        final snap = snapshots.last;
+        expect(snap.detEventCount, 2);
+        expect(snap.detLastEventT, closeTo(30.0, 1e-9));
+        expect(snap.detLastEventMag, closeTo(0.45, 1e-9));
+        expect(snap.detLastEventConc, closeTo(0.85, 1e-9));
+        // The base fused fields (offsets 0–15) still fold through unchanged.
+        expect(snap.fusedR1, closeTo(1.77, 1e-9));
 
-      final json = snap.toJson();
-      for (final k in _detKeys) {
-        expect(json.containsKey(k), isTrue, reason: '$k must be present');
-      }
-      expect(json['detEventCount'], 2);
-      expect(json['detLastEventConc'], closeTo(0.85, 1e-9));
+        final json = snap.toJson();
+        for (final k in _detKeys) {
+          expect(json.containsKey(k), isTrue, reason: '$k must be present');
+        }
+        expect(json['detEventCount'], 2);
+        expect(json['detLastEventConc'], closeTo(0.85, 1e-9));
 
-      await sub.cancel();
-    });
+        await sub.cancel();
+      },
+    );
 
-    test('a Rev-1 (16-byte) frame leaves the detector keys null and omitted',
-        () async {
-      final snapshots = <MachineSnapshot>[];
-      final sub = bengle.currentSnapshot.listen(snapshots.add);
-      await pumpEventQueue();
+    test(
+      'a Rev-1 (16-byte) frame leaves the detector keys null and omitted',
+      () async {
+        final snapshots = <MachineSnapshot>[];
+        final sub = bengle.currentSnapshot.listen(snapshots.add);
+        await pumpEventQueue();
 
-      // The legacy 16-byte estimator frame carries no Rev-2 tail.
-      bengle.debugInjectEstimator(_est(_golden0xA014));
-      await pumpEventQueue();
-      transport.subscribers[Endpoint.bengleShotSample.uuid]!(_golden0xA013);
-      await pumpEventQueue();
+        // The legacy 16-byte estimator frame carries no Rev-2 tail.
+        bengle.debugInjectEstimator(_est(_golden0xA014));
+        await pumpEventQueue();
+        transport.subscribers[Endpoint.bengleShotSample.uuid]!(_golden0xA013);
+        await pumpEventQueue();
 
-      final snap = snapshots.last;
-      // Fused fields DID populate (an estimator frame arrived)…
-      expect(snap.fusedR1, closeTo(1.77, 1e-9));
-      // …but the detector tail stays null.
-      expect(snap.detEventCount, isNull);
-      expect(snap.detLastEventT, isNull);
-      expect(snap.detLastEventMag, isNull);
-      expect(snap.detLastEventConc, isNull);
-      final json = snap.toJson();
-      for (final k in _detKeys) {
-        expect(json.containsKey(k), isFalse, reason: '$k must be omitted');
-      }
+        final snap = snapshots.last;
+        // Fused fields DID populate (an estimator frame arrived)…
+        expect(snap.fusedR1, closeTo(1.77, 1e-9));
+        // …but the detector tail stays null.
+        expect(snap.detEventCount, isNull);
+        expect(snap.detLastEventT, isNull);
+        expect(snap.detLastEventMag, isNull);
+        expect(snap.detLastEventConc, isNull);
+        final json = snap.toJson();
+        for (final k in _detKeys) {
+          expect(json.containsKey(k), isFalse, reason: '$k must be omitted');
+        }
 
-      await sub.cancel();
-    });
+        await sub.cancel();
+      },
+    );
   });
 }

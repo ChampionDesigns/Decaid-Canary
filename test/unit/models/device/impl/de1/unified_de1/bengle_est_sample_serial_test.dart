@@ -77,15 +77,17 @@ void main() {
       await sub.cancel();
     });
 
-    test('read(estimator) serves the continuously-subscribed subject',
-        () async {
-      await transport.connect();
-      serial.injectSerial('[T]${_hex(_golden0xA014)}\n');
-      await pumpEventQueue();
+    test(
+      'read(estimator) serves the continuously-subscribed subject',
+      () async {
+        await transport.connect();
+        serial.injectSerial('[T]${_hex(_golden0xA014)}\n');
+        await pumpEventQueue();
 
-      final latest = await transport.read(Endpoint.estimator);
-      expect(latest.getUint16(2, Endian.big) / 100.0, closeTo(1.77, 1e-9));
-    });
+        final latest = await transport.read(Endpoint.estimator);
+        expect(latest.getUint16(2, Endian.big) / 100.0, closeTo(1.77, 1e-9));
+      },
+    );
 
     test('disconnect() unsubscribes the 0xA014 stream with <-T>', () async {
       await transport.connect();
@@ -109,36 +111,40 @@ void main() {
 
     tearDown(() => transport.dispose());
 
-    test('reprovokes with <+I> and resolves with the next fresh [I] frame',
-        () async {
-      await transport.connect();
-      serial.writes.clear();
+    test(
+      'reprovokes with <+I> and resolves with the next fresh [I] frame',
+      () async {
+        await transport.connect();
+        serial.writes.clear();
 
-      // Start the fresh read: it arms for the NEXT [I] then re-sends <+I>. Do
-      // not await yet — the fresh frame has not arrived.
-      final pending = transport.readFwMapRequestFresh();
-      await pumpEventQueue();
+        // Start the fresh read: it arms for the NEXT [I] then re-sends <+I>. Do
+        // not await yet — the fresh frame has not arrived.
+        final pending = transport.readFwMapRequestFresh();
+        await pumpEventQueue();
 
-      // The reprovoke went out (no matching <-I> — the continuous notify sub
-      // must survive).
-      expect(
-        serial.writes,
-        contains('<+${Endpoint.fwMapRequest.representation}>'),
-        reason: 'serial fresh-read reprovokes the fwMapRequest notify',
-      );
-      expect(
-        serial.writes,
-        isNot(contains('<-${Endpoint.fwMapRequest.representation}>')),
-        reason: 'the continuous subscription must not be dropped mid-update',
-      );
+        // The reprovoke went out (no matching <-I> — the continuous notify sub
+        // must survive).
+        expect(
+          serial.writes,
+          contains('<+${Endpoint.fwMapRequest.representation}>'),
+          reason: 'serial fresh-read reprovokes the fwMapRequest notify',
+        );
+        expect(
+          serial.writes,
+          isNot(contains('<-${Endpoint.fwMapRequest.representation}>')),
+          reason: 'the continuous subscription must not be dropped mid-update',
+        );
 
-      // The firmware now pushes a fresh [I] frame.
-      serial.injectSerial('[I]${_hex(const [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07])}\n');
-      await pumpEventQueue();
+        // The firmware now pushes a fresh [I] frame.
+        serial.injectSerial(
+          '[I]${_hex(const [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07])}\n',
+        );
+        await pumpEventQueue();
 
-      final fresh = await pending;
-      expect(fresh.lengthInBytes, 7);
-      expect(fresh.getUint8(0), 0x01);
-    });
+        final fresh = await pending;
+        expect(fresh.lengthInBytes, 7);
+        expect(fresh.getUint8(0), 0x01);
+      },
+    );
   });
 }

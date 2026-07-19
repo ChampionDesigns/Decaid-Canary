@@ -78,18 +78,21 @@ void main() {
       expect(s.lastPauseTau, closeTo(3.2, 1e-9));
     });
 
-    test('R2 (÷1000) and R1 (÷100) use different scales — a diverging case', () {
-      // Same raw 0x0064 = 100 in both slots decodes to 1.0 (R1, ÷100) vs
-      // 0.1 (R2, ÷1000): proves the two scales are not accidentally shared.
-      final b = List<int>.from(_goldenBytes);
-      b[2] = 0x00;
-      b[3] = 0x64; // R1 raw 100
-      b[4] = 0x00;
-      b[5] = 0x64; // R2 raw 100
-      final s = parseBengleEstSample(_bytes(b))!;
-      expect(s.r1, closeTo(1.0, 1e-9));
-      expect(s.r2, closeTo(0.1, 1e-9));
-    });
+    test(
+      'R2 (÷1000) and R1 (÷100) use different scales — a diverging case',
+      () {
+        // Same raw 0x0064 = 100 in both slots decodes to 1.0 (R1, ÷100) vs
+        // 0.1 (R2, ÷1000): proves the two scales are not accidentally shared.
+        final b = List<int>.from(_goldenBytes);
+        b[2] = 0x00;
+        b[3] = 0x64; // R1 raw 100
+        b[4] = 0x00;
+        b[5] = 0x64; // R2 raw 100
+        final s = parseBengleEstSample(_bytes(b))!;
+        expect(s.r1, closeTo(1.0, 1e-9));
+        expect(s.r2, closeTo(0.1, 1e-9));
+      },
+    );
 
     test('U16 sentinels (0xFFFF) decode to null, not a fake value', () {
       final b = List<int>.from(_goldenBytes);
@@ -207,14 +210,16 @@ void main() {
       expect(s.detLastEventT, closeTo(30.0, 1e-9));
     });
 
-    test('detEventCount 0 is a REAL value (not null) when the tail is present',
-        () {
-      final b = List<int>.from(_goldenV2Bytes);
-      b[16] = 0x00; // no collapse yet this shot
-      final s = parseBengleEstSample(_bytes(b))!;
-      expect(s.detEventCount, 0);
-      expect(s.detEventCount, isNotNull);
-    });
+    test(
+      'detEventCount 0 is a REAL value (not null) when the tail is present',
+      () {
+        final b = List<int>.from(_goldenV2Bytes);
+        b[16] = 0x00; // no collapse yet this shot
+        final s = parseBengleEstSample(_bytes(b))!;
+        expect(s.detEventCount, 0);
+        expect(s.detEventCount, isNotNull);
+      },
+    );
 
     test('Mag/Conc quantization bounds: raw 200 -> 1.0 (max non-sentinel)', () {
       final b = List<int>.from(_goldenV2Bytes);
@@ -225,18 +230,20 @@ void main() {
       expect(s.detLastEventConc, closeTo(1.0, 1e-9));
     });
 
-    test('16-byte Rev-1 frame: every detector-tail field is null (fallback)',
-        () {
-      // The unchanged Rev-1 golden (rev 1, 16 bytes) must decode the base
-      // fields and leave the whole detector tail null.
-      final s = parseBengleEstSample(_bytes(_goldenBytes))!;
-      expect(s.rev, 1);
-      expect(s.r1, closeTo(1.77, 1e-9)); // base fields intact
-      expect(s.detEventCount, isNull);
-      expect(s.detLastEventT, isNull);
-      expect(s.detLastEventMag, isNull);
-      expect(s.detLastEventConc, isNull);
-    });
+    test(
+      '16-byte Rev-1 frame: every detector-tail field is null (fallback)',
+      () {
+        // The unchanged Rev-1 golden (rev 1, 16 bytes) must decode the base
+        // fields and leave the whole detector tail null.
+        final s = parseBengleEstSample(_bytes(_goldenBytes))!;
+        expect(s.rev, 1);
+        expect(s.r1, closeTo(1.77, 1e-9)); // base fields intact
+        expect(s.detEventCount, isNull);
+        expect(s.detLastEventT, isNull);
+        expect(s.detLastEventMag, isNull);
+        expect(s.detLastEventConc, isNull);
+      },
+    );
 
     test('20-byte truncated Rev-2 frame: tail null, first 16 still decode', () {
       final truncated = _goldenV2Bytes.sublist(0, 20); // one byte short of 21
