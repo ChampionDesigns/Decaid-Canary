@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle_mmr.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 
 import '../../helpers/fake_ble_transport.dart';
 
@@ -33,10 +34,10 @@ void main() {
     });
 
     test(
-      'setCupWarmerTemperature writes a scaled uint32 to BengleMmr.matSetPoint',
+      'setCupWarmerTemperature writes a whole-°C uint32 to BengleMmr.matSetPoint',
       () async {
         transport.writes.clear();
-        await bengle.setCupWarmerTemperature(60.0);
+        await bengle.setCupWarmerTemperature(70.0);
 
         final frame = transport.writes.firstWhere(
           (w) => w.characteristicUUID == Endpoint.writeToMMR.uuid,
@@ -49,15 +50,15 @@ void main() {
         expect(frame.data[2], addr.getUint8(2));
         expect(frame.data[3], addr.getUint8(3));
 
-        // Payload bytes [4..7] = uint32 scaled 60.0.
+        // firmware mult=1, so 70 °C encodes as LE 70 (not 700).
         final payload = ByteData.sublistView(frame.data, 4, 8);
-        expect(payload.getUint32(0, Endian.little), equals(600));
+        expect(payload.getUint32(0, Endian.little), equals(70));
       },
     );
 
-    test('getCupWarmerTemperature reads a scaled uint32 back from the wire', () async {
-      // Pre-queue a 50.0 °C scaled uint32 response at the matSetPoint address.
-      final bytes = ByteData(4)..setUint32(0, 500, Endian.little);
+    test('getCupWarmerTemperature reads a whole-°C uint32 back from the wire', () async {
+      // Pre-queue a 50 °C reading (raw uint32, mult=1) at the matSetPoint addr.
+      final bytes = ByteData(4)..setUint32(0, 50, Endian.little);
       transport.queueMmrResponseRaw(
         BengleMmr.matSetPoint,
         List<int>.generate(4, (i) => bytes.getUint8(i)),
@@ -69,13 +70,146 @@ void main() {
 
     test('setCupWarmerTemperature clamps over-range writes', () async {
       transport.writes.clear();
-      await bengle.setCupWarmerTemperature(120.0); // FW max is 80.0
+      await bengle.setCupWarmerTemperature(120.0); // FW max is 80 °C
 
       final frame = transport.writes.firstWhere(
         (w) => w.characteristicUUID == Endpoint.writeToMMR.uuid,
       );
       final payload = ByteData.sublistView(frame.data, 4, 8);
-      expect(payload.getUint32(0, Endian.little), equals(800));
+      expect(payload.getUint32(0, Endian.little), equals(80));
+    });
+
+    // --- CupWarmerMode enable + re-send on connect ---
+
+    Iterable<FakeBleWrite> writesTo(int address) {
+      final ba = ByteData(4)..setInt32(0, address, Endian.big);
+      return transport.writes.where((w) =>
+          w.characteristicUUID == Endpoint.writeToMMR.uuid &&
+          w.data[1] == ba.getUint8(1) &&
+          w.data[2] == ba.getUint8(2) &&
+          w.data[3] == ba.getUint8(3));
+    }
+
+    int payloadOf(FakeBleWrite w) =>
+        ByteData.sublistView(w.data, 4, 8).getUint32(0, Endian.little);
+
+    test('setCupWarmerTemperature also enables CupWarmerMode', () async {
+      transport.writes.clear();
+      await bengle.setCupWarmerTemperature(70.0);
+      final mode = writesTo(BengleMmr.cupWarmerMode.address);
+      expect(mode, isNotEmpty,
+          reason: 'CupWarmerMode (0x008038AC) must be written — temperature '
+              'alone does nothing');
+      expect(payloadOf(mode.last), equals(1));
+    });
+
+    test('setCupWarmerTemperature(0) disables CupWarmerMode', () async {
+      transport.writes.clear();
+      await bengle.setCupWarmerTemperature(0.0);
+      expect(payloadOf(writesTo(BengleMmr.cupWarmerMode.address).last),
+          equals(0));
+    });
+
+    test('CupWarmerMode + target are re-asserted on reconnect when enabled',
+        () async {
+      await bengle.setCupWarmerTemperature(70.0); // enable
+      await bengle.disconnect();
+
+      transport.queueOnConnectResponses(v13Model: 128);
+      transport.writes.clear();
+      await bengle.onConnect();
+
+      expect(writesTo(BengleMmr.matSetPoint.address), isNotEmpty,
+          reason: 'matSetPoint re-pushed on connect');
+      final mode = writesTo(BengleMmr.cupWarmerMode.address);
+      expect(mode, isNotEmpty, reason: 'CupWarmerMode re-pushed on connect');
+      expect(payloadOf(mode.last), equals(1));
+    });
+
+    test('a disabled warmer does not re-push on reconnect', () async {
+      // never enabled → _cupWarmerTarget stays 0
+      await bengle.disconnect();
+      transport.queueOnConnectResponses(v13Model: 128);
+      transport.writes.clear();
+      await bengle.onConnect();
+      expect(writesTo(BengleMmr.cupWarmerMode.address), isEmpty);
+    });
+
+    // --- MatCurrentTemp live mat temperature (defensive read) ---
+
+    test('getCupWarmerCurrentTemperature unscales a live ×10 reading',
+        () async {
+      transport.queueMmrResponseInt(
+          BengleMmr.matCurrentTemp, 425); // 42.5 °C × 10
+      expect(
+          await bengle.getCupWarmerCurrentTemperature(), closeTo(42.5, 1e-6));
+    });
+
+    test('getCupWarmerCurrentTemperature maps raw 0 to null (no reading)',
+        () async {
+      transport.queueMmrResponseInt(BengleMmr.matCurrentTemp, 0);
+      expect(await bengle.getCupWarmerCurrentTemperature(), isNull,
+          reason: 'raw 0 = NTC open/short — never fake a temperature');
+    });
+
+    test('getCupWarmerCurrentTemperature returns null when the read fails',
+        () async {
+      // Older firmware has no MatCurrentTemp register: simulate the read
+      // request failing at the transport rather than waiting out the
+      // MMR-read timeout ladder.
+      final failing = _MatTempReadFailsTransport();
+      final b = Bengle(transport: failing);
+      failing.queueOnConnectResponses(v13Model: 128);
+      await b.onConnect();
+      expect(await b.getCupWarmerCurrentTemperature(), isNull);
+      failing.dispose();
     });
   });
+
+  group('cup-warmer registers stay Bengle-only', () {
+    test('a plain DE1 connect never touches MatSetPoint or CupWarmerMode',
+        () async {
+      final transport = FakeBleTransport();
+      final de1 = UnifiedDe1(transport: transport);
+      transport.queueOnConnectResponses(); // v13Model: 1 — plain DE1
+      await de1.onConnect();
+
+      Iterable<FakeBleWrite> writesTo(int address) {
+        final ba = ByteData(4)..setInt32(0, address, Endian.big);
+        return transport.writes.where((w) =>
+            w.characteristicUUID == Endpoint.writeToMMR.uuid &&
+            w.data[1] == ba.getUint8(1) &&
+            w.data[2] == ba.getUint8(2) &&
+            w.data[3] == ba.getUint8(3));
+      }
+
+      expect(writesTo(BengleMmr.matSetPoint.address), isEmpty,
+          reason: 'cup-warmer re-assert is Bengle.onConnect machinery — the '
+              'shared DE1 connect path must never write it');
+      expect(writesTo(BengleMmr.cupWarmerMode.address), isEmpty);
+      transport.dispose();
+    });
+  });
+}
+
+/// Fails any MMR read request that targets `MatCurrentTemp` — simulates
+/// older firmware where the register does not exist and the transport/
+/// read path errors instead of answering.
+class _MatTempReadFailsTransport extends FakeBleTransport {
+  @override
+  Future<void> write(
+      String serviceUUID, String characteristicUUID, Uint8List data,
+      {bool withResponse = true, Duration? timeout}) async {
+    if (characteristicUUID == Endpoint.readFromMMR.uuid && data.length >= 4) {
+      final ba = ByteData(4)
+        ..setInt32(0, BengleMmr.matCurrentTemp.address, Endian.big);
+      if (data[1] == ba.getUint8(1) &&
+          data[2] == ba.getUint8(2) &&
+          data[3] == ba.getUint8(3)) {
+        throw Exception('simulated: MatCurrentTemp not mapped on this FW');
+      }
+    }
+    return super.write(serviceUUID, characteristicUUID, data,
+        withResponse: withResponse, timeout: timeout);
+  }
 }

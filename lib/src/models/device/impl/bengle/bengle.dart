@@ -20,13 +20,37 @@ class Bengle extends UnifiedDe1
   @override
   String get name => "Bengle";
 
+  /// Last requested cup-warmer target °C (`0` = off). Remembered so the
+  /// RAM-only [BengleMmr.cupWarmerMode] can be re-asserted on reconnect.
+  double _cupWarmerTarget = 0.0;
+
   @override
-  Future<void> setCupWarmerTemperature(double celsius) =>
-      writeMmrScaled(BengleMmr.matSetPoint, celsius);
+  Future<void> setCupWarmerTemperature(double celsius) async {
+    _cupWarmerTarget = celsius.clamp(0.0, 80.0).toDouble();
+    await writeMmrScaled(BengleMmr.matSetPoint, _cupWarmerTarget);
+    // CupWarmerMode is the real enable — a temperature alone does nothing.
+    // `> 0 °C` ⇒ On. It is RAM-only, so it is also re-pushed on every connect.
+    await writeMmrInt(BengleMmr.cupWarmerMode, _cupWarmerTarget > 0 ? 1 : 0);
+  }
 
   @override
   Future<double> getCupWarmerTemperature() =>
       readMmrScaled(BengleMmr.matSetPoint);
+
+  @override
+  Future<double?> getCupWarmerCurrentTemperature() async {
+    // Defensive read: MatCurrentTemp exists only on newer
+    // firmware (firmware register-table row 58). A raw 0 means "no valid reading" (NTC
+    // open/short) and older FW may not answer at all — both map to null,
+    // never fake data.
+    try {
+      final celsius = await readMmrScaled(BengleMmr.matCurrentTemp);
+      return celsius > 0 ? celsius : null;
+    } on Exception catch (e) {
+      log.fine('MatCurrentTemp read failed (older firmware?): $e');
+      return null;
+    }
+  }
 
   /// Bengle FW requires entering state 0x16 (`MachineState.fwUpgrade`) between
   /// the `requestState(sleeping)` step and the start of `.dat` upload.
@@ -47,19 +71,17 @@ class Bengle extends UnifiedDe1
   @protected
   Duration get firmwareUploadBatchPause => Duration.zero;
 
-  // --- Milk-probe steam stop (FW-stubbed scaffolding) -----------------------
+  // --- Milk-probe steam stop ------------------------------------------------
   //
-  // Mirrors `IntegratedScaleCapability`'s SAW stub: cache locally,
-  // log-once, no MMR write until FW publishes the slot. `probeAttached`
-  // stays `false` and `probeTemperature` never emits — probe discovery
-  // and data transport are TBD (may be a new BLE characteristic, not
-  // another MMR slot).
+  // The auto-stop TARGET is a real MMR write ([BengleSteamMmr.stopAtTemperatureTarget]
+  // = TargetMilkTemp). The live probe READING is separate — it rides the
+  // `0xA013` shot-sample stream, not an MMR — so `probeAttached`/`probeTemperature`
+  // are surfaced by that pipeline, not here. (FW currently serialises MilkTemp as 0.)
   final BehaviorSubject<double> _stopAtTempTarget =
       BehaviorSubject<double>.seeded(0.0);
   final BehaviorSubject<bool> _probeAttached =
       BehaviorSubject<bool>.seeded(false);
   final PublishSubject<double> _probeTemperature = PublishSubject<double>();
-  int _stopAtTempStubWarningsEmitted = 0;
 
   @override
   Stream<double> get stopAtTemperatureTarget => _stopAtTempTarget.stream;
@@ -72,37 +94,20 @@ class Bengle extends UnifiedDe1
 
   @override
   Future<void> setStopAtTemperatureTarget(double celsius) async {
-    final clamped = celsius.clamp(0.0, 80.0).toDouble();
+    final clamped = celsius.clamp(0.0, 85.0).toDouble();
     if (!_stopAtTempTarget.isClosed) {
       _stopAtTempTarget.add(clamped);
     }
-    final addr = BengleSteamMmr.stopAtTemperatureTarget;
-    if (addr.address == 0x00000000) {
-      _logStopAtTempStubOnce(
-          'setStopAtTemperatureTarget($clamped) ignored. Awaiting FW.');
-      return;
-    }
-    await writeMmrScaled(addr, clamped);
+    await writeMmrScaled(BengleSteamMmr.stopAtTemperatureTarget, clamped);
   }
 
   @override
   Future<double> getStopAtTemperatureTarget() async {
-    final addr = BengleSteamMmr.stopAtTemperatureTarget;
-    if (addr.address == 0x00000000) {
-      return _stopAtTempTarget.value;
-    }
-    final value = await readMmrScaled(addr);
+    final value = await readMmrScaled(BengleSteamMmr.stopAtTemperatureTarget);
     if (!_stopAtTempTarget.isClosed) {
       _stopAtTempTarget.add(value);
     }
     return value;
-  }
-
-  void _logStopAtTempStubOnce(String msg) {
-    if (_stopAtTempStubWarningsEmitted < 1) {
-      log.info('Bengle: stop-at-temperature endpoint unwired; $msg');
-      _stopAtTempStubWarningsEmitted++;
-    }
   }
 
   // --- integrated scale lifecycle ---
@@ -113,6 +118,15 @@ class Bengle extends UnifiedDe1
     await initIntegratedScale();
     await initScaleCalibration();
     await initLedStrip();
+    // CupWarmerMode is RAM-only (FW resets it to 0 on boot) — re-assert the
+    // desired state on every (re)connect so an enabled warmer survives.
+    // Conditional on purpose: an app instance that never enabled the warmer
+    // must write NOTHING here, or it would stomp state set by another client
+    // sharing the machine.
+    if (_cupWarmerTarget > 0) {
+      await writeMmrScaled(BengleMmr.matSetPoint, _cupWarmerTarget);
+      await writeMmrInt(BengleMmr.cupWarmerMode, 1);
+    }
   }
 
   @override

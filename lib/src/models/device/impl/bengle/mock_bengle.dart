@@ -37,6 +37,11 @@ class MockBengle extends MockDe1 implements BengleInterface, SimulatedDevice {
   // --- cup warmer ---
   double _cupWarmerTemp = 0.0;
 
+  /// Simulated live mat temperature. Defaults to `null` ("no valid
+  /// reading") — matching field firmware without the MatCurrentTemp
+  /// register — so consumers exercise the placeholder path by default.
+  double? _matCurrentTemp;
+
   @override
   Future<void> setCupWarmerTemperature(double celsius) async {
     _cupWarmerTemp = celsius.clamp(0.0, 80.0).toDouble();
@@ -44,6 +49,15 @@ class MockBengle extends MockDe1 implements BengleInterface, SimulatedDevice {
 
   @override
   Future<double> getCupWarmerTemperature() async => _cupWarmerTemp;
+
+  @override
+  Future<double?> getCupWarmerCurrentTemperature() async => _matCurrentTemp;
+
+  /// Test hook: set the simulated live mat temperature reading.
+  /// `null` = no valid reading (the default).
+  void setMatCurrentTemperature(double? celsius) {
+    _matCurrentTemp = celsius;
+  }
 
   // --- LED strip ---
   /// Cache of the last-set config (not necessarily committed to NVM).
@@ -164,7 +178,9 @@ class MockBengle extends MockDe1 implements BengleInterface, SimulatedDevice {
 
   @override
   Future<void> setStopAtTemperatureTarget(double celsius) async {
-    _stopAtTempTarget = celsius.clamp(0.0, 80.0).toDouble();
+    // 0..85 matches the real Bengle (TargetMilkTemp FW max 850 deci-°C) —
+    // NB wider than the cup-warmer's 0..80.
+    _stopAtTempTarget = celsius.clamp(0.0, 85.0).toDouble();
     if (!_stopAtTempTargetSubject.isClosed) {
       _stopAtTempTargetSubject.add(_stopAtTempTarget);
     }
@@ -277,8 +293,8 @@ class MockBengle extends MockDe1 implements BengleInterface, SimulatedDevice {
   /// Synthesises milk-probe temperature during `MachineState.steam`.
   /// Rises linearly from [_probeStartTemp]; resets when steam exits.
   /// If [_stopAtTempTarget] is set and reached, requests `idle` — the
-  /// FW-autonomous stop behaviour the real Bengle will perform once
-  /// the MMR slot is published.
+  /// FW-autonomous stop behaviour the real Bengle performs when a probe
+  /// is attached (`TargetMilkTemp`).
   void _tickProbeTemperature(MachineSnapshot s, DateTime now) {
     if (!(_probeAttachedSubject.hasValue && _probeAttachedSubject.value)) {
       _lastProbeTickAt = null;

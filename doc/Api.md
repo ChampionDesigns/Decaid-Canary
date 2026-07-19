@@ -58,8 +58,8 @@ For browser clients on a different origin, `ETag` is exposed via `Access-Control
 | POST | `/api/v1/machine/waterLevels` | Update water level threshold | |
 | GET | `/api/v1/machine/capabilities` | List capability identifiers (`cupWarmer`, `integratedScale`, `ledStrip`, `stopAtWeight`, `scaleCalibration`) supported by the connected machine | |
 | POST | `/api/v1/machine/scale/calibrate` | Two-point integrated-scale cal: `{"command":"zero"}` (empty), then `{"command":"left","grams":500}` and `{"command":"right","grams":500}` (same mass, LEFT then RIGHT half), or `{"command":"abort"}`. Non-blocking; returns the calibration result — Bengle only, 404 elsewhere | |
-| GET | `/api/v1/machine/cupWarmer` | Read cup-warmer setpoint °C — Bengle only, 404 elsewhere | |
-| PUT | `/api/v1/machine/cupWarmer` | Set cup-warmer setpoint °C (range 0.0–80.0, `0.0` = off) — Bengle only | |
+| GET | `/api/v1/machine/cupWarmer` | Read cup-warmer setpoint °C + live mat temperature (`currentTemperature`, `null` = no valid reading / older FW — render a placeholder, never fake data) — Bengle only, 404 elsewhere | |
+| PUT | `/api/v1/machine/cupWarmer` | Set cup-warmer setpoint °C (range 0.0–80.0; `> 0` = on, `0.0` = off; the FW enable register is app-managed — cleared on machine reboot, re-asserted on reconnect) — Bengle only | |
 | GET | `/api/v1/machine/ledStrip` | Read full LED strip config (3 zones × 2 modes, 16-bit RGB) from the app cache, hydrated from the machine's stored palette on connect (all-off fallback until a PUT or `/reset` only if that read fails) — Bengle only | |
 | PUT | `/api/v1/machine/ledStrip` | Write full LED strip config to the FW palette registers (persisted + live-applied by FW on write; `frontSwitch` has no register — FW mirrors the front strip) — Bengle only | |
 | POST | `/api/v1/machine/ledStrip/commit` | Re-assert the cached LED config to the FW (palette writes already persist; kept for API symmetry) — Bengle only | |
@@ -129,12 +129,14 @@ reaches `connected`.
 ### Steams
 
 Recorded milk-steaming sessions. Each record is opened when the machine
-enters `steam` and finalized when it leaves. Today no probe is wired in
-production, so `SteamSnapshot.milkTemperature` is `null` on every frame —
-the API surface is scaffolding for skin developers and for future
-probe / FW support. `SteamSettings.stopAtTemperature` (in
-`/api/v1/workflow`) is the target the future FW-autonomous stop or
-in-app stop will trigger on.
+enters `steam` and finalized when it leaves. `SteamSnapshot.milkTemperature`
+is populated from the first registered milk sensor; no probe ships in
+production today, so the field is `null` on every frame until one is
+attached. `SteamSettings.stopAtTemperature` (in `/api/v1/workflow`, range
+0–85 °C on Bengle) is written to the Bengle's `TargetMilkTemp` register:
+the machine stops steam autonomously once a milk probe is physically
+attached and the reading crosses the target; on other machines or
+third-party probes the app requests `idle` instead.
 
 | Method | Path | Description | Handler |
 |--------|------|-------------|---------|

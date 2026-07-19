@@ -412,14 +412,20 @@ paths:
           description: Machine connected but has no integrated scale
   /api/v1/machine/cupWarmer:
     get:
-      summary: Get cup-warmer setpoint
+      summary: Get cup-warmer setpoint + live mat temperature
       description: |
-        Read the current cup-warmer mat target temperature in °C.
+        Read the current cup-warmer mat target temperature in °C
+        (`temperature`) and the live measured mat temperature
+        (`currentTemperature`). `currentTemperature` is `null` when the
+        firmware has no valid reading (sensor fault, or older firmware
+        without the register) — clients must render a placeholder for
+        `null` and must also tolerate the key being absent entirely
+        (responses from older app versions). Never fabricate a value.
         Returns 404 when the connected machine is not a Bengle.
       tags: [Machine]
       responses:
         "200":
-          description: Current cup-warmer setpoint
+          description: Current cup-warmer setpoint + live mat temperature
           content:
             application/json:
               schema:
@@ -430,9 +436,15 @@ paths:
       summary: Set cup-warmer setpoint
       description: |
         Set the cup-warmer mat target temperature in °C. Range
-        `0.0`–`80.0`; `0.0` turns the mat off (there is no separate
-        enable flag). Out-of-range values return 400; the app does not
-        rely on FW-side clamping so callers see immediate feedback.
+        `0.0`–`80.0`. A target `> 0` also enables the warmer and `0.0`
+        disables it — the separate firmware enable register is an
+        implementation detail the API hides. The enable does not survive
+        a machine reboot (the firmware deliberately clears it so the mat
+        can never heat unattended after a power cut), but the app
+        re-asserts the last requested state on every reconnect, so
+        clients only ever set the temperature. Out-of-range values
+        return 400; the app does not rely on FW-side clamping so callers
+        see immediate feedback.
         Returns 404 when the connected machine is not a Bengle.
       tags: [Machine]
       requestBody:
@@ -4627,8 +4639,25 @@ components:
           maximum: 80.0
           description: |
             Cup-warmer mat target temperature in °C. `0.0` turns the
-            mat off — there is no separate enable flag.
+            mat off; `> 0` turns it on. The firmware's separate enable
+            register is managed by the app and hidden from the API — it
+            is cleared by the machine on every reboot and re-asserted by
+            the app on reconnect.
           example: 60.0
+        currentTemperature:
+          type: number
+          format: float
+          nullable: true
+          readOnly: true
+          description: |
+            Live measured mat temperature in °C (one decimal, from the
+            read-only MatCurrentTemp register, wire ×10). `null` when the
+            firmware reports no valid reading (raw 0 — sensor open/short)
+            or does not expose the register (older firmware). Response
+            only — ignored on PUT. Clients render a placeholder for
+            `null` and must tolerate the key being absent (older app
+            versions); never substitute fake data.
+          example: 42.5
 
     LedStripState:
       type: object
@@ -5493,12 +5522,15 @@ components:
           format: double
           description: >
             Stop steaming when the milk-probe reading reaches this
-            temperature (°C). `0` disables the stop. Range 0..80.
-            Scaffolding only today — no machine in production has an
-            integrated probe wired, so the field round-trips but does
-            not affect machine behaviour. On Bengle with a future probe
-            firmware the stop is FW-autonomous; on other machines or
-            third-party probes the app stops via `requestState(idle)`.
+            temperature (°C). `0` disables the stop. Range 0..85 on
+            Bengle (the firmware TargetMilkTemp register caps at
+            85.0 °C; the app clamps before writing). On Bengle the
+            target is written to the machine and the stop is
+            FW-autonomous the moment a milk probe is physically
+            attached; on other machines or third-party probes the app
+            stops via `requestState(idle)` when a registered sensor
+            crosses the target (with no probe attached and no sensor
+            registered the field round-trips but nothing stops).
           example: 65.0
           default: 0.0
 
