@@ -96,6 +96,39 @@ void main() {
     return frames;
   }
 
+  // A single-step LEVER profile carrying a cross-variable POWER exit. The exit
+  // encode is pump-agnostic: convertProfileFlags derives comparePower from
+  // step.exit regardless of pump mode, and the base frame carries the same U8D1
+  // watts TriggerVal a pressure/flow step does. The lever step additionally
+  // emits its Mode=2 ext frame, which the exit does not disturb.
+  Profile leverPowerProfile(ExitCondition cond, double watts) => Profile(
+        version: '2',
+        title: 'lever power exit',
+        notes: '',
+        author: 'test',
+        beverageType: BeverageType.espresso,
+        steps: [
+          ProfileStepLever(
+            name: 'lever to power',
+            transition: TransitionType.fast,
+            volume: 0,
+            seconds: 30,
+            temperature: 92,
+            sensor: TemperatureSensor.coffee,
+            pressure: 9.0,
+            leverSpring: 0.9,
+            leverGive: 1.5,
+            exit: StepExitCondition(
+              type: ExitType.power,
+              condition: cond,
+              value: watts,
+            ),
+          ),
+        ],
+        targetVolumeCountStart: 0,
+        tankTemperature: 0,
+      );
+
   group('golden vectors (power exit, Bengle caps 0xF)', () {
     late List<FakeBleWrite> frames;
 
@@ -146,6 +179,53 @@ void main() {
         expect(flag & Helper.doCompare, 0, reason: 'doCompare MUST be clear');
       },
     );
+  });
+
+  group('lever step power exit (mode-agnostic encoder)', () {
+    test(
+        'lever + power over 4.5 W: base frame is byte-identical to the pressure '
+        'GV-P1 (00 C4 5A B8 9E 2D 04 00) — the exit encode is pump-agnostic',
+        () async {
+      final frames =
+          await uploadFrames(leverPowerProfile(ExitCondition.over, 4.5), 0xF);
+      final base = frames.firstWhere((w) => w.data[0] == 0x00);
+      // Same P0/temp/time/exit as the pressure GV-P1: only the ext Mode byte
+      // differs, which proves the power-exit encode does not depend on pump mode.
+      expect(
+        base.data,
+        orderedEquals([0x00, 0xC4, 0x5A, 0xB8, 0x9E, 0x2D, 0x04, 0x00]),
+      );
+    });
+
+    test('flag byte: comparePower + dcGT set, doCompare/dcCompF/ctrlF clear',
+        () async {
+      final frames =
+          await uploadFrames(leverPowerProfile(ExitCondition.over, 4.5), 0xF);
+      final flag = frames.firstWhere((w) => w.data[0] == 0x00).data[1];
+      expect(flag & Helper.comparePower, Helper.comparePower);
+      expect(flag & Helper.dcGT, Helper.dcGT, reason: 'over');
+      expect(flag & Helper.doCompare, 0, reason: 'doCompare MUST be clear');
+      expect(flag & Helper.dcCompF, 0, reason: 'dcCompF MUST be clear');
+      expect(flag & Helper.ctrlF, 0, reason: 'a lever step is not flow priority');
+    });
+
+    test('power under 2.0 W: flag 0xC0 (no dcGT), TriggerVal 0x14 watts',
+        () async {
+      final frames =
+          await uploadFrames(leverPowerProfile(ExitCondition.under, 2.0), 0xF);
+      final base = frames.firstWhere((w) => w.data[0] == 0x00);
+      expect(base.data[1], 0xC0,
+          reason: 'ignoreLimit | comparePower, dcGT clear (under)');
+      expect(base.data[5], 0x14, reason: 'TriggerVal = U8D1(2.0 W)');
+    });
+
+    test('the lever step still emits its Mode=2 ext frame alongside the exit',
+        () async {
+      final frames =
+          await uploadFrames(leverPowerProfile(ExitCondition.over, 4.5), 0xF);
+      final ext = frames.firstWhere((w) => w.data[0] == 0x20); // 32 + step 0
+      expect(ext.data[3], 2, reason: 'Mode = Lever, unchanged by the power exit');
+    });
   });
 
   group('convertProfileFlags: power exit does NOT set doCompare', () {
@@ -352,6 +432,31 @@ void main() {
       // A pressure/flow cross-exit runs on stock firmware; it must arm without
       // any capability refusal.
       await de1.setProfile(flowExitProfile()); // completes
+    });
+
+    // A LEVER step whose pump mode IS supported at caps 0x7 (Lever = bit1) but
+    // which ALSO carries a power exit (bit3, absent at 0x7). The power exit is
+    // an orthogonal gate: the refusal must name the power EXIT condition, never
+    // the (supported) lever pump mode.
+    test('Bengle caps 0x7: a lever-step power exit is refused, naming the exit',
+        () async {
+      final de1 = await connect(model: 128, caps: 0x7);
+      expect(de1.machineInfo.extra['profileModeCaps'], 0x7);
+      await expectLater(
+        de1.setProfile(leverPowerProfile(ExitCondition.over, 4.5)),
+        throwsA(isA<ProfileModeUnsupportedException>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('power exit condition'),
+              isNot(contains('pump mode'))),
+        )),
+      );
+    });
+
+    test('Bengle caps 0xF: a lever-step power exit arms (no throw)', () async {
+      final de1 = await connect(model: 128, caps: 0xF);
+      expect(de1.machineInfo.extra['profileModeCaps'], 0xF);
+      await de1.setProfile(leverPowerProfile(ExitCondition.over, 4.5)); // ok
     });
   });
 
