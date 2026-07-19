@@ -974,6 +974,8 @@ class UnifiedDe1 implements De1Interface {
           return _transport.fwMapRequest;
         case Endpoint.bengleShotSample:
           return _transport.bengleShotSample;
+        case Endpoint.estimator:
+          return _transport.estimator;
         default:
           throw UnimplementedError(
             'UnifiedDe1.notificationsFor: Endpoint.${endpoint.name} is '
