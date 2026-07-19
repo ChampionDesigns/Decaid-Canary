@@ -826,6 +826,48 @@ class UnifiedDe1Transport {
     }
   }
 
+  /// Force a FRESH read of the firmware-map register ([Endpoint.fwMapRequest] /
+  /// A009 / `[I]`), for the firmware erase/verify poll fallback. Some firmwares
+  /// never emit the post-erase / post-verify notification, so the verify flow
+  /// has to actively re-read the register instead of waiting for it to be
+  /// pushed.
+  ///
+  ///  * **serial**: [_serialRead] would hand back the last *pushed* `[I]`
+  ///    frame, which never updates once the firmware stops emitting the notify.
+  ///    fwMapRequest is already continuously `<+I>`-subscribed, and the firmware
+  ///    treats an add-notify as a force-update, so re-sending `<+I>` reprovokes
+  ///    a fresh `[I]` into [_fwMapRequestSubject]. We deliberately do NOT send a
+  ///    matching `<-I>` (unlike [_serialSingleNotifyRead]): dropping the
+  ///    continuous subscription mid-update would blind the notify path a stock
+  ///    DE1 still relies on. Bounded by [serialSingleReadTimeout].
+  ///  * **BLE**: a genuine GATT read of A009 returns the current register
+  ///    value. It goes through [_bleRead], NOT the public [read]: this is a poll
+  ///    fired repeatedly across the flash-busy erase/verify windows, and it must
+  ///    not inherit [read]'s timeout disconnect->reconnect recovery — tearing
+  ///    the link down and re-establishing it mid-update would corrupt the
+  ///    in-flight firmware write. A failed/timed-out poll read simply throws to
+  ///    the caller, which is expected to log and retry; the outer stage timeout
+  ///    still bounds the overall wait. Bounded by [serialSingleReadTimeout] so
+  ///    one read can never hang the loop.
+  Future<ByteData> readFwMapRequestFresh() async {
+    final t = _transport;
+    if (transportType == TransportType.serial && t is SerialTransport) {
+      // Arm for the NEXT [I] frame before reprovoking — `skip(1)` drops the
+      // BehaviorSubject's replayed current value so we wait for the fresh one.
+      final next = _fwMapRequestSubject.stream
+          .skip(1)
+          .first
+          .timeout(serialSingleReadTimeout);
+      next.ignore();
+      await t.writeCommand('<+${Endpoint.fwMapRequest.representation}>');
+      return next;
+    }
+    if (transportType == TransportType.ble) {
+      return _bleRead(Endpoint.fwMapRequest, timeout: serialSingleReadTimeout);
+    }
+    return read(Endpoint.fwMapRequest);
+  }
+
   Future<void> write(LogicalEndpoint endpoint, Uint8List data) async {
     if (await _transport.connectionState.first != device.ConnectionState.connected) {
       throw const DeviceNotConnectedException.machine();
