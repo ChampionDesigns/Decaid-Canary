@@ -430,8 +430,9 @@ class ProfileStepPower extends ProfileStep {
     // The pressure limiter is the shaper's mandatory over-pressure cap: a
     // power step is meaningless (and unsafe to send) without it.
     final limiterJson = json['limiter'];
-    final limiter =
-        limiterJson != null ? StepLimiter.fromJson(limiterJson) : null;
+    final limiter = limiterJson != null
+        ? StepLimiter.fromJson(limiterJson)
+        : null;
     if (limiter == null || limiter.value == 0) {
       throw const FormatException('power step requires a pressure limiter');
     }
@@ -487,17 +488,17 @@ class ProfileStepPower extends ProfileStep {
 
   @override
   List<Object?> get props => [
-        name,
-        transition,
-        exit,
-        volume,
-        seconds,
-        weight,
-        temperature,
-        sensor,
-        power,
-        limiter,
-      ];
+    name,
+    transition,
+    exit,
+    volume,
+    seconds,
+    weight,
+    temperature,
+    sensor,
+    power,
+    limiter,
+  ];
 }
 
 /// Spring-lever pump step. Mirrors [ProfileStepPressure] exactly, reusing
@@ -589,19 +590,19 @@ class ProfileStepLever extends ProfileStep {
 
   @override
   List<Object?> get props => [
-        name,
-        transition,
-        exit,
-        volume,
-        seconds,
-        weight,
-        temperature,
-        sensor,
-        pressure,
-        leverSpring,
-        leverGive,
-        limiter,
-      ];
+    name,
+    transition,
+    exit,
+    volume,
+    seconds,
+    weight,
+    temperature,
+    sensor,
+    pressure,
+    leverSpring,
+    leverGive,
+    limiter,
+  ];
 }
 
 class StepExitCondition extends Equatable {
