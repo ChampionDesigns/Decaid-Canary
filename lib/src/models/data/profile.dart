@@ -152,7 +152,15 @@ enum TransitionType { fast, smooth, hold }
 
 enum TemperatureSensor { coffee, water }
 
-enum ExitType { pressure, flow }
+// `power` (hydraulic watts, W = 0.1 * pressure * flow) is a NEW enum value, not
+// an additive boolean/key, for the same skew reason as TransitionType.hold: an
+// old client's `ExitType.values.byName('power')` THROWS an ArgumentError -> a
+// VISIBLE 400 at the REST boundary, whereas a dropped additive key would round-
+// trip to a silent pressure/flow exit (a wrong early exit — forbidden). A client
+// that knows `power` round-trips it losslessly on ANY machine (a stock DE1
+// included) via `.name`/`byName`; only encoding/arming is gated by the machine's
+// advertised power-exit capability.
+enum ExitType { pressure, flow, power }
 
 enum ExitCondition { over, under }
 
