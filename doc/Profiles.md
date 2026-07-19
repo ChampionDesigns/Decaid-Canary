@@ -580,6 +580,36 @@ physical upload.
 - See `doc/plans/archive/profile-upload-recovery/design.md` for the full
   design rationale.
 
+### Device upload wire format (DE1 v1 / Bengle v2)
+
+When a profile is sent to a physical machine it is serialised to the DE1 binary
+shot descriptor (a header frame plus one frame per step, optional per-step
+extension frames, and a tail) over the `headerWrite` / `frameWrite`
+characteristics. reaprime negotiates one of **two wire versions**, selected by
+the connected machine (`UnifiedDe1.isBengle`, established from `v13Model >= 128`
+on connect — see `doc/DeviceManagement.md`). Encoding is in
+`unified_de1.profile.dart`.
+
+| Aspect | DE1 (v1) | Bengle (v2) |
+|--------|----------|-------------|
+| Header version byte | `1` | `2` (firmware rejects and wipes any header where `HeaderV != 2`) |
+| Flow / pressure fields¹ | **U8P4** — `round(v × 16)`, range 0–15.9375 ml/s / bar | **U8D1** — `round(v × 10)`, range 0–25.5 ml/s / bar |
+| Max flow ceiling | 8 ml/s | 20 ml/s (flow-priority targets clamped to it before encoding) |
+
+¹ SetVal (per-step target), TriggerVal (exit-comparison threshold), the header
+MinimumPressure / MaximumFlow, and the extension-frame MaxFlowOrPressure /
+MaxFoPRange. Temperature (U8P1), frame length (F8_1.7) and volume (U10P0)
+encodings are identical across both versions.
+
+The distinction is load-bearing: a Bengle silently discards a v1 header (so **no
+shot runs**), and a v1-scaled flow/pressure over-commands the machine by 60% and
+wraps above 15.9. The DE1 path is unchanged — a DE1 must behave exactly as
+before. Only the Bengle U8D1 encoder clamps (to 0..25.5); the DE1 U8P4 encoder
+is unchanged and wraps mod-256 above 15.9375, which is harmless in practice
+since DE1 flow/pressure values stay well within range. This mirrors de1plus's
+`use_ble_v2` path (`binary.tcl`); the byte layout is verified in
+`test/models/device/unified_de1_bengle_profile_v2_test.dart`.
+
 ### Future Enhancements
 
 - **Cloud Sync**:
