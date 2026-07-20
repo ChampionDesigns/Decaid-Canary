@@ -63,9 +63,17 @@ class FakeBleTransport extends BLETransport {
   /// seeing the terminal word instead of timing out.
   final Map<int, Queue<int>> _intResponseSeq = {};
 
-  /// Per-UUID queued `read()` payloads.
-  final Map<String, Queue<Uint8List>> _readQueue = {};
+  /// Per-UUID queued `read()` outcomes. Each entry is either a [Uint8List]
+  /// payload (returned) or an [Object] error (thrown) — see [queueReadError],
+  /// used to exercise the firmware-poll's must-not-disturb-the-link path.
+  final Map<String, Queue<Object>> _readQueue = {};
   final Queue<Uint8List> _firmwareMapResponses = Queue<Uint8List>();
+
+  /// Number of times [connect] / [disconnect] have been called. A spurious
+  /// reconnect after a BLE timeout drives both; a poll read that stays off the
+  /// recovery path leaves them untouched.
+  int connectCalls = 0;
+  int disconnectCalls = 0;
 
   /// Ordered writes seen by the transport.
   final List<FakeBleWrite> writes = [];
@@ -98,7 +106,15 @@ class FakeBleTransport extends BLETransport {
   /// Subsequent reads pop further entries; once empty the default 20-byte
   /// zero buffer is returned.
   void queueRead(String characteristicUUID, Uint8List bytes) {
-    _readQueue.putIfAbsent(characteristicUUID, Queue.new).add(bytes);
+    _readQueue.putIfAbsent(characteristicUUID, Queue<Object>.new).add(bytes);
+  }
+
+  /// Queue [error] to be THROWN by the next `read()` against
+  /// [characteristicUUID], interleaved in order with any [queueRead] payloads.
+  /// Models a transient GATT failure (e.g. a BleTimeoutException)
+  /// mid-firmware-update.
+  void queueReadError(String characteristicUUID, Object error) {
+    _readQueue.putIfAbsent(characteristicUUID, Queue<Object>.new).add(error);
   }
 
   void queueFirmwareMapResponse(List<int> bytes) {
@@ -136,10 +152,14 @@ class FakeBleTransport extends BLETransport {
   Future<ConnectionState> getConnectionState() async => _connState.value;
 
   @override
-  Future<void> connect() async {}
+  Future<void> connect() async {
+    connectCalls++;
+  }
 
   @override
-  Future<void> disconnect() async {}
+  Future<void> disconnect() async {
+    disconnectCalls++;
+  }
 
   @override
   Future<List<String>> discoverServices() async => [de1ServiceUUID];
@@ -151,7 +171,11 @@ class FakeBleTransport extends BLETransport {
     Duration? timeout,
   }) async {
     final q = _readQueue[characteristicUUID];
-    if (q != null && q.isNotEmpty) return q.removeFirst();
+    if (q != null && q.isNotEmpty) {
+      final next = q.removeFirst();
+      if (next is Uint8List) return next;
+      throw next; // queued error (see [queueReadError])
+    }
     // 20-byte zero buffer matches MMR/state response width; tolerated by
     // parsers during onConnect.
     return Uint8List(20);
