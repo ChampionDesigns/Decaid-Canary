@@ -47,7 +47,6 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       step.transition == TransitionType.hold && step is! ProfileStepLever;
 
   Future<void> _writeHeader(Profile profile) async {
-    final isBengle = implementation == DeviceImplementation.bengle;
     final scale = isBengle ? 10.0 : 16.0;
 
     Uint8List data = Uint8List(5);
@@ -68,7 +67,6 @@ extension UnifiedDe1Profile on UnifiedDe1 {
   }
 
   Future<void> _writeSteps(Profile profile) async {
-    final isBengle = implementation == DeviceImplementation.bengle;
     final scale = isBengle ? 10.0 : 16.0;
 
     // write frames

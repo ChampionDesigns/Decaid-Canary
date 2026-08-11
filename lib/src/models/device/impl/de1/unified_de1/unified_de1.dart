@@ -145,7 +145,7 @@ class UnifiedDe1 implements De1Interface {
   // correct. _isBengle only ever transitions false->true (during onConnect).
   @override
   Stream<MachineSnapshot> get currentSnapshot =>
-      _isBengle ? _bengleSnapshot : _de1Snapshot;
+      isBengle ? _bengleSnapshot : _de1Snapshot;
 
   @override
   String get deviceId => _transport.id;
@@ -277,12 +277,18 @@ class UnifiedDe1 implements De1Interface {
   double? _cachedFlowEstimation;
   int? _connectedModelValue;
 
-  // Wire truth from v13Model, not the class picked at discovery: 0xA013 is the
-  // sole snapshot source whenever the firmware reports Bengle. Only ever
-  // transitions false->true, during onConnect.
+  // Wire truth from v13Model, learned during onConnect. Only ever transitions
+  // false->true.
   bool _isBengle = false;
 
-  bool get isBengle => _isBengle;
+  /// True when this machine should be driven as a Bengle — by the class picked
+  /// at discovery OR by the v13Model the firmware reported. Either alone is
+  /// insufficient: a `Bengle` instance has not read v13Model before onConnect,
+  /// and a name-picked `UnifiedDe1` that turns out to report v13Model >= 128
+  /// still speaks protocol v2 on the wire. Profile encoding and the 0xA013
+  /// snapshot source both key off this, so they can never disagree.
+  bool get isBengle =>
+      _isBengle || implementation == DeviceImplementation.bengle;
 
   @protected
   int get connectedModelValue => _connectedModelValue!;

@@ -819,12 +819,15 @@ class UnifiedDe1Transport {
   Future<ByteData> readFwMapRequestFresh() async {
     final t = _transport;
     if (transportType == TransportType.serial && t is SerialTransport) {
-      // Arm for the NEXT [I] frame before reprovoking — `skip(1)` drops the
-      // BehaviorSubject's replayed current value so we wait for the fresh one.
-      final next = _fwMapRequestSubject.stream
-          .skip(1)
-          .first
-          .timeout(_firmwareMapPollReadTimeout);
+      // Arm for the NEXT [I] frame before reprovoking. The subject replays its
+      // current value to a new listener, so drop one — but ONLY when it holds
+      // one. It is no longer seeded, so on the first poll of a connection an
+      // unconditional `skip(1)` would swallow the very frame we provoked and
+      // the read would time out.
+      final source = _fwMapRequestSubject.hasValue
+          ? _fwMapRequestSubject.stream.skip(1)
+          : _fwMapRequestSubject.stream;
+      final next = source.first.timeout(_firmwareMapPollReadTimeout);
       next.ignore();
       await t.writeCommand('<+${Endpoint.fwMapRequest.representation}>');
       return next;

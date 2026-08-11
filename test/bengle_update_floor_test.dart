@@ -18,50 +18,52 @@ void main() {
   /// Mirrors the shape of api.github.com/repos/tadelv/reaprime/releases,
   /// newest first, with the real tags upstream had on 2026-08-11.
   String releasesJson() => jsonEncode([
+    {
+      'tag_name': 'v0.7.17-beta.5',
+      'prerelease': true,
+      'body': 'beta',
+      'assets': [
         {
-          'tag_name': 'v0.7.17-beta.5',
-          'prerelease': true,
-          'body': 'beta',
-          'assets': [
-            {
-              'name': 'decent-android-0.7.17-beta.5.apk',
-              'browser_download_url': 'https://example.com/beta.apk',
-            }
-          ],
+          'name': 'decent-android-0.7.17-beta.5.apk',
+          'browser_download_url': 'https://example.com/beta.apk',
         },
+      ],
+    },
+    {
+      'tag_name': 'v0.7.16',
+      'prerelease': false,
+      'body': 'stable',
+      'assets': [
         {
-          'tag_name': 'v0.7.16',
-          'prerelease': false,
-          'body': 'stable',
-          'assets': [
-            {
-              'name': 'decent-android-0.7.16.apk',
-              'browser_download_url': 'https://example.com/stable.apk',
-            }
-          ],
+          'name': 'decent-android-0.7.16.apk',
+          'browser_download_url': 'https://example.com/stable.apk',
         },
-      ]);
+      ],
+    },
+  ]);
 
   AndroidUpdater updaterReturningReleases() => AndroidUpdater(
-        owner: 'tadelv',
-        repo: 'reaprime',
-        httpClient: MockClient(
-          (request) async => http.Response(releasesJson(), 200),
-        ),
-      );
+    owner: 'tadelv',
+    repo: 'reaprime',
+    httpClient: MockClient(
+      (request) async => http.Response(releasesJson(), 200),
+    ),
+  );
 
   group('port build without a version floor (the exposure)', () {
-    test('0.7.12 is offered stock upstream 0.7.16 on the stable channel',
-        () async {
-      final update = await updaterReturningReleases().checkForUpdate(
-        '0.7.12',
-        channel: UpdateChannel.stable,
-      );
+    test(
+      '0.7.12 is offered stock upstream 0.7.16 on the stable channel',
+      () async {
+        final update = await updaterReturningReleases().checkForUpdate(
+          '0.7.12',
+          channel: UpdateChannel.stable,
+        );
 
-      // This is what would wipe the Bengle stack if the user tapped install.
-      expect(update, isNotNull);
-      expect(update!.version, '0.7.16');
-    });
+        // This is what would wipe the Bengle stack if the user tapped install.
+        expect(update, isNotNull);
+        expect(update!.version, '0.7.16');
+      },
+    );
 
     test('a bare dev build accepts anything', () async {
       final update = await updaterReturningReleases().checkForUpdate(
