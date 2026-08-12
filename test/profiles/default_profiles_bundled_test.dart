@@ -70,6 +70,38 @@ void main() {
     }
   });
 
+  test('the machine Test/ diagnostics are present with canonical titles', () {
+    final titles = profiles.values.map((p) => p.title).toSet();
+    expect(
+      titles,
+      containsAll(<String>[
+        'Test/for a small leak',
+        'Test/low pressure leak',
+        'Test/leakage stress test',
+        'Test/pressure calibration',
+        'Test/temperature accuracy',
+        'Test/temperature calibration',
+        'Test/Flow calibration',
+      ]),
+    );
+  });
+
+  // beverage_type drives two carve-outs in de1_state_manager: calibration pulls
+  // skip the no-scale abort, and they are not persisted to shot history.
+  test('every Test/ diagnostic is beverage_type calibrate', () {
+    final diagnostics = profiles.entries.where(
+      (e) => e.value.title.startsWith('Test/'),
+    );
+    expect(diagnostics, isNotEmpty);
+    for (final entry in diagnostics) {
+      expect(
+        entry.value.beverageType,
+        BeverageType.calibrate,
+        reason: '${entry.value.title} (${entry.key})',
+      );
+    }
+  });
+
   test('the four Baseline variants are present with canonical titles', () {
     final titles = profiles.values.map((p) => p.title).toSet();
     expect(
