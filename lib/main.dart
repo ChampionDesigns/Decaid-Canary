@@ -18,6 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:reaprime/src/account/account_consent_prompter.dart';
 import 'package:reaprime/src/controllers/battery_controller.dart';
 import 'package:reaprime/src/controllers/bengle_probe_bridge.dart';
+import 'package:reaprime/src/controllers/bengle_puck_estimator_bridge.dart';
 import 'package:reaprime/src/controllers/bengle_saw_bridge.dart';
 import 'package:reaprime/src/controllers/bengle_steam_stop_bridge.dart';
 import 'package:reaprime/src/controllers/hot_water_sequencer.dart';
@@ -468,6 +469,12 @@ void main(List<String> args) async {
 
   // ignore: unused_local_variable
   final bengleProbeBridge = BengleProbeBridge(
+    de1Controller: de1Controller,
+    sensorController: sensorController,
+  );
+
+  // ignore: unused_local_variable
+  final benglePuckEstimatorBridge = BenglePuckEstimatorBridge(
     de1Controller: de1Controller,
     sensorController: sensorController,
   );
