@@ -76,6 +76,7 @@ class BenglePuckEstimator implements Sensor {
       DataChannel(key: 'collapseLastEventT', type: 'number', unit: 's'),
       DataChannel(key: 'collapseLastEventMagnitude', type: 'number'),
       DataChannel(key: 'collapseLastEventConcavity', type: 'number'),
+      DataChannel(key: 'puckPower', type: 'number', unit: 'W'),
     ],
     commands: const [],
   );
@@ -107,6 +108,11 @@ class BenglePuckEstimator implements Sensor {
       'collapseLastEventMagnitude': s.detLastEventMag,
     if (s.detLastEventConc != null)
       'collapseLastEventConcavity': s.detLastEventConc,
+    // Measured hydraulic power into the puck (Rev 3+). Distinct from
+    // MachineSnapshot.hydraulicPower, which is the derived 0.1*P*F every
+    // machine including a plain DE1 can produce: this one uses the firmware's
+    // Q_puck, so the two diverge during compliance transients.
+    if (s.wPuck != null) 'puckPower': s.wPuck,
   };
 
   @override
