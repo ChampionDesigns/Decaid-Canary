@@ -649,6 +649,10 @@ class UnifiedDe1 implements De1Interface {
   Future<void> enableBengleShotSample() =>
       _transport.subscribeBengleShotSample();
 
+  /// Returns true when the estimator stream is live on this connection.
+  @protected
+  Future<bool> enableEstimator() => _transport.subscribeEstimator();
+
   @protected
   Future<void> writeEndpoint(
     LogicalEndpoint endpoint,

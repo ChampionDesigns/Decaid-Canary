@@ -193,6 +193,48 @@ class UnifiedDe1Transport {
     );
   }
 
+  /// Subscribe the BengleEstSample stream, when the machine actually offers it.
+  ///
+  /// On BLE this is CONDITIONAL and must stay that way. Firmware predating the
+  /// characteristic's GATT registration does not expose it, and a CCCD write
+  /// against a characteristic the peripheral never registered stalls the
+  /// command queue — so the presence check is a safety gate, not an
+  /// optimisation. A transport that cannot enumerate characteristics returns an
+  /// empty list and we skip, which is the fail-closed outcome.
+  ///
+  /// On serial nothing to do: `_serialConnect` already sends the unconditional
+  /// `<+T>`, where no such stall hazard exists and a machine without the
+  /// observer simply never emits a frame.
+  Future<bool> subscribeEstimator() async {
+    if (transportType != TransportType.ble) return true;
+    final t = _transport;
+    if (t is! BLETransport) return false;
+
+    // Normalise BOTH sides: this is a safety gate, so it must not depend on a
+    // transport honouring a casing convention.
+    final present = (await t.discoverCharacteristics(
+      de1ServiceUUID,
+    )).map((c) => c.toLowerCase()).toSet();
+    final wanted = Endpoint.estimator.uuid.toLowerCase();
+    if (!present.contains(wanted)) {
+      _log.info(
+        'BengleEstSample characteristic not present on this machine; '
+        'skipping the estimator subscribe (firmware predates it, or the '
+        'transport cannot enumerate characteristics)',
+      );
+      return false;
+    }
+
+    await t.subscribe(
+      de1ServiceUUID,
+      Endpoint.estimator.uuid,
+      (data) => _estimatorNotification(
+        ByteData.sublistView(Uint8List.fromList(data)),
+      ),
+    );
+    return true;
+  }
+
   Future<void> subscribeBengleShotSample() async {
     switch (transportType) {
       case TransportType.ble:
