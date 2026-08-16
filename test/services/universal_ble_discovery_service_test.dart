@@ -144,7 +144,7 @@ class _FakeBlePlatform extends UniversalBlePlatform {
 }
 
 class _TrackingFakeBleTransport extends FakeBleTransport {
-  int disconnectCalls = 0;
+  // disconnectCalls is inherited from FakeBleTransport, which now counts it.
   int disposeCalls = 0;
   bool _disposed = false;
 
