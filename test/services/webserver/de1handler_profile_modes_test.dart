@@ -36,6 +36,12 @@ class _FixedDe1Controller extends De1Controller {
     if (d == null) throw const DeviceNotConnectedException.machine();
     return d;
   }
+
+  // runDeviceWrite also identity-checks the machine against this before and
+  // after the write; without the override it stays null, the write is skipped
+  // as "machine changed", and every response becomes a 500.
+  @override
+  De1Interface? get connectedDe1OrNull => device;
 }
 
 void main() {
