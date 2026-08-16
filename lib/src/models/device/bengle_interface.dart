@@ -68,8 +68,9 @@ abstract class BengleInterface extends De1Interface {
 
   Stream<double> get probeTemperature;
 
-  /// Decoded `0xA014` fused puck-estimator frames. Serial/CDC only, and silent
-  /// until the firmware emits its first `[T]`, so a subscriber can treat "no
-  /// event" as "this machine has no estimator".
+  /// Decoded `0xA014` fused puck-estimator frames. Unconditional over
+  /// serial/CDC, and over BLE only when the machine registers the
+  /// characteristic. Silent until the first frame arrives, so a subscriber can
+  /// treat "no event" as "this machine has no estimator".
   Stream<BengleEstSample> get puckEstimator;
 }
