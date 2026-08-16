@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,12 +8,13 @@ import 'package:reaprime/src/controllers/device_controller.dart';
 import 'package:reaprime/src/controllers/workflow_controller.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
-import 'package:reaprime/src/models/errors.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/services/webserver_service.dart';
 import 'package:shelf_plus/shelf_plus.dart';
 
+import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
+import 'package:reaprime/src/models/device/impl/mock_de1/mock_de1.dart';
 
 import '../../helpers/fake_ble_transport.dart';
 import '../../helpers/mock_device_discovery_service.dart';
@@ -25,29 +27,31 @@ import '../../helpers/test_scale_controller.dart';
 /// CLEAN 400 (with the refusal message) when the machine has not advertised the
 /// matching caps bit — not the opaque 500 the withDe1 catch-all would otherwise
 /// produce — and go through (200) when it has.
-class _FixedDe1Controller extends De1Controller {
-  _FixedDe1Controller({required super.controller, this.device});
+class _BengleBackedDe1 extends MockDe1 {
+  _BengleBackedDe1(this.bengle);
 
-  De1Interface? device;
+  final Bengle bengle;
+  int setProfileCalls = 0;
 
   @override
-  De1Interface connectedDe1() {
-    final d = device;
-    if (d == null) throw const DeviceNotConnectedException.machine();
-    return d;
+  Future<void> setProfile(Profile profile) async {
+    setProfileCalls++;
+    await bengle.setProfile(profile);
   }
 }
 
 void main() {
   late Handler handler;
+  late De1Controller controller;
 
-  Future<void> wireWith(De1Interface? device) async {
+  Future<void> wireWith(De1Interface device) async {
     final deviceController = DeviceController([MockDeviceDiscoveryService()]);
     await deviceController.initialize();
-    final controller = _FixedDe1Controller(
-      controller: deviceController,
-      device: device,
-    );
+    addTearDown(deviceController.dispose);
+    controller = De1Controller(controller: deviceController);
+    addTearDown(controller.dispose);
+    await controller.connectToDe1(device);
+    await controller.initSettled.firstWhere((generation) => generation != null);
 
     final mockSettings = MockSettingsService();
     final settingsController = SettingsController(mockSettings);
@@ -76,6 +80,9 @@ void main() {
     addTearDown(transport.dispose);
     return bengle;
   }
+
+  Future<_BengleBackedDe1> bengleMachine(int caps) async =>
+      _BengleBackedDe1(await connectedBengle(caps));
 
   Future<Response> postProfile(Map<String, dynamic> profile) async => handler(
     Request(
@@ -133,7 +140,7 @@ void main() {
     test(
       '400 (not 500) with the refusal message when caps are absent',
       () async {
-        await wireWith(await connectedBengle(0));
+        await wireWith(await bengleMachine(0));
 
         final res = await postProfile(leverProfile());
 
@@ -149,7 +156,7 @@ void main() {
     test(
       '200 when the machine advertises the Lever capability (0x3)',
       () async {
-        await wireWith(await connectedBengle(0x3));
+        await wireWith(await bengleMachine(0x3));
 
         final res = await postProfile(leverProfile());
 
@@ -160,7 +167,7 @@ void main() {
     test(
       '400 for a power step missing its mandatory limiter (FormatException)',
       () async {
-        await wireWith(await connectedBengle(0x3));
+        await wireWith(await bengleMachine(0x3));
 
         final res = await postProfile(powerProfileNoLimiter());
 
@@ -171,9 +178,40 @@ void main() {
       },
     );
 
+    test('the profile upload waits behind a queued device write', () async {
+      final machine = await bengleMachine(0x3);
+      await wireWith(machine);
+      final release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      final started = Completer<void>();
+      final held = controller.runDeviceWrite((_) async {
+        started.complete();
+        await release.future;
+      });
+      await started.future;
+
+      final pending = postProfile(leverProfile());
+      for (var i = 0; i < 200 && controller.pendingDeviceWriteCount == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+
+      expect(controller.pendingDeviceWriteCount, 1);
+      expect(machine.setProfileCalls, 0);
+
+      release.complete();
+      await held;
+      final res = await pending;
+
+      expect(res.statusCode, 200);
+      expect(machine.setProfileCalls, 1);
+      expect(controller.pendingDeviceWriteCount, 0);
+    });
+
     for (final rawBody in ['[]', '"x"', '{"title": "t", "steps": [1]}']) {
       test('400 for a profile body of the wrong shape: $rawBody', () async {
-        await wireWith(await connectedBengle(0x3));
+        await wireWith(await bengleMachine(0x3));
 
         final res = await handler(
           Request(

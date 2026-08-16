@@ -976,7 +976,9 @@ class De1Handler {
 
     return withDe1((_) async {
       try {
-        await _controller.runDeviceWrite((device) => device.setProfile(profile));
+        await _controller.runDeviceWrite(
+          (device) => device.setProfile(profile),
+        );
         return jsonOk(null);
       } on ProfileModeUnsupportedException catch (e) {
         // The machine cannot run a Power/Lever step or a HOLD transition in this
