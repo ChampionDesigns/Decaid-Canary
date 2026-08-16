@@ -63,6 +63,10 @@ class BenglePuckEstimator implements Sensor {
       DataChannel(key: 'timestamp', type: 'string'),
       DataChannel(key: 'rev', type: 'number'),
       DataChannel(key: 'flags', type: 'number'),
+      // r1 / r2 keep the firmware's own names (T_BengleEstSample.R1 / .R2).
+      // Their derived counterparts on MachineSnapshot are loadImpedanceDerived
+      // and puckResistanceDerived respectively — same quantity, same units,
+      // computed from Q_in instead of Q_puck.
       DataChannel(key: 'r1', type: 'number', unit: 'bar·s/mL'),
       DataChannel(key: 'r2', type: 'number', unit: 'bar·s²/mL²'),
       DataChannel(key: 'compliance', type: 'number', unit: 'mL/bar'),
@@ -76,7 +80,7 @@ class BenglePuckEstimator implements Sensor {
       DataChannel(key: 'collapseLastEventT', type: 'number', unit: 's'),
       DataChannel(key: 'collapseLastEventMagnitude', type: 'number'),
       DataChannel(key: 'collapseLastEventConcavity', type: 'number'),
-      DataChannel(key: 'puckPower', type: 'number', unit: 'W'),
+      DataChannel(key: 'hydraulicPowerMeasured', type: 'number', unit: 'W'),
     ],
     commands: const [],
   );
@@ -108,11 +112,11 @@ class BenglePuckEstimator implements Sensor {
       'collapseLastEventMagnitude': s.detLastEventMag,
     if (s.detLastEventConc != null)
       'collapseLastEventConcavity': s.detLastEventConc,
-    // Measured hydraulic power into the puck (Rev 3+). Distinct from
-    // MachineSnapshot.hydraulicPower, which is the derived 0.1*P*F every
-    // machine including a plain DE1 can produce: this one uses the firmware's
-    // Q_puck, so the two diverge during compliance transients.
-    if (s.wPuck != null) 'puckPower': s.wPuck,
+    // Measured hydraulic power into the puck (rev 3+). The counterpart of
+    // MachineSnapshot.hydraulicPowerDerived: same quantity and units, but
+    // computed from Q_puck rather than reported group flow, so the two diverge
+    // during compliance transients. Absent on pre-rev-3 firmware.
+    if (s.wPuck != null) 'hydraulicPowerMeasured': s.wPuck,
   };
 
   @override
