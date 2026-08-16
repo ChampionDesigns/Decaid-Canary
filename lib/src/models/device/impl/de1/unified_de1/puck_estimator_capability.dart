@@ -7,8 +7,10 @@ part of 'unified_de1.dart';
 /// arrives. That is what lets a consumer treat "no event yet" as "this machine
 /// has no estimator" rather than reading a run of zeros as real observations.
 ///
-/// Serial/CDC only: the firmware does not register `0xA014` over BLE, so on a
-/// BLE-connected Bengle this stream is silent by construction.
+/// Over serial/CDC the stream is unconditional. Over BLE it depends on the
+/// machine: [UnifiedDe1Transport.subscribeEstimator] subscribes only when the
+/// peripheral actually registers `0xA014`, so firmware predating that
+/// registration leaves this stream silent.
 mixin PuckEstimatorCapability on UnifiedDe1 {
   Stream<BengleEstSample> get puckEstimator => _transport.estimator
       .map(parseBengleEstSample)
