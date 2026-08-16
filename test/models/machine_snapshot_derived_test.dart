@@ -1,5 +1,7 @@
-// Tests for the derived hydraulic channels R (puckResistance),
-// Z (loadImpedance) and W (hydraulicPower) on MachineSnapshot.
+// Tests for the derived hydraulic channels R (puckResistanceDerived),
+// Z (loadImpedanceDerived) and W (hydraulicPowerDerived) on MachineSnapshot.
+// Their measured counterparts live on the Bengle puck-estimator sensor and are
+// covered by bengle_puck_estimator_sensor_test.dart.
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -28,46 +30,46 @@ void main() {
   group('MachineSnapshot derived channels', () {
     test('computes R, Z and W from pressure and flow', () {
       final snapshot = _snapshot(pressure: 9.0, flow: 2.0);
-      expect(snapshot.puckResistance, closeTo(2.25, 1e-9));
-      expect(snapshot.loadImpedance, closeTo(4.5, 1e-9));
-      expect(snapshot.hydraulicPower, closeTo(1.8, 1e-9));
+      expect(snapshot.puckResistanceDerived, closeTo(2.25, 1e-9));
+      expect(snapshot.loadImpedanceDerived, closeTo(4.5, 1e-9));
+      expect(snapshot.hydraulicPowerDerived, closeTo(1.8, 1e-9));
 
       final json = snapshot.toJson();
-      expect(json['puckResistance'], closeTo(2.25, 1e-9));
-      expect(json['loadImpedance'], closeTo(4.5, 1e-9));
-      expect(json['hydraulicPower'], closeTo(1.8, 1e-9));
+      expect(json['puckResistanceDerived'], closeTo(2.25, 1e-9));
+      expect(json['loadImpedanceDerived'], closeTo(4.5, 1e-9));
+      expect(json['hydraulicPowerDerived'], closeTo(1.8, 1e-9));
     });
 
     test('gates on low flow: getters null, keys absent from toJson', () {
       final snapshot = _snapshot(pressure: 9.0, flow: 0.2);
-      expect(snapshot.puckResistance, isNull);
-      expect(snapshot.loadImpedance, isNull);
-      expect(snapshot.hydraulicPower, isNull);
+      expect(snapshot.puckResistanceDerived, isNull);
+      expect(snapshot.loadImpedanceDerived, isNull);
+      expect(snapshot.hydraulicPowerDerived, isNull);
 
       final json = snapshot.toJson();
-      expect(json.containsKey('puckResistance'), isFalse);
-      expect(json.containsKey('loadImpedance'), isFalse);
-      expect(json.containsKey('hydraulicPower'), isFalse);
+      expect(json.containsKey('puckResistanceDerived'), isFalse);
+      expect(json.containsKey('loadImpedanceDerived'), isFalse);
+      expect(json.containsKey('hydraulicPowerDerived'), isFalse);
     });
 
     test('gates on low pressure: getters null, keys absent from toJson', () {
       final snapshot = _snapshot(pressure: 0.2, flow: 2.0);
-      expect(snapshot.puckResistance, isNull);
-      expect(snapshot.loadImpedance, isNull);
-      expect(snapshot.hydraulicPower, isNull);
+      expect(snapshot.puckResistanceDerived, isNull);
+      expect(snapshot.loadImpedanceDerived, isNull);
+      expect(snapshot.hydraulicPowerDerived, isNull);
 
       final json = snapshot.toJson();
-      expect(json.containsKey('puckResistance'), isFalse);
-      expect(json.containsKey('loadImpedance'), isFalse);
-      expect(json.containsKey('hydraulicPower'), isFalse);
+      expect(json.containsKey('puckResistanceDerived'), isFalse);
+      expect(json.containsKey('loadImpedanceDerived'), isFalse);
+      expect(json.containsKey('hydraulicPowerDerived'), isFalse);
     });
 
     test('zero flow: keys absent and jsonEncode does not throw', () {
       final snapshot = _snapshot(pressure: 9.0, flow: 0.0);
       final json = snapshot.toJson();
-      expect(json.containsKey('puckResistance'), isFalse);
-      expect(json.containsKey('loadImpedance'), isFalse);
-      expect(json.containsKey('hydraulicPower'), isFalse);
+      expect(json.containsKey('puckResistanceDerived'), isFalse);
+      expect(json.containsKey('loadImpedanceDerived'), isFalse);
+      expect(json.containsKey('hydraulicPowerDerived'), isFalse);
       // jsonEncode throws on NaN/Infinity — the gate must keep the
       // division-by-zero results out of the websocket payload entirely.
       expect(() => jsonEncode(snapshot.toJson()), returnsNormally);
@@ -83,23 +85,23 @@ void main() {
       // the raw pressure/flow fields, so stored history gains the channels
       // on read with zero migration.
       final json = restored.toJson();
-      expect(json['puckResistance'], closeTo(2.25, 1e-9));
-      expect(json['loadImpedance'], closeTo(4.5, 1e-9));
-      expect(json['hydraulicPower'], closeTo(1.8, 1e-9));
+      expect(json['puckResistanceDerived'], closeTo(2.25, 1e-9));
+      expect(json['loadImpedanceDerived'], closeTo(4.5, 1e-9));
+      expect(json['hydraulicPowerDerived'], closeTo(1.8, 1e-9));
     });
 
     test(
       'boundary: flow and pressure exactly 0.3 are emitted (gate is >=)',
       () {
         final snapshot = _snapshot(pressure: 0.3, flow: 0.3);
-        expect(snapshot.puckResistance, isNotNull);
-        expect(snapshot.loadImpedance, isNotNull);
-        expect(snapshot.hydraulicPower, isNotNull);
+        expect(snapshot.puckResistanceDerived, isNotNull);
+        expect(snapshot.loadImpedanceDerived, isNotNull);
+        expect(snapshot.hydraulicPowerDerived, isNotNull);
 
         final json = snapshot.toJson();
-        expect(json['puckResistance'], closeTo(0.3 / (0.3 * 0.3), 1e-9));
-        expect(json['loadImpedance'], closeTo(1.0, 1e-9));
-        expect(json['hydraulicPower'], closeTo(0.009, 1e-12));
+        expect(json['puckResistanceDerived'], closeTo(0.3 / (0.3 * 0.3), 1e-9));
+        expect(json['loadImpedanceDerived'], closeTo(1.0, 1e-9));
+        expect(json['hydraulicPowerDerived'], closeTo(0.009, 1e-12));
       },
     );
   });
