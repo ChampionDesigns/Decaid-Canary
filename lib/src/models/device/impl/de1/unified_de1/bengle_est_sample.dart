@@ -14,6 +14,10 @@ const int bengleEstSampleBytes = 16;
 /// detector summary.
 const int bengleEstSampleV2Bytes = 21;
 
+/// Wire length once the Rev-3 measured-power tail is appended. Offsets 0-20 are
+/// byte-identical to the Rev-2 layout; offset 21 carries [BengleEstSample.wPuck].
+const int bengleEstSampleV3Bytes = 23;
+
 /// Sentinel for a U16 field the firmware has not yet observed.
 const int _u16Sentinel = 0xFFFF;
 
@@ -107,6 +111,24 @@ class BengleEstSample {
   /// undefined (sentinel `0xFF`) or no detector tail.
   final double? detLastEventConc;
 
+  /// Hydraulic power delivered **into the puck**, in watts (offset 21,
+  /// `u16 / 1000`, Rev 3+).
+  ///
+  /// Measured by the firmware from its own `(P, Q_puck)` pair — the same one
+  /// the resistance fit consumes — so it is NOT the `0.1 * pressure * flow` a
+  /// client can derive from `0xA013`. That derivation can only use reported
+  /// group flow (`Q_in`); this uses the flow actually passing through the puck.
+  /// They agree in steady state and diverge during compliance transients, which
+  /// is the reason the field exists. Compare `MachineSnapshot.hydraulicPower`,
+  /// which is the derived form and is what a plain DE1 gets.
+  ///
+  /// `null` = not yet observed (sentinel `0xFFFF`), or a pre-Rev-3 frame. Never
+  /// substitute `0.0`: zero watts is a real, different statement.
+  ///
+  /// Hydraulic, not electrical — mains draw is hundreds of watts and is not on
+  /// this frame.
+  final double? wPuck;
+
   const BengleEstSample({
     required this.rev,
     required this.flags,
@@ -123,6 +145,7 @@ class BengleEstSample {
     this.detLastEventT,
     this.detLastEventMag,
     this.detLastEventConc,
+    this.wPuck,
   });
 }
 
@@ -165,6 +188,13 @@ BengleEstSample? parseBengleEstSample(ByteData d) {
     detLastEventConc = concRaw == _detU8Sentinel ? null : concRaw / 200.0;
   }
 
+  // Rev-3 measured-power tail.
+  double? wPuck;
+  if (d.lengthInBytes >= bengleEstSampleV3Bytes && rev >= 3) {
+    final wRaw = d.getUint16(21, Endian.big);
+    wPuck = wRaw == _u16Sentinel ? null : wRaw / 1000.0;
+  }
+
   return BengleEstSample(
     rev: rev,
     flags: d.getUint8(1),
@@ -181,5 +211,6 @@ BengleEstSample? parseBengleEstSample(ByteData d) {
     detLastEventT: detLastEventT,
     detLastEventMag: detLastEventMag,
     detLastEventConc: detLastEventConc,
+    wPuck: wPuck,
   );
 }
