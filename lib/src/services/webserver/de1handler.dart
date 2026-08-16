@@ -790,12 +790,13 @@ class De1Handler {
       return jsonBadRequest({'error': 'Invalid profile', 'message': '$e'});
     }
 
-    return withDe1((_) async {
+    return withDe1((de1) async {
       try {
-        await _controller.runDeviceWrite(
-          (device) => device.setProfile(profile),
-          retryOnReplacement: true,
-        );
+        // Called directly rather than through runDeviceWrite: a capability
+        // refusal is deterministic, so replacement-retry buys nothing, and
+        // runDeviceWrite's catch-and-retry would turn the refusal into a 500
+        // instead of the 400 contract below.
+        await de1.setProfile(profile);
         return jsonOk(null);
       } on ProfileModeUnsupportedException catch (e) {
         // The machine cannot run a Power/Lever step or a HOLD transition in this
