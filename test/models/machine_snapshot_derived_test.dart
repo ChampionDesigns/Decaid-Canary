@@ -88,17 +88,19 @@ void main() {
       expect(json['hydraulicPower'], closeTo(1.8, 1e-9));
     });
 
-    test('boundary: flow and pressure exactly 0.3 are emitted (gate is >=)',
-        () {
-      final snapshot = _snapshot(pressure: 0.3, flow: 0.3);
-      expect(snapshot.puckResistance, isNotNull);
-      expect(snapshot.loadImpedance, isNotNull);
-      expect(snapshot.hydraulicPower, isNotNull);
+    test(
+      'boundary: flow and pressure exactly 0.3 are emitted (gate is >=)',
+      () {
+        final snapshot = _snapshot(pressure: 0.3, flow: 0.3);
+        expect(snapshot.puckResistance, isNotNull);
+        expect(snapshot.loadImpedance, isNotNull);
+        expect(snapshot.hydraulicPower, isNotNull);
 
-      final json = snapshot.toJson();
-      expect(json['puckResistance'], closeTo(0.3 / (0.3 * 0.3), 1e-9));
-      expect(json['loadImpedance'], closeTo(1.0, 1e-9));
-      expect(json['hydraulicPower'], closeTo(0.009, 1e-12));
-    });
+        final json = snapshot.toJson();
+        expect(json['puckResistance'], closeTo(0.3 / (0.3 * 0.3), 1e-9));
+        expect(json['loadImpedance'], closeTo(1.0, 1e-9));
+        expect(json['hydraulicPower'], closeTo(0.009, 1e-12));
+      },
+    );
   });
 }
