@@ -76,7 +76,7 @@ void main() {
       expect(json['lastPauseTau'], closeTo(3.2, 1e-9));
       expect(json['collapseEventCount'], 3);
       expect(json['collapseLastEventT'], closeTo(8.8, 1e-9));
-      expect(json['puckPower'], closeTo(1.8, 1e-9));
+      expect(json['hydraulicPowerMeasured'], closeTo(1.8, 1e-9));
     });
 
     test('unobserved fields are OMITTED, never zero', () {
@@ -101,7 +101,7 @@ void main() {
       expect(json.containsKey('sigmaQ'), isTrue);
       expect(json['rev'], 1);
       // A Rev-1 frame has no power tail at all.
-      expect(json.containsKey('puckPower'), isFalse);
+      expect(json.containsKey('hydraulicPowerMeasured'), isFalse);
     });
 
     test('an unobserved power sentinel is omitted, not zeroed', () {
@@ -109,7 +109,7 @@ void main() {
       expect(sample.wPuck, isNull);
       final json = BenglePuckEstimator.encodeSample(sample);
       // 0 W is a real, different statement from "not yet observed".
-      expect(json.containsKey('puckPower'), isFalse);
+      expect(json.containsKey('hydraulicPowerMeasured'), isFalse);
     });
 
     test('a Rev-2 frame decodes fully but carries no power', () {

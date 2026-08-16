@@ -119,7 +119,8 @@ class BengleEstSample {
   /// client can derive from `0xA013`. That derivation can only use reported
   /// group flow (`Q_in`); this uses the flow actually passing through the puck.
   /// They agree in steady state and diverge during compliance transients, which
-  /// is the reason the field exists. Compare `MachineSnapshot.hydraulicPower`,
+  /// is the reason the field exists. Compare
+  /// `MachineSnapshot.hydraulicPowerDerived`,
   /// which is the derived form and is what a plain DE1 gets.
   ///
   /// `null` = not yet observed (sentinel `0xFFFF`), or a pre-Rev-3 frame. Never
