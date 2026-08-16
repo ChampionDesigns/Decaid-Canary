@@ -4,6 +4,7 @@ import 'package:reaprime/src/models/firmware_wake_window.dart';
 import 'package:reaprime/src/models/device/led_strip.dart';
 import 'package:reaprime/src/models/device/scale.dart';
 import 'package:reaprime/src/models/device/scale_calibration.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart';
 
 abstract class BengleInterface extends De1Interface {
   Future<ScaleCalibrationState> getScaleCalibrationState();
@@ -66,4 +67,9 @@ abstract class BengleInterface extends De1Interface {
   Stream<bool> get probeAttached;
 
   Stream<double> get probeTemperature;
+
+  /// Decoded `0xA014` fused puck-estimator frames. Serial/CDC only, and silent
+  /// until the firmware emits its first `[T]`, so a subscriber can treat "no
+  /// event" as "this machine has no estimator".
+  Stream<BengleEstSample> get puckEstimator;
 }
