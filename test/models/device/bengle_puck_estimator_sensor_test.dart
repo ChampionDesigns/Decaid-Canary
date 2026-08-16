@@ -12,10 +12,10 @@ import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sampl
 
 import '../../helpers/mock_device_discovery_service.dart';
 
-/// A Rev-2 frame with every optional field populated.
+/// A Rev-3 frame with every optional field populated.
 ByteData _fullFrame() {
-  final b = ByteData(21);
-  b.setUint8(0, 2); // rev
+  final b = ByteData(23);
+  b.setUint8(0, 3); // rev
   b.setUint8(1, 0x05); // flags
   b.setUint16(2, 450, Endian.big); // r1 = 4.50
   b.setUint16(4, 1250, Endian.big); // r2 = 1.250
@@ -30,6 +30,14 @@ ByteData _fullFrame() {
   b.setUint16(17, 88, Endian.big); // detLastEventT = 8.8 s
   b.setUint8(19, 100); // detLastEventMag
   b.setUint8(20, 60); // detLastEventConc
+  b.setUint16(21, 1800, Endian.big); // wPuck = 1.800 W
+  return b;
+}
+
+/// A Rev-3 frame whose power field is at its "not yet observed" sentinel.
+ByteData _powerUnobservedFrame() {
+  final b = _fullFrame();
+  b.setUint16(21, 0xFFFF, Endian.big);
   return b;
 }
 
@@ -56,7 +64,7 @@ void main() {
       final sample = parseBengleEstSample(_fullFrame())!;
       final json = BenglePuckEstimator.encodeSample(sample);
 
-      expect(json['rev'], 2);
+      expect(json['rev'], 3);
       expect(json['flags'], 0x05);
       expect(json['r1'], closeTo(4.5, 1e-9));
       expect(json['r2'], closeTo(1.25, 1e-9));
@@ -68,6 +76,7 @@ void main() {
       expect(json['lastPauseTau'], closeTo(3.2, 1e-9));
       expect(json['collapseEventCount'], 3);
       expect(json['collapseLastEventT'], closeTo(8.8, 1e-9));
+      expect(json['puckPower'], closeTo(1.8, 1e-9));
     });
 
     test('unobserved fields are OMITTED, never zero', () {
@@ -91,6 +100,47 @@ void main() {
       expect(json.containsKey('confidence'), isTrue);
       expect(json.containsKey('sigmaQ'), isTrue);
       expect(json['rev'], 1);
+      // A Rev-1 frame has no power tail at all.
+      expect(json.containsKey('puckPower'), isFalse);
+    });
+
+    test('an unobserved power sentinel is omitted, not zeroed', () {
+      final sample = parseBengleEstSample(_powerUnobservedFrame())!;
+      expect(sample.wPuck, isNull);
+      final json = BenglePuckEstimator.encodeSample(sample);
+      // 0 W is a real, different statement from "not yet observed".
+      expect(json.containsKey('puckPower'), isFalse);
+    });
+
+    test('a Rev-2 frame decodes fully but carries no power', () {
+      // Offsets 0-20 are frozen, so the older firmware still decodes; only the
+      // Rev-3 tail is absent.
+      final full = _fullFrame();
+      final v2 = ByteData(21);
+      for (var i = 0; i < 21; i++) {
+        v2.setUint8(i, full.getUint8(i));
+      }
+      v2.setUint8(0, 2); // rev 2
+      final sample = parseBengleEstSample(v2)!;
+      expect(sample.r1, closeTo(4.5, 1e-9));
+      expect(sample.detEventCount, 3);
+      expect(sample.wPuck, isNull);
+    });
+
+    test('a rev-3 frame truncated to 22 bytes drops the power tail', () {
+      final full = _fullFrame();
+      final short = ByteData(22);
+      for (var i = 0; i < 22; i++) {
+        short.setUint8(i, full.getUint8(i));
+      }
+      final sample = parseBengleEstSample(short)!;
+      expect(sample.rev, 3);
+      expect(sample.detEventCount, 3, reason: 'the rev-2 tail must survive');
+      expect(
+        sample.wPuck,
+        isNull,
+        reason: 'a half-present u16 must not decode',
+      );
     });
 
     test('every emitted key is a declared data channel', () async {
