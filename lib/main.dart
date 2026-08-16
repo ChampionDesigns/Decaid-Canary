@@ -630,6 +630,7 @@ void main(List<String> args) async {
         profileStorageService: profileStorage,
         connectionManager: connectionManager,
         scanStateGuardian: scanStateGuardian,
+        sensorController: sensorController,
         decentAccountService: decentAccountService,
         accountTokensController: accountTokensController,
         batteryController: batteryController,
@@ -845,6 +846,7 @@ class AppRoot extends StatefulWidget {
   final ProfileStorageService? profileStorageService;
   final ConnectionManager connectionManager;
   final ScanStateGuardian scanStateGuardian;
+  final SensorController? sensorController;
   final DecentAccountService? decentAccountService;
   final AccountTokensController? accountTokensController;
   final BatteryController? batteryController;
@@ -865,6 +867,7 @@ class AppRoot extends StatefulWidget {
     required this.presenceController,
     required this.connectionManager,
     required this.scanStateGuardian,
+    this.sensorController,
     this.updateCheckService,
     this.macosUpdater,
     this.beanStorage,
@@ -928,6 +931,7 @@ class _AppRootState extends State<AppRoot> {
         profileStorageService: widget.profileStorageService,
         connectionManager: widget.connectionManager,
         scanStateGuardian: widget.scanStateGuardian,
+        sensorController: widget.sensorController,
         decentAccountService: widget.decentAccountService,
         accountTokensController: widget.accountTokensController,
         batteryController: widget.batteryController,
