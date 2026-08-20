@@ -496,9 +496,14 @@ jobs:
           $zip = 'decaid-windows-x64-${{ needs.release-metadata.outputs.version }}.zip'
           $extract = Join-Path $env:RUNNER_TEMP 'decaid-extracted'
           Expand-Archive -Path $zip -DestinationPath $extract
-          # & does not wait for GUI-subsystem executables, so $LASTEXITCODE is
-          # never set for Decaid.exe; use Start-Process -Wait -PassThru.
-          $proc = Start-Process -FilePath (Join-Path $extract 'Decaid.exe') -ArgumentList '--print-storage-paths' -Wait -PassThru
+          # GUI-subsystem executables cannot be awaited with & or -Wait on the
+          # runner; inherit the console and wait with a bound.
+          $exe = Join-Path $extract 'Decaid.exe'
+          $proc = Start-Process -FilePath $exe -ArgumentList '--print-storage-paths' -NoNewWindow -PassThru
+          if (-not $proc.WaitForExit(60000)) {
+            $proc.Kill()
+            throw 'Decaid.exe did not exit within 60s'
+          }
           if ($proc.ExitCode -ne 0) { throw "Decaid.exe exited with code $($proc.ExitCode)" }
           foreach ($name in @('Decaid.exe','flutter_windows.dll','vcruntime140.dll','msvcp140.dll','data')) {
             if (-not (Test-Path (Join-Path $extract $name))) { throw "missing $name in extracted ZIP" }
