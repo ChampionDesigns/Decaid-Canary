@@ -110,13 +110,11 @@ class De1Controller {
   int get connectionGeneration => _connectionGeneration;
 
   final Duration machineReplacementTimeout;
-  final Duration deviceWriteStallTimeout;
 
   De1Controller({
     required DeviceController controller,
     this.machineReplacementTimeout =
         ConnectionTimings.machineReplacementTimeout,
-    this.deviceWriteStallTimeout = ConnectionTimings.deviceWriteStallTimeout,
   }) : _deviceController = controller {
     _log.info("checking ${_deviceController.devices}");
   }
@@ -299,7 +297,10 @@ class De1Controller {
             if (!stillCurrent()) return;
             _log.info('Shot settings arrived late; applying startup defaults');
             _shotSettingsUpdate(settings);
-            await _setDe1DefaultsFor(device, stillCurrent);
+            await runDeviceWrite((queued) async {
+              if (!identical(queued, device) || !stillCurrent()) return;
+              await _setDe1DefaultsFor(device, stillCurrent);
+            });
           })
           .catchError((Object e, StackTrace st) {
             _log.warning('Deferred startup defaults failed', e, st);
@@ -383,9 +384,10 @@ class De1Controller {
     final operation = _deviceWriteQueue.then(
       (_) => _runDeviceWrite(write, retryOnReplacement),
     );
-    _deviceWriteQueue = operation
-        .timeout(deviceWriteStallTimeout)
-        .then<void>((_) {}, onError: (Object error, StackTrace stackTrace) {});
+    _deviceWriteQueue = operation.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {},
+    );
     return operation;
   }
 
