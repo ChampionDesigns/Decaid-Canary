@@ -207,7 +207,7 @@ void main() {
     settings: {
       'Roast': {
         'type': 'enum',
-        'values': 'Light | Medium | Dark',
+        'values': ['Light', 'Medium', 'Dark'],
         if (includeDefault) 'default': 'Medium',
       },
     },
