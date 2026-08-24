@@ -166,7 +166,7 @@ const upload = await host.decentProxy("support/api/shot_upload", {
 });
 ```
 
-The returned object has `{ status, headers, body }`. `GET` (read) needs `proxy.decent_api`; `POST` (write) needs `proxy.decent_api.write` and a path on the write allowlist. Credentials are attached in Dart and never exposed to plugin JS.
+The returned object has `{ status, headers, body }`. Consent denial or non-decision rejects with `error.code === "account_consent_denied"`. `GET` (read) needs `proxy.decent_api`; `POST` (write) needs `proxy.decent_api.write` and a path on the write allowlist. Credentials are attached in Dart and never exposed to plugin JS.
 
 ## Events System
 
@@ -634,6 +634,25 @@ value. Existing cleartext secure fields are moved out of SharedPreferences on
 first read.
 
 The bundled **settings plugin** (`settings.reaplugin`) provides a web UI for plugin management at `/api/v1/plugins/settings.reaplugin/ui`. It includes an enable/disable toggle and remove button for each plugin, with a self-protection guard that prevents disabling itself.
+
+The bundled **Decent shot upload plugin** (`shot-upload.reaplugin`) keeps the
+`shotStored` fast path and also scans the paginated local shot library in bounded
+batches, newest first, while the machine is idle, scheduled idle, or sleeping.
+It uses `annotations.extras.uploaded_to_decent` as the durable success marker and
+prefers the capture-time identity in `workflow.machine`. Newly recorded shots set
+`workflow.machine.provenanceStatus` to `captured` or `unavailable`. Only legacy
+records where that field is absent use the currently connected real machine,
+matching 0.2.0; unavailable or captured simulated identities are never replaced
+by that fallback during automatic reconciliation. An explicit manual upload may
+use the currently connected real machine when capture was unavailable. A
+shot-specific rejected response is recorded in
+`annotations.extras.decent_upload_rejected`, while transient failures are retried
+on a later reconciliation pass. If the local annotation write fails, successful
+uploads and permanent rejections are suppressed in memory for the rest of the
+plugin session; after restart one later idempotent retry is possible. In 0.2.1
+backlog reconciliation follows `AutoUpload`; the removed 0.2.0 `DrainHistory`
+setting no longer gates it. Consent denial or non-decision pauses reconciliation
+without a periodic retry.
 
 ## Next Steps
 
