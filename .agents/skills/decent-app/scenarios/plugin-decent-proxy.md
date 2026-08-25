@@ -21,8 +21,8 @@ Fixture plugins live in the app documents `plugins/` dir, which is scanned at bo
 On sandboxed macOS that is:
 
 ```bash
-PLUGINS_DIR="$HOME/Library/Containers/net.tadel.reaprime/Data/Documents/plugins"
-# Linux (non-sandboxed): $HOME/.local/share/net.tadel.reaprime/plugins  (verify per build)
+PLUGINS_DIR="$HOME/Library/Containers/com.decentespresso.decaid-canary/Data/Documents/plugins"
+# Linux (non-sandboxed): $HOME/.local/share/com.decentespresso.decaid-canary/plugins  (verify per build)
 mkdir -p "$PLUGINS_DIR/proxy-smoke-granted" "$PLUGINS_DIR/proxy-smoke-denied"
 ```
 

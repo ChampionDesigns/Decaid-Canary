@@ -1,6 +1,6 @@
-# Decaid
+# Decaid-Canary
 
-> **Decaid** connects your Decent Espresso machine to beautiful,
+> **Decaid-Canary** connects your Decent Espresso machine to beautiful,
 modern user interfaces (called "skins").  
 Think of it as the bridge between your
 DE1 (or Bengle) and sleek touchscreen experiences like [Streamline.js](https://github.com/allofmeng/streamline_project).
@@ -49,7 +49,7 @@ complexity of machine communication and device connectivity.
 
 To browse the complete API documentation:
 
-1. Start Decaid
+1. Start Decaid-Canary
 2. Navigate to [http://localhost:4001](http://localhost:4001)
 
 Or:  
@@ -292,16 +292,15 @@ This reduces startup races but does not replace the application's Bluetooth reco
 
 ## About the Name
 
-**Decaid** (formerly REA → ReaPrime → Streamline Bridge) is the companion app for Decent Espresso machines.
+**Decaid-Canary** is a canary fork of **Decaid** (formerly REA → ReaPrime → Streamline Bridge), the companion app for Decent Espresso machines.
 
 ### The Evolution
 
-The original name **REA** stood for "Reasonable Espresso App" — a tongue-in-cheek reference to brewing something "reasonably decent" with a Decent Espresso machine. As the project evolved through **ReaPrime** and **Streamline Bridge**, it eventually became **Decent.app**.
+The original name **REA** stood for "Reasonable Espresso App" — a tongue-in-cheek reference to brewing something "reasonably decent" with a Decent Espresso machine. As the project evolved through **ReaPrime** and **Streamline Bridge**, it eventually became **Decent.app**, then **Decaid**. This fork publishes pre-release canary builds under the name **Decaid-Canary**.
 
-In 2026, ten years after the first commit to the original **de1app** repository on May 14, 2016, we renamed the app **Decaid**. The name commemorates that decade of Decent Espresso history while capturing the app's purpose: it **aids** you in making *decent* espresso.
-
-- **Internal identifiers** remain unchanged (`reaprime` Dart package, `net.tadel.reaprime` bundle ID, `streamline_bridge` database, and `.reaplugin` extension) to avoid breaking existing integrations.
-- **Display name** is **Decaid** on all platforms. On macOS, Finder displays the application bundle as **Decaid.app**; use **Decaid** in prose.
+- **Internal identifiers** remain unchanged where they do not identify the installed application (`reaprime` Dart package, `streamline_bridge` database, and `.reaplugin` extension) to avoid breaking integrations.
+- **Platform identifiers** are fork-owned so canary builds coexist with upstream Decaid: Android `com.decentespresso.decaid.canary`, Apple/Linux `com.decentespresso.decaid-canary`.
+- **Display name** is **Decaid-Canary** on all platforms. On macOS, Finder displays the application bundle as **Decaid-Canary.app**; use **Decaid-Canary** in prose.
 
 ## Credits
 
@@ -319,6 +318,6 @@ See the [LICENSE](LICENSE.txt) file for details.
 
 ---
 
-**Need help?** Check our [documentation](/doc) or open an [issue](https://github.com/decentespresso/decaid/issues).
+**Need help?** Check our [documentation](/doc) or open an [issue](https://github.com/ChampionDesigns/Decaid-Canary/issues).
 
 

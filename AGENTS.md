@@ -78,9 +78,9 @@ If your output contradicts documented architecture or conventions, surface it ex
 
 ## Tracking
 
-GitHub Issues on `decentespresso/decaid` is the canonical issue tracker. Use `gh issue` commands for triage, labeling, and closing.
+GitHub Issues on `ChampionDesigns/Decaid-Canary` are the canonical issue tracker for this fork. Use `gh issue` commands for triage, labeling, and closing. Note: Issues are currently disabled on this fork; external-contributor issue gates are removed from CI until they are enabled.
 
-**Triage labels** (used on `decentespresso/decaid`):
+**Triage labels** (used on `ChampionDesigns/Decaid-Canary`):
 
 | Label | Meaning |
 |-------|---------|
@@ -110,14 +110,15 @@ GitHub Issues on `decentespresso/decaid` is the canonical issue tracker. Use `gh
 
 | Layer | Value |
 |-------|-------|
-| User-facing name | **Decaid** |
+| User-facing name | **Decaid-Canary** |
 | Dart package name | `reaprime` |
 | Plugin file extension | `.reaplugin` |
-| Bundle ID | `net.tadel.reaprime` |
+| Bundle ID (Android) | `com.decentespresso.decaid.canary` |
+| Bundle ID (Apple/Linux) | `com.decentespresso.decaid-canary` |
 | Database name | `streamline_bridge` |
-| GitHub repo | `decentespresso/decaid` |
+| GitHub repo | `ChampionDesigns/Decaid-Canary` |
 
-**Decaid** combines "decade" and "Decent aide." The name marks ten years since the original `de1app` repository's first commit on May 14, 2016. Preserve `Decent.app` and ReaPrime where they are historical or internal identifiers.
+This is the **Decaid-Canary** fork of upstream **Decaid** (the name combines "decade" and "Decent aide," marking ten years since the original `de1app` repository's first commit on May 14, 2016). Preserve `Decent.app`, `Decaid`, and ReaPrime where they are historical or internal identifiers.
 
 ## Don't
 
