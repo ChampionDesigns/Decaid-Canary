@@ -447,7 +447,7 @@ class SettingsView extends StatelessWidget {
           title: const Text('Auto-update unavailable'),
           content: const Text(
             'The built-in updater could not be configured on this Mac. '
-            'Download the latest Decaid build from GitHub Releases.',
+            'Download the latest Decaid-Canary build from GitHub Releases.',
           ),
           actions: [
             TextButton(
@@ -459,7 +459,7 @@ class SettingsView extends StatelessWidget {
                 Navigator.of(dialogContext).pop();
                 await launchUrl(
                   Uri.parse(
-                    'https://github.com/decentespresso/decaid/releases',
+                    'https://github.com/ChampionDesigns/Decaid-Canary/releases',
                   ),
                 );
               },
@@ -483,7 +483,10 @@ class SettingsView extends StatelessWidget {
 
       if (updateInfo != null) {
         if (Platform.isAndroid) {
-          final updater = AndroidUpdater(owner: 'tadelv', repo: 'reaprime');
+          final updater = AndroidUpdater(
+            owner: 'ChampionDesigns',
+            repo: 'Decaid-Canary',
+          );
           final releaseUrl = updateCheckService?.getReleaseUrl(updateInfo);
           await showDialog(
             context: context,
@@ -502,7 +505,7 @@ class SettingsView extends StatelessWidget {
           final releaseUrl = updateCheckService?.getReleaseUrl(updateInfo);
           await showDialog(
             context: context,
-            builder: (context) => AlertDialog(
+            builder: (dialogContext) => AlertDialog(
               title: const Text('Update Available'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -515,12 +518,12 @@ class SettingsView extends StatelessWidget {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: () => Navigator.of(dialogContext).pop(),
                   child: const Text('Later'),
                 ),
                 ElevatedButton(
                   onPressed: () async {
-                    Navigator.of(context).pop();
+                    Navigator.of(dialogContext).pop();
                     if (releaseUrl != null) {
                       await launchUrl(Uri.parse(releaseUrl));
                     }

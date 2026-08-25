@@ -47,8 +47,8 @@ class UpdateCheckService {
        _updater =
            updater ??
            AndroidUpdater(
-             owner: 'tadelv',
-             repo: 'reaprime',
+             owner: 'ChampionDesigns',
+             repo: 'Decaid-Canary',
              rateLimit: rateLimit,
            ),
        _webUIStorage = webUIStorage,
@@ -274,13 +274,13 @@ class UpdateCheckService {
   }
 
   String getReleasesUrl() {
-    return 'https://github.com/decentespresso/decaid/releases';
+    return 'https://github.com/ChampionDesigns/Decaid-Canary/releases';
   }
 
   String? getReleaseUrl([UpdateInfo? update]) {
     final release = update ?? _availableUpdate;
     if (release == null) return null;
-    return 'https://github.com/decentespresso/decaid/releases/tag/${release.tagName}';
+    return 'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/${release.tagName}';
   }
 
   Future<void> enableAutomaticChecks() async {
@@ -310,7 +310,7 @@ class UpdateCheckService {
       version: version,
       downloadUrl:
           downloadUrl ??
-          'https://github.com/decentespresso/decaid/releases/download/v0.7.7/decent-android-0.7.7.apk',
+          'https://github.com/ChampionDesigns/Decaid-Canary/releases/download/v0.7.7/decent-android-0.7.7.apk',
       releaseNotes: 'Forced update for testing the update API.',
       isPrerelease: false,
       tagName: 'v$version',
