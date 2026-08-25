@@ -6,7 +6,6 @@ import 'package:collection/collection.dart';
 import 'package:hive_ce_flutter/hive_flutter.dart';
 import 'package:path/path.dart' as p;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
@@ -86,10 +85,6 @@ import 'src/settings/settings_controller.dart';
 import 'src/settings/settings_service.dart';
 import 'src/settings/update_dialog.dart';
 import 'src/services/serial/serial_service.dart';
-
-import 'package:firebase_core/firebase_core.dart';
-
-import 'firebase_options.dart';
 
 import 'package:reaprime/src/services/telemetry/telemetry_service.dart';
 import 'package:reaprime/src/services/telemetry/boot_timing.dart';
@@ -212,14 +207,13 @@ void main(List<String> args) async {
   final logDir = await AppDirectories.logs;
   await Directory(logDir).create(recursive: true);
 
-  RotatingFileAppender(
-    baseFilePath: '$logDir/log.txt',
-  ).attachToLogger(Logger.root);
+  RotatingFileAppender(baseFilePath: '$logDir/log.txt')
+      .attachToLogger(Logger.root);
 
   final webViewLogService = WebViewLogService(logDirectoryPath: logDir);
   await webViewLogService.initialize();
 
-  Logger.root.info("==== Decent starting ====");
+  Logger.root.info("==== Decaid-Canary starting ====");
   BootTiming.start();
 
   unawaited(MulticastLockService().acquire());
@@ -230,19 +224,6 @@ void main(List<String> args) async {
   Logger.root.info(
     "version: ${BuildInfo.version}, platform: ${Platform.operatingSystem}",
   );
-
-  final isDebugOrSimulate =
-      kDebugMode || const String.fromEnvironment("simulate").isNotEmpty;
-  if (!Platform.isLinux && !Platform.isWindows && !isDebugOrSimulate) {
-    try {
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
-      );
-    } catch (e, st) {
-      log.warning('Firebase initialization failed', e, st);
-    }
-  }
-  BootTiming.mark('firebase_done');
 
   final logBuffer = LogBuffer();
   final errorReportThrottle = ErrorReportThrottle();
@@ -842,7 +823,10 @@ class AppLifecycleObserver with WidgetsBindingObserver {
   }
 
   void _showAndroidDownloadDialog(BuildContext context, UpdateInfo updateInfo) {
-    final updater = AndroidUpdater(owner: 'tadelv', repo: 'reaprime');
+    final updater = AndroidUpdater(
+      owner: 'ChampionDesigns',
+      repo: 'Decaid-Canary',
+    );
     showDialog(
       context: context,
       barrierDismissible: false,
