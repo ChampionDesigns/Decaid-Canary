@@ -202,7 +202,6 @@
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				3B06AD1E1E4923F5004D2608 /* Thin Binary */,
 				E048D4916C7AD1C6BD18B66C /* [CP] Embed Pods Frameworks */,
-				AAA08B7D4D24C9922066758D /* FlutterFire: "flutterfire upload-crashlytics-symbols" */,
 			);
 			buildRules = (
 			);
@@ -332,24 +331,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" build\n";
-		};
-		AAA08B7D4D24C9922066758D /* FlutterFire: "flutterfire upload-crashlytics-symbols" */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "FlutterFire: \"flutterfire upload-crashlytics-symbols\"";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "\"${PROJECT_DIR}/../scripts/upload_crashlytics_symbols.sh\" ios\n";
 		};
 		E048D4916C7AD1C6BD18B66C /* [CP] Embed Pods Frameworks */ = {
 			isa = PBXShellScriptBuildPhase;
