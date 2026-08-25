@@ -16,6 +16,18 @@ import 'package:reaprime/src/models/device/transport/serial_port.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/serial_response_correlator.dart';
 import 'package:rxdart/rxdart.dart';
 
+const _defaultShotSettingsFrame = <int>[
+  0x00, // steamSetting
+  0x96, // targetSteamTemp (150)
+  0x1e, // targetSteamDuration (30)
+  0x4b, // targetHotWaterTemp (75)
+  0x32, // targetHotWaterVolume (50)
+  0x1e, // targetHotWaterDuration (30)
+  0x24, // targetShotVolume (36)
+  0x5e, // groupTemp (94.0)
+  0x00,
+];
+
 class UnifiedDe1Transport {
   final DataTransport _transport;
   final TransportType transportType;
@@ -54,6 +66,14 @@ class UnifiedDe1Transport {
   Stream<ByteData> get calibration => _calibrationSubject.asBroadcastStream();
 
   String _currentBuffer = "";
+
+  // Serial machines never push K (shot settings) on their own: a DE1
+  // transmits the frame only when settings change on the machine, and
+  // hardware verification showed no retransmit on subscribe, re-arm or
+  // write. The app therefore owns the frame on serial: it seeds the subject
+  // at connect from this mirror (firmware defaults initially) and updates
+  // it from live frames and from every local write.
+  Uint8List _localShotSettings = Uint8List.fromList(_defaultShotSettingsFrame);
 
   UnifiedDe1Transport({required DataTransport transport})
     : _transport = transport,
@@ -213,6 +233,12 @@ class UnifiedDe1Transport {
     await _transport.writeCommand("<+${Endpoint.calibration.representation}>");
 
     await _transport.writeCommand("<B>02");
+
+    // Seed the subject from the local mirror so reads succeed without any
+    // machine cooperation; live frames and local writes refresh the mirror.
+    _shotSettingsSubject.add(
+      ByteData.sublistView(Uint8List.fromList(_localShotSettings)),
+    );
   }
 
   Future<void> dispose() async {
@@ -458,6 +484,7 @@ class UnifiedDe1Transport {
   }
 
   void _shotSettingsNotification(ByteData d) {
+    _localShotSettings = Uint8List.fromList(d.buffer.asUint8List());
     _shotSettingsSubject.add(d);
   }
 
@@ -598,6 +625,7 @@ class UnifiedDe1Transport {
   }
 
   void recordLocalShotSettings(ByteData data) {
+    _localShotSettings = Uint8List.fromList(data.buffer.asUint8List());
     _shotSettingsSubject.add(data);
   }
 

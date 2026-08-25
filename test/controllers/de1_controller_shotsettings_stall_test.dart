@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/controllers/connection/connection_timings.dart';
@@ -7,6 +8,10 @@ import 'package:reaprime/src/controllers/device_controller.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
+import 'package:reaprime/src/models/device/device.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
+import 'package:reaprime/src/models/device/transport/serial_port.dart';
+import 'package:rxdart/rxdart.dart';
 
 import '../helpers/mock_device_discovery_service.dart';
 import '../helpers/test_de1.dart';
@@ -108,6 +113,79 @@ class _LateShotSettingsDe1 extends TestDe1 {
 
   @override
   Future<void> updateShotSettings(De1ShotSettings settings) async {}
+}
+
+class _QuietSerialDe1 extends SerialTransport {
+  final _connState = BehaviorSubject<ConnectionState>.seeded(
+    ConnectionState.connected,
+  );
+  final input = StreamController<String>.broadcast(sync: true);
+  final writes = <String>[];
+
+  @override
+  String get id => 'quiet-serial-de1';
+
+  @override
+  String get name => 'QuietSerialDe1';
+
+  @override
+  Stream<ConnectionState> get connectionState => _connState.stream;
+
+  @override
+  Stream<String> get readStream => input.stream;
+
+  @override
+  Stream<Uint8List> get rawStream => const Stream.empty();
+
+  @override
+  Future<void> connect() async {}
+
+  @override
+  Future<void> disconnect() async {}
+
+  @override
+  Future<void> dispose() async {
+    if (!input.isClosed) await input.close();
+    if (!_connState.isClosed) await _connState.close();
+  }
+
+  @override
+  Future<void> writeHexCommand(Uint8List command) async {}
+
+  @override
+  Future<void> writeCommand(String command) async {
+    writes.add(command);
+    if (command.startsWith('<E>')) {
+      final request = _hexBytes(command.substring(3));
+      final response = Uint8List(20);
+      response[0] = 20;
+      response[1] = request[1];
+      response[2] = request[2];
+      response[3] = request[3];
+      scheduleMicrotask(() => input.add('[E]${_hexString(response)}\n'));
+    }
+  }
+}
+
+Uint8List _hexBytes(String hex) {
+  final bytes = Uint8List(hex.length ~/ 2);
+  for (var i = 0; i < hex.length; i += 2) {
+    bytes[i ~/ 2] = int.parse(hex.substring(i, i + 2), radix: 16);
+  }
+  return bytes;
+}
+
+String _hexString(Uint8List bytes) =>
+    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+Future<void> waitFor(bool Function() condition, String reason) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 8));
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('Timed out waiting for $reason');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
 }
 
 void main() {
@@ -242,4 +320,45 @@ void main() {
       expect(de1.setFlushFlowCalls, 1);
     },
   );
+
+  test('serial defaults and steam writes work without a K push', () async {
+    final controller = De1Controller(controller: deviceController);
+    controller.defaultWorkflow = _workflow(steamDuration: 16);
+    final serial = _QuietSerialDe1();
+    final de1 = UnifiedDe1(transport: serial);
+    addTearDown(de1.dispose);
+
+    // A serial machine never pushes K; the transport seeds the subject
+    // from its local mirror, so the controller can write defaults and
+    // steam settings without any machine cooperation.
+    await controller.connectToDe1(de1);
+
+    await waitFor(
+      () => serial.writes.any((w) => w.startsWith('<K>009610')),
+      'the mirror-seeded defaults to write configured steam duration 16',
+    );
+
+    expect(
+      serial.writes.where((w) => w == '<-K>'),
+      isEmpty,
+      reason:
+          'no re-arm may be issued (the connect-time <+K> subscribe is expected)',
+    );
+    final steamIndex = serial.writes.indexWhere(
+      (w) => w.startsWith('<K>009610'),
+    );
+    final fanIndex = serial.writes.indexWhere(
+      (w) => w.startsWith('<F>04803808'),
+    );
+    expect(
+      fanIndex,
+      isNonNegative,
+      reason: 'startup defaults start with the fan-threshold write',
+    );
+    expect(
+      steamIndex,
+      greaterThan(fanIndex),
+      reason: 'device writes stay serialized: fan before steam',
+    );
+  });
 }

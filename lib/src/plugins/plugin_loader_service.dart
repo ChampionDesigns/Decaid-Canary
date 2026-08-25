@@ -444,15 +444,22 @@ class PluginLoaderService {
       if (!isPluginLoaded(pluginId)) {
         throw Exception('Plugin not loaded: $pluginId');
       }
-
-      _log.info('Reloading plugin: $pluginId');
-
-      await _unloadPlugin(pluginId);
-
-      await _queuedLoad(pluginId);
-
-      _log.info('Plugin reloaded: $pluginId');
+      await _reloadPluginLocked(pluginId);
     });
+  }
+
+  Future<void> _reloadPluginIfLoaded(String pluginId) async {
+    return _withPluginMutationLock(pluginId, () async {
+      if (!isPluginLoaded(pluginId)) return;
+      await _reloadPluginLocked(pluginId);
+    });
+  }
+
+  Future<void> _reloadPluginLocked(String pluginId) async {
+    _log.info('Reloading plugin: $pluginId');
+    await _unloadPlugin(pluginId);
+    await _queuedLoad(pluginId);
+    _log.info('Plugin reloaded: $pluginId');
   }
 
   Future<void> setPluginAutoLoad(String pluginId, bool enabled) {
@@ -527,41 +534,50 @@ class PluginLoaderService {
   Future<void> savePluginSettings(
     String pluginId,
     Map<String, dynamic> settings,
-  ) => _withPluginSettingsLock(pluginId, () async {
-    _ensureActive();
-    final manifest = _availablePluginsCache[pluginId];
-    if (manifest == null) {
-      throw Exception('Plugin not found: $pluginId');
-    }
+  ) async {
+    await _withPluginSettingsLock(pluginId, () async {
+      _ensureActive();
+      final manifest = _availablePluginsCache[pluginId];
+      if (manifest == null) {
+        throw Exception('Plugin not found: $pluginId');
+      }
 
-    _validateSettings(manifest, settings);
-    final stored = await _storedSettings(manifest);
-    final secureKeys = _secureSettingKeys(manifest);
-    final ordinaryPatch = Map.fromEntries(
-      settings.entries.where((entry) => !secureKeys.contains(entry.key)),
-    );
-    var secure = stored.secure;
-    for (final entry in settings.entries.where(
-      (entry) => secureKeys.contains(entry.key),
-    )) {
-      if (_isSecureState(entry.value)) continue;
-      secure = entry.value == null
-          ? Map.fromEntries(
-              secure.entries.where((current) => current.key != entry.key),
-            )
-          : {...secure, entry.key: entry.value};
-    }
+      _validateSettings(manifest, settings);
+      final stored = await _storedSettings(manifest);
+      final secureKeys = _secureSettingKeys(manifest);
+      final ordinaryPatch = Map.fromEntries(
+        settings.entries.where((entry) => !secureKeys.contains(entry.key)),
+      );
+      var secure = stored.secure;
+      for (final entry in settings.entries.where(
+        (entry) => secureKeys.contains(entry.key),
+      )) {
+        if (_isSecureState(entry.value)) continue;
+        secure = entry.value == null
+            ? Map.fromEntries(
+                secure.entries.where((current) => current.key != entry.key),
+              )
+            : {...secure, entry.key: entry.value};
+      }
 
-    final mergedOrdinary = {...stored.ordinary, ...ordinaryPatch};
-    for (final entry in ordinaryPatch.entries) {
-      if (entry.value == null) mergedOrdinary.remove(entry.key);
-    }
+      final mergedOrdinary = {...stored.ordinary, ...ordinaryPatch};
+      for (final entry in ordinaryPatch.entries) {
+        if (entry.value == null) mergedOrdinary.remove(entry.key);
+      }
 
-    await _writeSecureSettings(pluginId, secure);
-    await _writeOrdinarySettings(pluginId, mergedOrdinary);
+      await _writeSecureSettings(pluginId, secure);
+      await _writeOrdinarySettings(pluginId, mergedOrdinary);
 
-    _log.fine('Settings saved for plugin: $pluginId');
-  });
+      _log.fine('Settings saved for plugin: $pluginId');
+    });
+
+    // Reload only after the settings lock above is released: the load path
+    // re-reads settings under that same lock. The reload-if-loaded decision
+    // and the reload itself are one serialized mutation operation, so a
+    // concurrent unload cannot fail the save after the settings were
+    // persisted.
+    await _reloadPluginIfLoaded(pluginId);
+  }
 
   List<PluginManifest> get availablePlugins {
     return _availablePluginsCache.values.toList();

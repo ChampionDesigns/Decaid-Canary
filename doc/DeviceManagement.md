@@ -112,6 +112,15 @@ Discovery services are responsible for scanning and creating device instances. E
   - Notification liveness uses the existing snapshot watchdog and normal
     `ConnectionManager` reconnect lifecycle. Serial has no separate keepalive
     or reconnect loop.
+  - A DE1 pushes `K` (shot settings) only when the settings change, and
+    hardware verification on a stock DE1 over USB showed it never pushes a
+    `[K]` on connect, re-arm or write. The app therefore owns the frame on
+    serial: `UnifiedDe1Transport` keeps a local mirror of the 9-byte shot
+    settings (stock firmware defaults initially, refreshed by live `[K]`
+    frames and by every `updateShotSettings` write) and seeds the
+    shot-settings subject from it right after `<B>02`. `De1Controller`'s
+    initial read therefore succeeds and startup defaults (including
+    configured steam duration) are applied without any machine cooperation.
 
 ### Bengle firmware-synced state (post-connect)
 
