@@ -208,7 +208,7 @@ Prefer `reload` over `hot-restart` — state is preserved.
 
 - Dart-side: `package:logging`, configured in `main.dart`.
 - File log: `getApplicationDocumentsDirectory()/log.txt` (plus rotated `log.txt.1..3`).
-- Android retrieval: `adb shell run-as net.tadel.reaprime cat app_flutter/log.txt` or `adb logcat`.
+- Android retrieval: `adb shell run-as com.decentespresso.decaid.canary cat app_flutter/log.txt` or `adb logcat`.
 
 ## Focused Checks
 
