@@ -27,8 +27,8 @@ void main() {
 
     AndroidUpdater updaterFor(List<Map<String, Object>> releases) {
       return AndroidUpdater(
-        owner: 'tadelv',
-        repo: 'reaprime',
+        owner: 'ChampionDesigns',
+        repo: 'Decaid-Canary',
         httpClient: MockClient(
           (_) async => http.Response(jsonEncode(releases), 200),
         ),
@@ -105,8 +105,8 @@ void main() {
     test('all invalid releases do not affect a later valid check', () async {
       var callCount = 0;
       final updater = AndroidUpdater(
-        owner: 'tadelv',
-        repo: 'reaprime',
+        owner: 'ChampionDesigns',
+        repo: 'Decaid-Canary',
         httpClient: MockClient((_) async {
           final releases = callCount++ == 0
               ? [
@@ -161,8 +161,8 @@ void main() {
         });
 
         final updater = AndroidUpdater(
-          owner: 'tadelv',
-          repo: 'reaprime',
+          owner: 'ChampionDesigns',
+          repo: 'Decaid-Canary',
           httpClient: client,
         );
 
@@ -190,8 +190,8 @@ void main() {
         return http.StreamedResponse(const Stream.empty(), 404);
       });
       final updater = AndroidUpdater(
-        owner: 'tadelv',
-        repo: 'reaprime',
+        owner: 'ChampionDesigns',
+        repo: 'Decaid-Canary',
         httpClient: client,
       );
 
@@ -209,8 +209,8 @@ void main() {
         );
       });
       final updater = AndroidUpdater(
-        owner: 'tadelv',
-        repo: 'reaprime',
+        owner: 'ChampionDesigns',
+        repo: 'Decaid-Canary',
         httpClient: client,
       );
 

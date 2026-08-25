@@ -488,7 +488,7 @@ components:
       description: >
         Weight + flow frame emitted on `ws/v1/scale/snapshot`. Mirrors the
         controller-level `WeightSnapshot`. Device-provided flow is passed
-        through; weight-only scales use Decaid's flow estimator.
+        through; weight-only scales use Decaid-Canary's flow estimator.
       properties:
         timestamp:
           type: string
@@ -498,7 +498,7 @@ components:
           description: Current weight reading in grams.
         weightFlow:
           type: number
-          description: Device-provided gravimetric flow when available; otherwise Decaid's smoothed weight-derived estimate.
+          description: Device-provided gravimetric flow when available; otherwise Decaid-Canary's smoothed weight-derived estimate.
         battery:
           type: integer
           nullable: true

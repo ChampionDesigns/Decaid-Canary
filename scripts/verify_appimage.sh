@@ -22,10 +22,10 @@ cd "$WORK"
 "$APPIMAGE" --appimage-extract >/dev/null
 
 test -x squashfs-root/AppRun
-test -f squashfs-root/net.tadel.reaprime.desktop
-test -e squashfs-root/net.tadel.reaprime.png
-desktop-file-validate squashfs-root/net.tadel.reaprime.desktop
-test -x squashfs-root/usr/lib/decaid/decaid
+test -f squashfs-root/com.decentespresso.decaid-canary.desktop
+test -e squashfs-root/com.decentespresso.decaid-canary.png
+desktop-file-validate squashfs-root/com.decentespresso.decaid-canary.desktop
+test -x squashfs-root/usr/lib/decaid-canary/decaid-canary
 test -f squashfs-root/usr/lib/decaid/data/flutter_assets/AssetManifest.json \
   -o -f squashfs-root/usr/lib/decaid/data/flutter_assets/AssetManifest.bin
 

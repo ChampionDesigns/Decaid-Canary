@@ -363,9 +363,8 @@ class SettingsView extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 'License',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                style: Theme.of(context).textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 4),
               Text(
@@ -402,9 +401,8 @@ class SettingsView extends StatelessWidget {
         } catch (e, st) {
           Logger('Settings View').warning('Sparkle manual check failed', e, st);
           if (!context.mounted) return;
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Update check failed: $e')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('Update check failed: $e')));
         }
         return;
       }
@@ -415,7 +413,7 @@ class SettingsView extends StatelessWidget {
           title: const Text('Auto-update unavailable'),
           content: const Text(
             'The built-in updater could not be configured on this Mac. '
-            'Download the latest Decaid build from GitHub Releases.',
+            'Download the latest Decaid-Canary build from GitHub Releases.',
           ),
           actions: [
             TextButton(
@@ -427,7 +425,7 @@ class SettingsView extends StatelessWidget {
                 Navigator.of(dialogContext).pop();
                 await launchUrl(
                   Uri.parse(
-                    'https://github.com/decentespresso/decaid/releases',
+                    'https://github.com/ChampionDesigns/Decaid-Canary/releases',
                   ),
                 );
               },
@@ -451,7 +449,10 @@ class SettingsView extends StatelessWidget {
 
       if (updateInfo != null) {
         if (Platform.isAndroid) {
-          final updater = AndroidUpdater(owner: 'tadelv', repo: 'reaprime');
+          final updater = AndroidUpdater(
+            owner: 'ChampionDesigns',
+            repo: 'Decaid-Canary',
+          );
           final releaseUrl = updateCheckService?.getReleaseUrl(updateInfo);
           showDialog(
             context: context,
@@ -470,7 +471,7 @@ class SettingsView extends StatelessWidget {
           final releaseUrl = updateCheckService?.getReleaseUrl(updateInfo);
           showDialog(
             context: context,
-            builder: (context) => AlertDialog(
+            builder: (dialogContext) => AlertDialog(
               title: const Text('Update Available'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -483,12 +484,12 @@ class SettingsView extends StatelessWidget {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: () => Navigator.of(dialogContext).pop(),
                   child: const Text('Later'),
                 ),
                 ElevatedButton(
                   onPressed: () async {
-                    Navigator.of(context).pop();
+                    Navigator.of(dialogContext).pop();
                     if (releaseUrl != null) {
                       await launchUrl(Uri.parse(releaseUrl));
                     }

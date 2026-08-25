@@ -9,9 +9,9 @@ Read this when debugging BLE errors, diagnosing platform-specific crashes, inves
 
 ## General Debugging Principles
 
-- **File log first:** `getApplicationDocumentsDirectory()/log.txt` (rotated `log.txt.1..3`). On Android: `adb shell run-as net.tadel.reaprime cat app_flutter/log.txt`.
+- **File log first:** `getApplicationDocumentsDirectory()/log.txt` (rotated `log.txt.1..3`). On Android: `adb shell run-as com.decentespresso.decaid.canary cat app_flutter/log.txt`.
 - **adb logcat:** `adb logcat | grep -i rea` for live output on Android.
-- **macOS log path:** `~/Library/Containers/net.tadel.reaprime/Data/Documents/log.txt`.
+- **macOS log path:** `~/Library/Containers/com.decentespresso.decaid-canary/Data/Documents/log.txt`.
 - **Simulate mode:** Reproduce without hardware using `--dart-define=simulate=1`. Mock devices are deterministic — use them to isolate whether an issue is transport or logic.
 - **`simulate=0` (debug-on-real):** `--dart-define=simulate=0` enables debug routes and disables Firebase/telemetry while keeping real BLE/USB hardware. Use for temporary tuning builds where `/api/v1/debug/*` must be reachable against real devices. Must not be shipped to users.
 - **Stream debugging:** Enable `Logger('ShotState')` for structured shot decisions. `Logger('Ble')` for BLE operations.
@@ -74,11 +74,11 @@ Read this when debugging BLE errors, diagnosing platform-specific crashes, inves
 
 ```sh
 # Android log retrieval
-adb shell run-as net.tadel.reaprime cat app_flutter/log.txt
+adb shell run-as com.decentespresso.decaid.canary cat app_flutter/log.txt
 adb logcat | grep -i rea
 
 # macOS log path
-~/Library/Containers/net.tadel.reaprime/Data/Documents/log.txt
+~/Library/Containers/com.decentespresso.decaid-canary/Data/Documents/log.txt
 
 # Simulate mode (reproduce without hardware)
 flutter run --dart-define=simulate=1

@@ -99,7 +99,7 @@ paths:
             type: boolean
             default: true
         - name: quick
-          description: If true, Decaid returns an empty array immediately while the same scan-first policy continues in the background. Useful when polling for device updates manually.
+          description: If true, Decaid-Canary returns an empty array immediately while the same scan-first policy continues in the background. Useful when polling for device updates manually.
           in: query
           schema:
             type: boolean
@@ -2982,7 +2982,7 @@ paths:
       description: >
         Routes the request to a loaded plugin's declared HTTP endpoint. The
         runtime applies this contract to every HTTP method. The plugin manifest
-        must declare the api permission; otherwise Decaid rejects the request
+        must declare the api permission; otherwise Decaid-Canary rejects the request
         before dispatch.
       tags: [Plugins]
       parameters:
@@ -4614,9 +4614,9 @@ paths:
           description: Internal server error
   /api/v1/data/sync:
     post:
-      summary: Sync data between Decaid instances
+      summary: Sync data between Decaid-Canary instances
       description: |
-        Synchronizes data between this Decaid instance and a target Decaid
+        Synchronizes data between this Decaid-Canary instance and a target Decaid-Canary
         instance over the network. Supports three modes:
         - **pull**: imports data from the target into this instance
         - **push**: exports data from this instance to the target
@@ -4660,7 +4660,7 @@ paths:
                 target:
                   type: string
                   description: |
-                    Base URL of the target Decaid instance
+                    Base URL of the target Decaid-Canary instance
                     (e.g. "http://192.168.1.50:8080"). Must be an HTTP/HTTPS
                     origin with no path, query, or fragment; a trailing slash
                     is accepted and equivalent. IPv4, hostname, and IPv6
@@ -6241,7 +6241,7 @@ components:
       type: object
       properties:
         gatewayMode:
-          description: Control whether Decaid acts as gateway. Disabled means gateway is disabled, full means full gateway mode. Tracking means Decaid will not show graphs, but will control the shot (stop at weight)
+          description: Control whether Decaid-Canary acts as gateway. Disabled means gateway is disabled, full means full gateway mode. Tracking means Decaid-Canary will not show graphs, but will control the shot (stop at weight)
           type: string
           enum: ["disabled", "full", "tracking"]
           nullable: true
@@ -6650,7 +6650,7 @@ components:
           type: integer
           description: >
             Target steam temperature in Celsius. Set to 0 to disable steam-heater
-            preheating. Decaid writes 0 to the machine when steam is disabled and
+            preheating. Decaid-Canary writes 0 to the machine when steam is disabled and
             treats temperatures below the supported range as disabled. Supported
             enabled ranges are 135–160 °C for DE1 and 135–165 °C for Bengle.
           example: 150
@@ -6892,7 +6892,7 @@ components:
           type: number
         weightFlow:
           type: number
-          description: Device-provided gravimetric flow when available; otherwise Decaid's weight-derived estimate.
+          description: Device-provided gravimetric flow when available; otherwise Decaid-Canary's weight-derived estimate.
         battery:
           type: integer
           nullable: true

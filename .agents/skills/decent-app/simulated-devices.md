@@ -67,7 +67,7 @@ See `websocket.md` for why all four of `--no-async-stdio -n -U -t` are needed.
 ```bash
 scripts/sb-dev.sh stop
 rm -rf "${SB_RUNTIME_DIR:-/tmp/decent-app-$USER}"
-rm -rf "$HOME/Library/Containers/net.tadel.reaprime/Data/Documents"  # macOS
+rm -rf "$HOME/Library/Containers/com.decentespresso.decaid-canary/Data/Documents"  # macOS
 ```
 
 On Linux the app documents dir is under `$HOME/.local/share/reaprime/` (or `$XDG_DATA_HOME`); see `getApplicationDocumentsDirectory()` in `lib/main.dart`.

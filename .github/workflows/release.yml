@@ -5,11 +5,6 @@ on:
     tags:
       - 'v*'  # Triggers on tags like v1.0.0, v2.1.3, etc.
 
-# Two tags pushed close together must not race the appcast feed.
-concurrency:
-  group: sparkle-appcast
-  cancel-in-progress: false
-
 # bundle_skins.sh (invoked by flutter_with_commit.sh) hits api.github.com.
 # Without auth, all jobs share the runner IP's 60 req/hr limit and silently
 # get empty manifests. Expose GITHUB_TOKEN to every job so curl gets 5000/hr.
@@ -64,10 +59,6 @@ jobs:
       - name: Install Android SDK 35
         uses: android-actions/setup-android@v4
 
-      - name: Decode Android keystore
-        run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 --decode > android/app/debug.keystore
-
       - name: Cache Gradle
         uses: actions/cache@v5
         with:
@@ -87,19 +78,20 @@ jobs:
 
       - name: Build Android APK
         run: ./flutter_with_commit.sh build apk --release
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
 
+      # CI has no canary keystore, so the release APK is unsigned.
+      # Locally-built release APKs are signed with the private canary keystore.
       - name: Rename APK with version
         run: |
-          mv build/app/outputs/flutter-apk/app-release.apk \
-             build/app/outputs/flutter-apk/decaid-android-${{ needs.release-metadata.outputs.version }}.apk
+          APK=$(ls build/app/outputs/flutter-apk/app-release*.apk | head -1)
+          mv "$APK" \
+             build/app/outputs/flutter-apk/decaid-canary-android-${{ needs.release-metadata.outputs.version }}-unsigned.apk
 
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v7
         with:
           name: android-apk
-          path: build/app/outputs/flutter-apk/decaid-android-${{ needs.release-metadata.outputs.version }}.apk
+          path: build/app/outputs/flutter-apk/decaid-canary-android-${{ needs.release-metadata.outputs.version }}-unsigned.apk
 
   build-macos:
     needs: release-metadata
@@ -129,187 +121,52 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install FlutterFire CLI
-        run: dart pub global activate flutterfire_cli
-
-      # ---- Import signing certificate ----
-      - name: Import signing certificate
-        env:
-          CERTIFICATE_P12: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-          
-          # Create temporary keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          
-          # Decode and import certificate
-          echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
-          security import certificate.p12 \
-            -k "$KEYCHAIN_PATH" \
-            -P "$CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign
-          
-          # Allow codesign to access keychain
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          
-          # Make this keychain the default
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
-          
-          # Clean up
-          rm certificate.p12
-
-      # ---- Build ----
+      # ---- Build (unsigned; no Developer ID, no notarization) ----
       - name: Build macOS app
         run: ./flutter_with_commit.sh build macos --release
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
-
-      - name: Codesign app (Developer ID, deepest-first)
-        run: |
-          # Never codesign --deep: it rewrites Sparkle's nested helpers with
-          # the host entitlements, breaking the sandboxed Installer XPC.
-          scripts/sign_macos_deepest_first.sh \
-            build/macos/Build/Products/Release/Decaid.app
-
-      - name: Verify signing gates (pre-notarization)
-        run: |
-          scripts/verify_macos_signature.sh \
-            build/macos/Build/Products/Release/Decaid.app
-
-      # ---- Notarize ----
-      - name: Zip app for notarization
-        run: |
-          cd build/macos/Build/Products/Release
-          ditto -c -k --keepParent Decaid.app Decaid.zip
-
-      - name: Notarize app
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          TEAM_ID: ${{ secrets.TEAM_ID }}
-          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
-        run: |
-          xcrun notarytool submit \
-            build/macos/Build/Products/Release/Decaid.zip \
-            --apple-id "$APPLE_ID" \
-            --team-id "$TEAM_ID" \
-            --password "$APP_SPECIFIC_PASSWORD" \
-            --wait 2>&1 | tee notarization.log
-          # Show full log on failure
-          if grep -q "status: Invalid" notarization.log; then
-            ID=$(grep -o '[0-9a-f\-]\{36\}' notarization.log | head -1)
-            xcrun notarytool log "$ID" \
-              --apple-id "$APPLE_ID" \
-              --team-id "$TEAM_ID" \
-              --password "$APP_SPECIFIC_PASSWORD" || true
-            exit 1
-          fi
-
-      - name: Staple notarization ticket
-        run: |
-          # Retry stapling — ticket propagation can lag behind notarytool --wait
-          for i in 1 2 3 4 5; do
-            if xcrun stapler staple build/macos/Build/Products/Release/Decaid.app; then
-              exit 0
-            fi
-            echo "Staple attempt $i failed, waiting 15s..."
-            sleep 15
-          done
-          echo "Stapling failed after 5 attempts"
-          exit 1
-
-      - name: Verify signed + notarized app (spctl + stapler)
-        run: |
-          scripts/verify_macos_signature.sh \
-            build/macos/Build/Products/Release/Decaid.app XLS3XF57J8 1
 
       # ---- Final ZIP ----
       - name: Create release ZIP
         run: |
           cd build/macos/Build/Products/Release
-          ditto -c -k --keepParent Decaid.app ../../../../../decaid-macos-${{ needs.release-metadata.outputs.version }}.zip
+          ditto -c -k --keepParent Decaid-Canary.app ../../../../../decaid-canary-macos-${{ needs.release-metadata.outputs.version }}.zip
 
-      # ---- DMG ----
+      # ---- DMG (unsigned) ----
       - name: Create DMG
         run: |
-          APP="build/macos/Build/Products/Release/Decaid.app"
+          APP="build/macos/Build/Products/Release/Decaid-Canary.app"
           DMG_STAGE="$RUNNER_TEMP/dmg-stage"
           rm -rf "$DMG_STAGE"
           mkdir -p "$DMG_STAGE"
           cp -R "$APP" "$DMG_STAGE/"
           ln -s /Applications "$DMG_STAGE/Applications"
           hdiutil create \
-            -volname Decaid \
+            -volname Decaid-Canary \
             -srcfolder "$DMG_STAGE" \
             -ov -format UDZO \
-            decaid-macos-${{ needs.release-metadata.outputs.version }}.dmg
+            decaid-canary-macos-${{ needs.release-metadata.outputs.version }}.dmg
 
-      - name: Sign DMG
-        run: |
-          codesign --sign "Developer ID Application" --timestamp \
-            decaid-macos-${{ needs.release-metadata.outputs.version }}.dmg
-
-      - name: Notarize DMG
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          TEAM_ID: ${{ secrets.TEAM_ID }}
-          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
-        run: |
-          xcrun notarytool submit \
-            decaid-macos-${{ needs.release-metadata.outputs.version }}.dmg \
-            --apple-id "$APPLE_ID" \
-            --team-id "$TEAM_ID" \
-            --password "$APP_SPECIFIC_PASSWORD" \
-            --wait 2>&1 | tee dmg-notarization.log
-          if grep -q "status: Invalid" dmg-notarization.log; then
-            ID=$(grep -o '[0-9a-f\-]\{36\}' dmg-notarization.log | head -1)
-            xcrun notarytool log "$ID" \
-              --apple-id "$APPLE_ID" \
-              --team-id "$TEAM_ID" \
-              --password "$APP_SPECIFIC_PASSWORD" || true
-            exit 1
-          fi
-
-      - name: Staple DMG
-        run: |
-          DMG="decaid-macos-${{ needs.release-metadata.outputs.version }}.dmg"
-          for i in 1 2 3 4 5; do
-            if xcrun stapler staple "$DMG"; then
-              exit 0
-            fi
-            echo "Staple attempt $i failed, waiting 15s..."
-            sleep 15
-          done
-          echo "Stapling failed after 5 attempts"
-          exit 1
-
-      - name: Verify DMG contents, signature, and launch
+      - name: Verify DMG contents and launch
         run: |
           set -euo pipefail
-          DMG="decaid-macos-${{ needs.release-metadata.outputs.version }}.dmg"
+          DMG="decaid-canary-macos-${{ needs.release-metadata.outputs.version }}.dmg"
           MOUNT="$RUNNER_TEMP/dmg-mount"
           rm -rf "$MOUNT"
           mkdir -p "$MOUNT"
           hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$MOUNT"
           trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
-          test -d "$MOUNT/Decaid.app"
+          test -d "$MOUNT/Decaid-Canary.app"
           test -L "$MOUNT/Applications"
-          scripts/verify_macos_signature.sh "$MOUNT/Decaid.app" XLS3XF57J8 1
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
-          xcrun stapler validate "$DMG"
           mkdir -p "$RUNNER_TEMP/Applications"
-          cp -R "$MOUNT/Decaid.app" "$RUNNER_TEMP/Applications/"
-          "$RUNNER_TEMP/Applications/Decaid.app/Contents/MacOS/Decaid" --print-storage-paths
+          cp -R "$MOUNT/Decaid-Canary.app" "$RUNNER_TEMP/Applications/"
+          "$RUNNER_TEMP/Applications/Decaid-Canary.app/Contents/MacOS/Decaid-Canary" --print-storage-paths
 
       - uses: actions/upload-artifact@v7
         with:
           name: macos-app
           path: |
-            decaid-macos-${{ needs.release-metadata.outputs.version }}.zip
-            decaid-macos-${{ needs.release-metadata.outputs.version }}.dmg
+            decaid-canary-macos-${{ needs.release-metadata.outputs.version }}.zip
+            decaid-canary-macos-${{ needs.release-metadata.outputs.version }}.dmg
 
   build-linux:
     needs: release-metadata
@@ -345,13 +202,11 @@ jobs:
 
       - name: Build Linux app (unsigned)
         run: ./flutter_with_commit.sh build linux --release
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
 
       - name: Create Linux archive
         run: |
           cd build/linux/x64/release
-          tar -czf ../../../../decaid-linux-x64-${{ needs.release-metadata.outputs.version }}.tar.gz bundle
+          tar -czf ../../../../decaid-canary-linux-x64-${{ needs.release-metadata.outputs.version }}.tar.gz bundle
 
       - name: Package Linux AppImage
         run: |
@@ -362,15 +217,15 @@ jobs:
       - name: Verify Linux AppImage structure and launch
         run: |
           scripts/verify_appimage.sh \
-            decaid-linux-x86_64-${{ needs.release-metadata.outputs.version }}.AppImage x86-64
+            decaid-canary-linux-x86_64-${{ needs.release-metadata.outputs.version }}.AppImage x86-64
 
       - name: Upload Linux app artifacts
         uses: actions/upload-artifact@v7
         with:
           name: linux-app
           path: |
-            decaid-linux-x64-${{ needs.release-metadata.outputs.version }}.tar.gz
-            decaid-linux-x86_64-${{ needs.release-metadata.outputs.version }}.AppImage
+            decaid-canary-linux-x64-${{ needs.release-metadata.outputs.version }}.tar.gz
+            decaid-canary-linux-x86_64-${{ needs.release-metadata.outputs.version }}.AppImage
 
   build-raspberrypi:
     name: Build for Raspberry Pi (ARM64 / Pi 4+)
@@ -410,13 +265,11 @@ jobs:
 
       - name: Build Linux app (ARM64)
         run: ./flutter_with_commit.sh build linux --release
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
 
       - name: Create Raspberry Pi archive
         run: |
           cd build/linux/arm64/release
-          tar -czf ../../../../decaid-linux-arm64-${{ needs.release-metadata.outputs.version }}.tar.gz bundle
+          tar -czf ../../../../decaid-canary-linux-arm64-${{ needs.release-metadata.outputs.version }}.tar.gz bundle
 
       - name: Package Raspberry Pi AppImage
         run: |
@@ -427,15 +280,15 @@ jobs:
       - name: Verify Raspberry Pi AppImage structure and launch
         run: |
           scripts/verify_appimage.sh \
-            decaid-linux-aarch64-${{ needs.release-metadata.outputs.version }}.AppImage aarch64
+            decaid-canary-linux-aarch64-${{ needs.release-metadata.outputs.version }}.AppImage aarch64
 
       - name: Upload Raspberry Pi build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: raspberrypi-linux-arm64-app
           path: |
-            decaid-linux-arm64-${{ needs.release-metadata.outputs.version }}.tar.gz
-            decaid-linux-aarch64-${{ needs.release-metadata.outputs.version }}.AppImage
+            decaid-canary-linux-arm64-${{ needs.release-metadata.outputs.version }}.tar.gz
+            decaid-canary-linux-aarch64-${{ needs.release-metadata.outputs.version }}.AppImage
 
   build-windows:
     needs: release-metadata
@@ -474,8 +327,6 @@ jobs:
       - name: Build Windows app (unsigned)
         shell: bash
         run: ./flutter_with_commit.sh build windows --release
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
 
       - name: Copy app-local VC++ runtime
         shell: pwsh
@@ -488,24 +339,24 @@ jobs:
       - name: Create Windows archive
         shell: pwsh
         run: |
-          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath decaid-windows-x64-${{ needs.release-metadata.outputs.version }}.zip
+          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath decaid-canary-windows-x64-${{ needs.release-metadata.outputs.version }}.zip
 
       - name: Verify ZIP clean extraction and launch
         shell: pwsh
         run: |
-          $zip = 'decaid-windows-x64-${{ needs.release-metadata.outputs.version }}.zip'
-          $extract = Join-Path $env:RUNNER_TEMP 'decaid-extracted'
+          $zip = 'decaid-canary-windows-x64-${{ needs.release-metadata.outputs.version }}.zip'
+          $extract = Join-Path $env:RUNNER_TEMP 'decaid-canary-extracted'
           Expand-Archive -Path $zip -DestinationPath $extract
           # GUI-subsystem executables cannot be awaited with & or -Wait on the
           # runner; inherit the console and wait with a bound.
-          $exe = Join-Path $extract 'Decaid.exe'
+          $exe = Join-Path $extract 'Decaid-Canary.exe'
           $proc = Start-Process -FilePath $exe -ArgumentList '--print-storage-paths' -NoNewWindow -PassThru
           if (-not $proc.WaitForExit(60000)) {
             $proc.Kill()
-            throw 'Decaid.exe did not exit within 60s'
+            throw 'Decaid-Canary.exe did not exit within 60s'
           }
-          if ($proc.ExitCode -ne 0) { throw "Decaid.exe exited with code $($proc.ExitCode)" }
-          foreach ($name in @('Decaid.exe','flutter_windows.dll','vcruntime140.dll','msvcp140.dll','data')) {
+          if ($proc.ExitCode -ne 0) { throw "Decaid-Canary.exe exited with code $($proc.ExitCode)" }
+          foreach ($name in @('Decaid-Canary.exe','flutter_windows.dll','vcruntime140.dll','msvcp140.dll','data')) {
             if (-not (Test-Path (Join-Path $extract $name))) { throw "missing $name in extracted ZIP" }
           }
 
@@ -513,7 +364,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: windows-app
-          path: decaid-windows-x64-${{ needs.release-metadata.outputs.version }}.zip
+          path: decaid-canary-windows-x64-${{ needs.release-metadata.outputs.version }}.zip
 
   build-ios:
     needs: release-metadata
@@ -535,15 +386,6 @@ jobs:
           cache: true
           pub-cache: true
 
-      # Swift Package Manager (Flutter >=3.44 default) is enabled: the iOS
-      # project commits the SPM integration and Package.resolved. Firebase
-      # resolves via SPM; pod install only covers the remaining non-SPM
-      # plugins. The dSYM upload step below probes both the SPM checkout
-      # and the Pods layout for upload-symbols.
-
-      - name: Install FlutterFire CLI
-        run: dart pub global activate flutterfire_cli
-
       - name: Install dependencies
         run: flutter pub get
 
@@ -553,15 +395,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build IPA
+      - name: Build IPA (unsigned)
         run: ./flutter_with_commit.sh build ipa --release --dart-define=APP_STORE=true --no-codesign
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
 
       - name: Package unsigned IPA
         run: |
           APP_PATH="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
-          OUTPUT_PATH="$GITHUB_WORKSPACE/decaid-ios-unsigned-${{ needs.release-metadata.outputs.version }}.ipa"
+          OUTPUT_PATH="$GITHUB_WORKSPACE/decaid-canary-ios-unsigned-${{ needs.release-metadata.outputs.version }}.ipa"
           PACKAGE_DIR="$RUNNER_TEMP/unsigned-ipa"
 
           test -d "$APP_PATH"
@@ -577,159 +417,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ios-ipa-unsigned
-          path: decaid-ios-unsigned-${{ needs.release-metadata.outputs.version }}.ipa
+          path: decaid-canary-ios-unsigned-${{ needs.release-metadata.outputs.version }}.ipa
           if-no-files-found: error
-
-      - name: Import distribution certificate
-        env:
-          CERTIFICATE_P12: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_P12 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-
-          # Create temporary keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Decode and import certificate
-          echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
-          security import certificate.p12 \
-            -k "$KEYCHAIN_PATH" \
-            -P "$CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign
-
-          # Allow codesign to access keychain
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Make this keychain the default
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
-
-          # Clean up
-          rm certificate.p12
-
-      - name: Install provisioning profile
-        env:
-          PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE_B64 }}
-        run: |
-          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
-          echo "$PROVISIONING_PROFILE" | base64 --decode > "$PP_PATH"
-
-          # Extract UUID and install with correct filename
-          PP_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(security cms -D -i "$PP_PATH")")
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/${PP_UUID}.mobileprovision"
-
-      - name: Create ExportOptions.plist
-        env:
-          TEAM_ID: ${{ secrets.TEAM_ID }}
-          PROVISIONING_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}
-        run: |
-          cat > ExportOptions.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>app-store-connect</string>
-            <key>teamID</key>
-            <string>${TEAM_ID}</string>
-            <key>signingStyle</key>
-            <string>manual</string>
-            <key>signingCertificate</key>
-            <string>Apple Distribution</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>net.tadel.reaprime</key>
-              <string>${PROVISIONING_PROFILE_NAME}</string>
-            </dict>
-            <key>uploadSymbols</key>
-            <true/>
-          </dict>
-          </plist>
-          EOF
-
-      - name: Export signed IPA
-        run: |
-          rm -rf build/ios/ipa
-          xcodebuild -exportArchive \
-            -archivePath build/ios/archive/Runner.xcarchive \
-            -exportPath build/ios/ipa \
-            -exportOptionsPlist ExportOptions.plist
-
-      - name: Upload dSYMs to Firebase Crashlytics
-        run: |
-          DSYM_PATH="build/ios/archive/Runner.xcarchive/dSYMs"
-          if [ ! -d "$DSYM_PATH" ] || [ -z "$(ls -A "$DSYM_PATH" 2>/dev/null)" ]; then
-            echo "::warning::No dSYMs found at $DSYM_PATH"
-            ls -la build/ios/archive/Runner.xcarchive/ || true
-            exit 0
-          fi
-
-          echo "Found dSYMs:"
-          ls -la "$DSYM_PATH"
-
-          # SPM checkout first (current posture), Pods as fallback.
-          UPLOAD_SYMBOLS=""
-          for p in \
-            "build/ios/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/upload-symbols" \
-            "ios/Pods/FirebaseCrashlytics/upload-symbols"; do
-            if [ -f "$p" ]; then UPLOAD_SYMBOLS="$p"; break; fi
-          done
-          if [ -z "$UPLOAD_SYMBOLS" ]; then
-            echo "::error::upload-symbols not found in SPM SourcePackages or ios/Pods"
-            exit 1
-          fi
-          echo "Using upload-symbols at $UPLOAD_SYMBOLS"
-
-          flutterfire upload-crashlytics-symbols \
-            --upload-symbols-script-path="$UPLOAD_SYMBOLS" \
-            --platform=ios \
-            --apple-project-path="ios" \
-            --env-platform-name="iphoneos" \
-            --env-configuration="Release" \
-            --env-project-dir="ios" \
-            --env-built-products-dir="build/ios/archive/Runner.xcarchive/Products/Applications" \
-            --env-dwarf-dsym-folder-path="$DSYM_PATH" \
-            --env-dwarf-dsym-file-name="Runner.app.dSYM" \
-            --env-infoplist-path="Runner.app/Info.plist" \
-            --default-config=default
-
-      - name: Upload to TestFlight
-        env:
-          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-          API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
-        run: |
-          # Write the API key to the expected location
-          mkdir -p ~/.private_keys
-          echo "$API_KEY_P8" | base64 --decode > "$HOME/.private_keys/AuthKey_${API_KEY_ID}.p8"
-
-          # Find the built IPA
-          IPA_PATH=$(find build/ios/ipa -name "*.ipa" | head -1)
-
-          if [ -z "$IPA_PATH" ]; then
-            echo "Error: No IPA found in build/ios/ipa/"
-            exit 1
-          fi
-
-          echo "Validating $IPA_PATH..."
-          xcrun altool --validate-app \
-            --type ios \
-            --file "$IPA_PATH" \
-            --apiKey "$API_KEY_ID" \
-            --apiIssuer "$API_ISSUER_ID"
-
-          echo "Uploading $IPA_PATH to TestFlight..."
-          xcrun altool --upload-app \
-            --type ios \
-            --file "$IPA_PATH" \
-            --apiKey "$API_KEY_ID" \
-            --apiIssuer "$API_ISSUER_ID"
-
-          # Clean up API key
-          rm -f "$HOME/.private_keys/AuthKey_${API_KEY_ID}.p8"
 
   create-release:
     name: Create GitHub Release
@@ -756,15 +445,15 @@ jobs:
           set -euo pipefail
           VERSION="${{ needs.release-metadata.outputs.version }}"
           EXPECTED=(
-            "release-artifacts/android-apk/decaid-android-${VERSION}.apk"
-            "release-artifacts/macos-app/decaid-macos-${VERSION}.zip"
-            "release-artifacts/macos-app/decaid-macos-${VERSION}.dmg"
-            "release-artifacts/linux-app/decaid-linux-x64-${VERSION}.tar.gz"
-            "release-artifacts/linux-app/decaid-linux-x86_64-${VERSION}.AppImage"
-            "release-artifacts/raspberrypi-linux-arm64-app/decaid-linux-arm64-${VERSION}.tar.gz"
-            "release-artifacts/raspberrypi-linux-arm64-app/decaid-linux-aarch64-${VERSION}.AppImage"
-            "release-artifacts/windows-app/decaid-windows-x64-${VERSION}.zip"
-            "release-artifacts/ios-ipa-unsigned/decaid-ios-unsigned-${VERSION}.ipa"
+            "release-artifacts/android-apk/decaid-canary-android-${VERSION}-unsigned.apk"
+            "release-artifacts/macos-app/decaid-canary-macos-${VERSION}.zip"
+            "release-artifacts/macos-app/decaid-canary-macos-${VERSION}.dmg"
+            "release-artifacts/linux-app/decaid-canary-linux-x64-${VERSION}.tar.gz"
+            "release-artifacts/linux-app/decaid-canary-linux-x86_64-${VERSION}.AppImage"
+            "release-artifacts/raspberrypi-linux-arm64-app/decaid-canary-linux-arm64-${VERSION}.tar.gz"
+            "release-artifacts/raspberrypi-linux-arm64-app/decaid-canary-linux-aarch64-${VERSION}.AppImage"
+            "release-artifacts/windows-app/decaid-canary-windows-x64-${VERSION}.zip"
+            "release-artifacts/ios-ipa-unsigned/decaid-canary-ios-unsigned-${VERSION}.ipa"
           )
           for f in "${EXPECTED[@]}"; do
             [ -f "$f" ] || { echo "FAIL: missing $f" >&2; exit 1; }
@@ -776,9 +465,9 @@ jobs:
           VERSION="${{ needs.release-metadata.outputs.version }}"
           cd release-artifacts
           find . -type f -print0 | sort -z | xargs -0 sha256sum \
-            | sed 's| \./[^/]*/| |' > "../decaid-${VERSION}-SHA256SUMS.txt"
+            | sed 's| \./[^/]*/| |' > "../decaid-canary-${VERSION}-SHA256SUMS.txt"
           cd ..
-          cat "decaid-${VERSION}-SHA256SUMS.txt"
+          cat "decaid-canary-${VERSION}-SHA256SUMS.txt"
 
       - name: Create stable aliases for every artifact
         env:
@@ -804,145 +493,12 @@ jobs:
             release-artifacts/raspberrypi-linux-arm64-app/*
             release-artifacts/windows-app/*
             release-artifacts/ios-ipa-unsigned/*
-            decaid-${{ needs.release-metadata.outputs.version }}-SHA256SUMS.txt
-            decaid-latest-SHA256SUMS.txt
+            decaid-canary-${{ needs.release-metadata.outputs.version }}-SHA256SUMS.txt
+            decaid-canary-latest-SHA256SUMS.txt
           tag_name: ${{ needs.release-metadata.outputs.tag }}
-          name: Decaid ${{ needs.release-metadata.outputs.version }}
+          name: Decaid-Canary ${{ needs.release-metadata.outputs.version }}
           draft: false
           prerelease: ${{ contains(needs.release-metadata.outputs.version, 'beta') || contains(needs.release-metadata.outputs.version, 'alpha') || contains(needs.release-metadata.outputs.version, 'rc') }}
           body_path: release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish-appcast:
-    name: Publish Sparkle appcast
-    needs: [create-release]
-    runs-on: macos-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Resolve tag and channel
-        id: version
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          # Match the prerelease detection in create-release: any beta/alpha/rc
-          # tag publishes to the Sparkle beta channel.
-          if [[ "$VERSION" == *beta* || "$VERSION" == *alpha* || "$VERSION" == *rc* ]]; then
-            echo "channel=beta" >> "$GITHUB_OUTPUT"
-          else
-            echo "channel=stable" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Fetch previous appcast from gh-pages branch
-        id: feed
-        run: |
-          # The gh-pages branch is the durable source of truth, read through
-          # git (not the Pages CDN) so a transient Pages/TLS failure can never
-          # be mistaken for a first publication.
-          if git fetch origin gh-pages 2>/dev/null && git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
-            git show origin/gh-pages:appcast.xml > "$RUNNER_TEMP/previous-appcast.xml"
-            test -s "$RUNNER_TEMP/previous-appcast.xml"
-            echo "feed-present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "feed-present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Enforce one-time bootstrap
-        if: steps.feed.outputs.feed-present == 'false'
-        run: |
-          if [ "${{ vars.SPARKLE_APPCAST_BOOTSTRAP }}" != "true" ]; then
-            echo "No appcast.xml exists on the gh-pages branch."
-            echo "For the FIRST Sparkle release only, set the repo variable"
-            echo "SPARKLE_APPCAST_BOOTSTRAP=true, re-run this workflow on the"
-            echo "release tag, then delete the variable."
-            exit 1
-          fi
-          echo "Bootstrap authorized via SPARKLE_APPCAST_BOOTSTRAP"
-
-      - name: Download the release ZIP asset
-        run: |
-          gh release download "${{ steps.version.outputs.tag }}" \
-            --pattern "decaid-macos-${{ steps.version.outputs.version }}.zip" \
-            --dir "$RUNNER_TEMP/appcast-staging"
-          ls -la "$RUNNER_TEMP/appcast-staging"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Fetch generated release notes
-        run: |
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${{ steps.version.outputs.tag }}" \
-            --jq .body > "$RUNNER_TEMP/appcast-staging/release-notes.md"
-          test -s "$RUNNER_TEMP/appcast-staging/release-notes.md"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download Sparkle 2.9.5 release tools (pinned checksum)
-        run: |
-          curl -fSL -o "$RUNNER_TEMP/sparkle.tar.xz" \
-            https://github.com/sparkle-project/Sparkle/releases/download/2.9.5/Sparkle-2.9.5.tar.xz
-          echo "015336b601493e05c237964954bff6191370003d94edefe663724c88840d73cc  $RUNNER_TEMP/sparkle.tar.xz" \
-            | shasum -a 256 -c -
-          tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP" bin
-          # GITHUB_PATH only applies to subsequent steps; export now so this
-          # step's sanity check can run, and append for the generate step.
-          export PATH="$RUNNER_TEMP/bin:$PATH"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          generate_appcast --help >/dev/null
-
-      - name: Run appcast helper tests
-        run: scripts/test_appcast_helpers.sh
-
-      - name: Generate and validate appcast
-        run: |
-          if [ -z "${{ secrets.SPARKLE_ED_PRIVATE_KEY }}" ]; then
-            echo "FAIL: SPARKLE_ED_PRIVATE_KEY secret is not configured."
-            echo "Export the EdDSA private key from your login keychain"
-            echo "(Sparkle's generate_keys -x private-key-file) and run:"
-            echo "  gh secret set SPARKLE_ED_PRIVATE_KEY < private-key-file"
-            exit 1
-          fi
-          ZIP="$RUNNER_TEMP/appcast-staging/decaid-macos-${{ steps.version.outputs.version }}.zip"
-          mkdir -p "$RUNNER_TEMP/pages"
-          PREV=""
-          if [ -f "$RUNNER_TEMP/previous-appcast.xml" ]; then
-            PREV="$RUNNER_TEMP/previous-appcast.xml"
-          fi
-          scripts/publish_appcast.sh \
-            "$ZIP" \
-            "$RUNNER_TEMP/appcast-staging/release-notes.md" \
-            "https://github.com/decentespresso/decaid/releases/download/${{ steps.version.outputs.tag }}/" \
-            "${{ steps.version.outputs.channel }}" \
-            - \
-            "$RUNNER_TEMP/pages/appcast.xml" \
-            "$PREV" <<< "${{ secrets.SPARKLE_ED_PRIVATE_KEY }}"
-
-      - name: Publish appcast to gh-pages branch
-        run: |
-          if git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
-            git switch -c gh-pages origin/gh-pages
-          else
-            git switch --orphan gh-pages
-          fi
-          cp "$RUNNER_TEMP/pages/appcast.xml" appcast.xml
-          touch .nojekyll
-          git add appcast.xml .nojekyll
-          if git diff --cached --quiet; then
-            echo "appcast.xml unchanged; nothing to commit"
-          else
-            git -c user.name="github-actions[bot]" \
-                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-                commit -m "appcast: update for ${{ steps.version.outputs.tag }}"
-            git push origin gh-pages
-          fi
-
-
-
-

@@ -15,7 +15,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 import '../helpers/mock_settings_service.dart';
 
 class _RecordingUpdater extends AndroidUpdater {
-  _RecordingUpdater() : super(owner: 'tadelv', repo: 'reaprime');
+  _RecordingUpdater() : super(owner: 'ChampionDesigns', repo: 'Decaid-Canary');
   int checkCalls = 0;
 
   @override

@@ -57,10 +57,6 @@ jobs:
       - name: Install Android SDK 35
         uses: android-actions/setup-android@v4
 
-      - name: Decode Android keystore
-        run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 --decode > android/app/debug.keystore
-
       - name: Cache Gradle
         uses: actions/cache@v5
         with:
@@ -80,17 +76,17 @@ jobs:
 
       - name: Build Android APK
         run: ./flutter_with_commit.sh build apk --release
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
 
       - name: Package Android APK
-        run: cp build/app/outputs/flutter-apk/app-release.apk decaid-android-develop-${{ steps.build-id.outputs.short_sha }}.apk
+        run: |
+          APK=$(ls build/app/outputs/flutter-apk/app-release*.apk | head -1)
+          cp "$APK" decaid-canary-android-develop-${{ steps.build-id.outputs.short_sha }}.apk
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-android-develop
-          path: decaid-android-develop-${{ steps.build-id.outputs.short_sha }}.apk
+          name: decaid-canary-android-develop
+          path: decaid-canary-android-develop-${{ steps.build-id.outputs.short_sha }}.apk
           if-no-files-found: error
 
   build-macos:
@@ -117,9 +113,6 @@ jobs:
           cache: true
           pub-cache: true
 
-      - name: Install FlutterFire CLI
-        run: dart pub global activate flutterfire_cli
-
       - name: Install dependencies
         run: flutter pub get
 
@@ -129,111 +122,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ---- Import signing certificate ----
-      - name: Import signing certificate
-        env:
-          CERTIFICATE_P12: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-          
-          # Create temporary keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          
-          # Decode and import certificate
-          echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
-          security import certificate.p12 \
-            -k "$KEYCHAIN_PATH" \
-            -P "$CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign
-          
-          # Allow codesign to access keychain
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          
-          # Make this keychain the default
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
-          
-          # Clean up
-          rm certificate.p12
-
       # ---- Build ----
       - name: Build macOS app
         run: ./flutter_with_commit.sh build macos --release
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
-
-      - name: Codesign app (Developer ID, deepest-first)
-        run: |
-          # Never codesign --deep: it rewrites Sparkle's nested helpers with
-          # the host entitlements, breaking the sandboxed Installer XPC.
-          scripts/sign_macos_deepest_first.sh \
-            build/macos/Build/Products/Release/Decaid.app
-
-      - name: Verify signing gates (pre-notarization)
-        run: |
-          scripts/verify_macos_signature.sh \
-            build/macos/Build/Products/Release/Decaid.app
-
-      # ---- Notarize ----
-      - name: Zip app for notarization
-        run: |
-          cd build/macos/Build/Products/Release
-          ditto -c -k --keepParent Decaid.app Decaid.zip
-
-      - name: Notarize app
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          TEAM_ID: ${{ secrets.TEAM_ID }}
-          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
-        run: |
-          xcrun notarytool submit \
-            build/macos/Build/Products/Release/Decaid.zip \
-            --apple-id "$APPLE_ID" \
-            --team-id "$TEAM_ID" \
-            --password "$APP_SPECIFIC_PASSWORD" \
-            --wait 2>&1 | tee notarization.log
-          # Show full log on failure
-          if grep -q "status: Invalid" notarization.log; then
-            ID=$(grep -o '[0-9a-f\-]\{36\}' notarization.log | head -1)
-            xcrun notarytool log "$ID" \
-              --apple-id "$APPLE_ID" \
-              --team-id "$TEAM_ID" \
-              --password "$APP_SPECIFIC_PASSWORD" || true
-            exit 1
-          fi
-
-      - name: Staple notarization ticket
-        run: |
-          # Retry stapling — ticket propagation can lag behind notarytool --wait
-          for i in 1 2 3 4 5; do
-            if xcrun stapler staple build/macos/Build/Products/Release/Decaid.app; then
-              exit 0
-            fi
-            echo "Staple attempt $i failed, waiting 15s..."
-            sleep 15
-          done
-          echo "Stapling failed after 5 attempts"
-          exit 1
-
-      - name: Verify signed + notarized app (spctl + stapler)
-        run: |
-          scripts/verify_macos_signature.sh \
-            build/macos/Build/Products/Release/Decaid.app XLS3XF57J8 1
 
       # ---- Upload ----
       - name: Create development ZIP
         run: |
           cd build/macos/Build/Products/Release
-          ditto -c -k --keepParent Decaid.app ../../../../../decaid-macos-develop-${{ steps.build-id.outputs.short_sha }}.zip
+          ditto -c -k --keepParent Decaid-Canary.app ../../../../../decaid-canary-macos-develop-${{ steps.build-id.outputs.short_sha }}.zip
 
       - name: Upload macOS app
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-macos-develop
-          path: decaid-macos-develop-${{ steps.build-id.outputs.short_sha }}.zip
+          name: decaid-canary-macos-develop
+          path: decaid-canary-macos-develop-${{ steps.build-id.outputs.short_sha }}.zip
           if-no-files-found: error
 
   build-linux:
@@ -271,19 +174,17 @@ jobs:
 
       - name: Build Linux app (unsigned)
         run: ./flutter_with_commit.sh build linux --release
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
 
       - name: Create Linux archive
         run: |
           cd build/linux/x64/release
-          tar -czf ../../../../decaid-linux-x64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz bundle
+          tar -czf ../../../../decaid-canary-linux-x64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz bundle
 
       - name: Upload Linux app
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-linux-x64-develop
-          path: decaid-linux-x64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz
+          name: decaid-canary-linux-x64-develop
+          path: decaid-canary-linux-x64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz
           if-no-files-found: error
 
   build-raspberrypi:
@@ -328,19 +229,17 @@ jobs:
 
       - name: Build Linux app (ARM64)
         run: ./flutter_with_commit.sh build linux --release
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
 
       - name: Create Raspberry Pi archive
         run: |
           cd build/linux/arm64/release
-          tar -czf ../../../../decaid-linux-arm64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz bundle
+          tar -czf ../../../../decaid-canary-linux-arm64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz bundle
 
       - name: Upload Raspberry Pi build (ARM64)
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-linux-arm64-develop
-          path: decaid-linux-arm64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz
+          name: decaid-canary-linux-arm64-develop
+          path: decaid-canary-linux-arm64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz
           if-no-files-found: error
 
   build-ios:
@@ -367,8 +266,13 @@ jobs:
           cache: true
           pub-cache: true
 
-      - name: Install FlutterFire CLI
-        run: dart pub global activate flutterfire_cli
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.44.2'
+          cache: true
+          pub-cache: true
 
       - name: Install dependencies
         run: flutter pub get
@@ -381,13 +285,11 @@ jobs:
 
       - name: Build IPA
         run: ./flutter_with_commit.sh build ipa --release --dart-define=APP_STORE=true --no-codesign
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
 
       - name: Package unsigned IPA
         run: |
           APP_PATH="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
-          OUTPUT_PATH="$GITHUB_WORKSPACE/decaid-ios-unsigned-develop-${{ steps.build-id.outputs.short_sha }}.ipa"
+          OUTPUT_PATH="$GITHUB_WORKSPACE/decaid-canary-ios-unsigned-develop-${{ steps.build-id.outputs.short_sha }}.ipa"
           PACKAGE_DIR="$RUNNER_TEMP/unsigned-ipa"
 
           test -d "$APP_PATH"
@@ -402,8 +304,8 @@ jobs:
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-ios-unsigned-develop
-          path: decaid-ios-unsigned-develop-${{ steps.build-id.outputs.short_sha }}.ipa
+          name: decaid-canary-ios-unsigned-develop
+          path: decaid-canary-ios-unsigned-develop-${{ steps.build-id.outputs.short_sha }}.ipa
           if-no-files-found: error
 
 
@@ -449,18 +351,16 @@ jobs:
       - name: Build Windows app (unsigned)
         shell: bash
         run: ./flutter_with_commit.sh build windows --release
-        env:
-          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
 
       - name: Create Windows archive
         shell: pwsh
-        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath decaid-windows-x64-develop-${{ steps.build-id.outputs.short_sha }}.zip
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath decaid-canary-windows-x64-develop-${{ steps.build-id.outputs.short_sha }}.zip
 
       - name: Upload Windows app
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-windows-x64-develop
-          path: decaid-windows-x64-develop-${{ steps.build-id.outputs.short_sha }}.zip
+          name: decaid-canary-windows-x64-develop
+          path: decaid-canary-windows-x64-develop-${{ steps.build-id.outputs.short_sha }}.zip
           if-no-files-found: error
 
 

@@ -1,5 +1,5 @@
 name: reaprime
-description: "Decaid - Gateway for Decent Espresso Machines"
+description: "Decaid-Canary - Gateway for Decent Espresso Machines (canary fork)"
 
 # Prevent accidental publishing to pub.dev.
 publish_to: "none"

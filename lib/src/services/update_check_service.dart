@@ -39,7 +39,9 @@ class UpdateCheckService {
     bool? platformIsAndroid,
     bool? platformIsMacOS,
   }) : _settingsService = settingsService,
-       _updater = updater ?? AndroidUpdater(owner: 'tadelv', repo: 'reaprime'),
+       _updater =
+           updater ??
+           AndroidUpdater(owner: 'ChampionDesigns', repo: 'Decaid-Canary'),
        _webUIStorage = webUIStorage,
        _pluginSourceService = pluginSourceService,
        _isAndroid = platformIsAndroid ?? Platform.isAndroid,
@@ -233,13 +235,13 @@ class UpdateCheckService {
   }
 
   String getReleasesUrl() {
-    return 'https://github.com/decentespresso/decaid/releases';
+    return 'https://github.com/ChampionDesigns/Decaid-Canary/releases';
   }
 
   String? getReleaseUrl([UpdateInfo? update]) {
     final release = update ?? _availableUpdate;
     if (release == null) return null;
-    return 'https://github.com/decentespresso/decaid/releases/tag/${release.tagName}';
+    return 'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/${release.tagName}';
   }
 
   Future<void> enableAutomaticChecks() async {
@@ -262,9 +264,7 @@ class UpdateCheckService {
     _log.info('DEBUG: forcing fake update notification ($version)');
     _availableUpdate = UpdateInfo(
       version: version,
-      downloadUrl:
-          downloadUrl ??
-          'https://github.com/decentespresso/decaid/releases/download/v0.7.7/decent-android-0.7.7.apk',
+      downloadUrl: downloadUrl ?? 'https://github.com/ChampionDesigns/Decaid-Canary/releases/download/v0.7.7/decent-android-0.7.7.apk',
       releaseNotes: 'Forced update for testing the update API.',
       isPrerelease: false,
       tagName: 'v$version',
