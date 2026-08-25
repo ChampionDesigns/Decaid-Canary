@@ -7,28 +7,28 @@ trap 'rm -rf "$TMP"' EXIT
 
 VERSION=1.2.3
 ARTIFACTS="$TMP/release-artifacts"
-MANIFEST="$TMP/decaid-latest-SHA256SUMS.txt"
+MANIFEST="$TMP/decaid-canary-latest-SHA256SUMS.txt"
 SOURCE_PATHS=(
-  "android-apk/decaid-android-${VERSION}.apk"
-  "macos-app/decaid-macos-${VERSION}.zip"
-  "macos-app/decaid-macos-${VERSION}.dmg"
-  "linux-app/decaid-linux-x64-${VERSION}.tar.gz"
-  "linux-app/decaid-linux-x86_64-${VERSION}.AppImage"
-  "raspberrypi-linux-arm64-app/decaid-linux-arm64-${VERSION}.tar.gz"
-  "raspberrypi-linux-arm64-app/decaid-linux-aarch64-${VERSION}.AppImage"
-  "windows-app/decaid-windows-x64-${VERSION}.zip"
-  "ios-ipa-unsigned/decaid-ios-unsigned-${VERSION}.ipa"
+  "android-apk/decaid-canary-android-${VERSION}-unsigned.apk"
+  "macos-app/decaid-canary-macos-${VERSION}.zip"
+  "macos-app/decaid-canary-macos-${VERSION}.dmg"
+  "linux-app/decaid-canary-linux-x64-${VERSION}.tar.gz"
+  "linux-app/decaid-canary-linux-x86_64-${VERSION}.AppImage"
+  "raspberrypi-linux-arm64-app/decaid-canary-linux-arm64-${VERSION}.tar.gz"
+  "raspberrypi-linux-arm64-app/decaid-canary-linux-aarch64-${VERSION}.AppImage"
+  "windows-app/decaid-canary-windows-x64-${VERSION}.zip"
+  "ios-ipa-unsigned/decaid-canary-ios-unsigned-${VERSION}.ipa"
 )
 ALIAS_PATHS=(
-  "android-apk/decaid-android-latest.apk"
-  "macos-app/decaid-macos-latest.zip"
-  "macos-app/decaid-macos-latest.dmg"
-  "linux-app/decaid-linux-x64-latest.tar.gz"
-  "linux-app/decaid-linux-x86_64-latest.AppImage"
-  "raspberrypi-linux-arm64-app/decaid-linux-arm64-latest.tar.gz"
-  "raspberrypi-linux-arm64-app/decaid-linux-aarch64-latest.AppImage"
-  "windows-app/decaid-windows-x64-latest.zip"
-  "ios-ipa-unsigned/decaid-ios-unsigned-latest.ipa"
+  "android-apk/decaid-canary-android-latest-unsigned.apk"
+  "macos-app/decaid-canary-macos-latest.zip"
+  "macos-app/decaid-canary-macos-latest.dmg"
+  "linux-app/decaid-canary-linux-x64-latest.tar.gz"
+  "linux-app/decaid-canary-linux-x86_64-latest.AppImage"
+  "raspberrypi-linux-arm64-app/decaid-canary-linux-arm64-latest.tar.gz"
+  "raspberrypi-linux-arm64-app/decaid-canary-linux-aarch64-latest.AppImage"
+  "windows-app/decaid-canary-windows-x64-latest.zip"
+  "ios-ipa-unsigned/decaid-canary-ios-unsigned-latest.ipa"
 )
 
 for i in "${!SOURCE_PATHS[@]}"; do
