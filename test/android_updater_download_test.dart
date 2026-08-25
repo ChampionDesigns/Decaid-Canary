@@ -138,7 +138,7 @@ void main() {
           capturedRequest.headers['accept'],
           'application/vnd.github.v3+json',
         );
-        expect(capturedRequest.headers['user-agent'], 'Decaid');
+        expect(capturedRequest.headers['user-agent'], 'Decaid-Canary');
         expect(update?.version, '0.7.15');
         expect(update?.downloadUrl, 'https://example.com/0.7.15.apk');
       },

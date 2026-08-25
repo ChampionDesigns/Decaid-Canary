@@ -1,17 +1,11 @@
 plugins {
     id("com.android.application")
-    // START: FlutterFire Configuration
-    id("com.google.gms.google-services")
-    id("com.google.firebase.firebase-perf")
-    id("com.google.firebase.crashlytics")
-    // END: FlutterFire Configuration
-    // id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
-    namespace = "net.tadel.reaprime"
+    namespace = "com.decentespresso.decaid.canary"
     compileSdk = 36
     // ndkVersion = flutter.ndkVersion
 		ndkVersion = "28.2.13676358"
@@ -28,7 +22,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "net.tadel.reaprime"
+        applicationId = "com.decentespresso.decaid.canary"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28
@@ -42,26 +36,21 @@ android {
     }
 
     signingConfigs {
-            create("release") {
-                storeFile = file("debug.keystore")
-                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "android"
-                keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "androiddebugkey"
-                keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "android"
-            }
-            getByName("debug") {
-                storeFile = file("debug.keystore")
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
-            }
+        create("release") {
+            storeFile = file("canary-release.keystore")
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "442f4e4bca093a8d9c67914c"
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "canary"
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "442f4e4bca093a8d9c67914c"
         }
+    }
 
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
-        }
-        getByName("debug") {
-            signingConfig = signingConfigs.getByName("debug")
+            // Sign with the local canary keystore when present; CI has no
+            // keystore and Gradle then emits app-release-unsigned.apk.
+            if (file("canary-release.keystore").exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 }
