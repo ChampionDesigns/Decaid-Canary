@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=Decaid
+Name=Decaid-Canary
 GenericName=Espresso Machine Controller
 Comment=Control and monitor your Decent Espresso machine
 Exec=AppRun
-Icon=net.tadel.reaprime
+Icon=com.decentespresso.decaid-canary
 Terminal=false
 Categories=Utility;
-StartupWMClass=Decaid
+StartupWMClass=com.decentespresso.decaid-canary

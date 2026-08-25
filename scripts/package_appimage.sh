@@ -30,17 +30,17 @@ GTK_PLUGIN_SHA256="b0f4cbc684a0103a9651f0955b635eaea0096b3a66c0f5a2c2aa337960375
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ICON="${REPO_ROOT}/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"
-DESKTOP="${REPO_ROOT}/linux/packaging/net.tadel.reaprime.desktop"
+DESKTOP="${REPO_ROOT}/linux/packaging/com.decentespresso.decaid-canary.desktop"
 APPRUN="${REPO_ROOT}/linux/packaging/AppRun"
 
-for required in "${BUNDLE}/decaid" "${ICON}" "${DESKTOP}" "${APPRUN}"; do
+for required in "${BUNDLE}/decaid-canary" "${ICON}" "${DESKTOP}" "${APPRUN}"; do
   [ -f "${required}" ] || { echo "missing ${required}" >&2; exit 1; }
 done
 
 mkdir -p "${OUTDIR}"
 OUTDIR="$(cd "${OUTDIR}" && pwd)"
 
-CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/decaid-appimage"
+CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/decaid-canary-appimage"
 TOOLS_DIR="${CACHE_DIR}/tools-${ARCH}"
 mkdir -p "${CACHE_DIR}"
 
@@ -73,22 +73,22 @@ export PATH="${TOOLS_DIR}/bin:${PATH}"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
-APPDIR="${WORK_DIR}/Decaid.AppDir"
-mkdir -p "${APPDIR}/usr/lib/decaid"
-cp -a "${BUNDLE}/." "${APPDIR}/usr/lib/decaid/"
+APPDIR="${WORK_DIR}/Decaid-Canary.AppDir"
+mkdir -p "${APPDIR}/usr/lib/decaid-canary"
+cp -a "${BUNDLE}/." "${APPDIR}/usr/lib/decaid-canary/"
 install -m 0755 "${APPRUN}" "${APPDIR}/AppRun"
 install -m 0644 "${ICON}" "${APPDIR}/.DirIcon"
 
-OUTPUT="${OUTDIR}/decaid-linux-${ARCH}-${VERSION}.AppImage"
+OUTPUT="${OUTDIR}/decaid-canary-linux-${ARCH}-${VERSION}.AppImage"
 export ARCH
 export DEPLOY_GTK_VERSION=3
 export OUTPUT
 (cd "${WORK_DIR}" && linuxdeploy \
   --appdir "${APPDIR}" \
-  --executable "${APPDIR}/usr/lib/decaid/decaid" \
+  --executable "${APPDIR}/usr/lib/decaid-canary/decaid-canary" \
   --desktop-file "${DESKTOP}" \
   --icon-file "${ICON}" \
-  --icon-filename "net.tadel.reaprime" \
+  --icon-filename "com.decentespresso.decaid-canary" \
   --plugin gtk \
   --output appimage)
 

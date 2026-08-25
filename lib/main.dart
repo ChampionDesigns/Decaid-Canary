@@ -207,8 +207,9 @@ void main(List<String> args) async {
   final logDir = await AppDirectories.logs;
   await Directory(logDir).create(recursive: true);
 
-  RotatingFileAppender(baseFilePath: '$logDir/log.txt')
-      .attachToLogger(Logger.root);
+  RotatingFileAppender(
+    baseFilePath: '$logDir/log.txt',
+  ).attachToLogger(Logger.root);
 
   final webViewLogService = WebViewLogService(logDirectoryPath: logDir);
   await webViewLogService.initialize();
@@ -1037,17 +1038,17 @@ class _AppRootState extends State<AppRoot> {
   List<PlatformMenuItem> _buildPlatformMenus() {
     return [
       PlatformMenu(
-        label: 'Decaid',
+        label: 'Decaid-Canary',
         menus: [
           PlatformMenuItemGroup(
             members: [
-              PlatformMenuItem(label: 'About Decaid', onSelected: null),
+              PlatformMenuItem(label: 'About Decaid-Canary', onSelected: null),
             ],
           ),
           PlatformMenuItemGroup(
             members: [
               PlatformMenuItem(
-                label: 'Quit Decaid',
+                label: 'Quit Decaid-Canary',
                 shortcut: const SingleActivator(
                   LogicalKeyboardKey.keyQ,
                   meta: true,
