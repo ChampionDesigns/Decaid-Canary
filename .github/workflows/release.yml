@@ -79,7 +79,7 @@ jobs:
       - name: Build Android APK
         run: ./flutter_with_commit.sh build apk --release
 
-      # CI has no canary keystore, so Gradle emits app-release-unsigned.apk.
+      # CI has no canary keystore, so the release APK is unsigned.
       # Locally-built release APKs are signed with the private canary keystore.
       - name: Rename APK with version
         run: |
