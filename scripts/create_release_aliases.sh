@@ -11,13 +11,13 @@ VERSION="$2"
 [ -d "$ARTIFACTS_DIR" ] || { echo "FAIL: missing $ARTIFACTS_DIR" >&2; exit 1; }
 
 ARTIFACTS_DIR="$(cd "$ARTIFACTS_DIR" && pwd)"
-MANIFEST="$(dirname "$ARTIFACTS_DIR")/decaid-latest-SHA256SUMS.txt"
+MANIFEST="$(dirname "$ARTIFACTS_DIR")/decaid-canary-latest-SHA256SUMS.txt"
 cd "$ARTIFACTS_DIR"
 
 SOURCES=()
 while IFS= read -r -d '' source; do
   SOURCES+=("$source")
-done < <(find . -type f -name "*-${VERSION}.*" -print0 | sort -z)
+done < <(find . -type f -name "*${VERSION}*" -print0 | sort -z)
 
 [ "${#SOURCES[@]}" -gt 0 ] || {
   echo "FAIL: no versioned release artifacts found for $VERSION" >&2
