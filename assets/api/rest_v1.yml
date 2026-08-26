@@ -5534,7 +5534,33 @@ components:
           description: Whether GroupHeadController is present and active
         extra:
           type: object
-          description: various extra information.
+          description: >
+            Machine details read from MMR once at connect. The object stays
+            open — a firmware or model may contribute keys not listed here —
+            but these two are always present for a DE1.
+          additionalProperties: true
+          properties:
+            refillKit:
+              type: boolean
+              description: >
+                Whether an automatic refill kit was detected on this machine.
+                Bit 0 of the refill-kit register as read at connect, before
+                Decaid writes auto back to that register. This is machine
+                detection, not configuration: writing `refillKitSetting` does
+                not change it, and it is fixed for the lifetime of the
+                connection.
+
+                Use this, not `refillKitSetting`, to decide whether a machine
+                refills itself: on a plumbed machine a low-water check against
+                WaterLevels.refillLevel fires more or less continuously, and
+                this is the only field that tells that case apart from a
+                machine with no kit.
+            voltage:
+              type: integer
+              description: Heater supply voltage in volts, as reported by the machine.
+          example:
+            refillKit: true
+            voltage: 220
 
     MachineCapabilities:
       type: object
@@ -6115,7 +6141,19 @@ components:
           enum: [120, 230]
         refillKitSetting:
           description: |
-            Refill kit behavior. `2` = auto (default), `1` = force on, `0` = force off.
+            Refill kit override: `2` = auto (default), `1` = force on,
+            `0` = force off.
+
+            Writes the value to the machine's refill-kit register and updates
+            the override Decaid reports back. It does not change
+            `MachineInfo.extra.refillKit`, which is what the machine detected
+            at connect.
+
+            The override is not persisted. Decaid writes `2` (auto) at connect,
+            so a force-on or force-off selection lasts only until the machine is
+            discovered and connected again.
+
+            Any value other than `0`, `1` or `2` is rejected with `400`.
           type: integer
           nullable: true
           enum: [0, 1, 2]
@@ -6143,7 +6181,16 @@ components:
           enum: [120, 230, -1]
         refillKitSetting:
           description: |
-            Refill kit behavior. `2` = auto, `1` = force on, `0` = force off.
+            Refill kit override currently in effect: `2` = auto, `1` = force on,
+            `0` = force off.
+
+            This is the configuration, not a detection result. Decaid writes `2`
+            (auto) at connect, so a machine that has not been written to since
+            reports `2` whether or not it has a kit fitted. For detection, read
+            `MachineInfo.extra.refillKit`.
+
+            The value is served from Decaid's cache of the last override
+            written; the register is not re-read.
           type: integer
           enum: [0, 1, 2]
     De1CalibrationRequest:
@@ -6918,15 +6965,36 @@ components:
         version:
           type: string
         apiVersion:
-          type: string
+          type: integer
+          description: Plugin API contract version the plugin targets.
+          example: 1
         permissions:
           type: array
           items:
             type: string
             enum: [log, api, emit, pluginStorage, events.machine, events.shots, proxy.decent_api, proxy.decent_api.write]
         settings:
-          description: Plugin settings schema
           type: object
+          description: >
+            Declared settings for this plugin, keyed by setting name. This is the
+            manifest schema, not the stored values: it carries the type, the
+            human-readable description and the default for each setting, so a
+            client can render a settings form without reading the plugin's
+            repository. Current values come from
+            GET /api/v1/plugins/{id}/settings instead.
+          additionalProperties:
+            $ref: '#/components/schemas/PluginSettingSchema'
+          example:
+            AutoUpload:
+              type: boolean
+              label: Upload shots automatically
+              description: Upload shots automatically when they finish (opt-in; off by default)
+              default: false
+            LengthThreshold:
+              type: number
+              label: Minimum shot length
+              description: Only upload shots longer than this many seconds (skips flushes)
+              default: 5
         api:
           type: array
           description: A list of endpoints this plugin will expose
@@ -6960,6 +7028,60 @@ components:
           description: >
             An update that was found but not installed because it requests
             permissions the installed version does not hold.
+
+    PluginSettingSchema:
+      type: object
+      description: >
+        Declaration of a single plugin setting, taken verbatim from the
+        plugin's manifest.json. Returned inside PluginManifest.settings by
+        GET /api/v1/plugins.
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum: [string, number, boolean, enum]
+          description: >
+            Value type. `enum` additionally requires `values`, and the API
+            rejects a saved value that is not one of them.
+        label:
+          type: string
+          description: >
+            Human-readable name for the setting, written by the plugin author.
+            Optional: when it is absent, empty or whitespace, clients fall back
+            to the setting's key, so a manifest that omits it renders exactly as
+            before. Use it so a settings form can read "Upload shots
+            automatically" instead of the storage key "AutoUpload".
+        description:
+          type: string
+          description: >
+            Human-readable explanation of what the setting does, written by the
+            plugin author. Optional, and absent when the author did not supply
+            one.
+        default:
+          description: >
+            Value applied when the user has not saved one. Matches `type`.
+            Optional.
+          nullable: true
+        secure:
+          type: boolean
+          default: false
+          description: >
+            When true the value is held in platform credential storage. It is
+            supplied in memory to the plugin's onLoad(settings) but never
+            returned in plaintext by the REST API; GET
+            /api/v1/plugins/{id}/settings reports it as an isSet state object
+            instead.
+        values:
+          type: array
+          items:
+            type: string
+          description: Allowed values. Required when `type` is `enum`, otherwise absent.
+      example:
+        type: boolean
+        label: Upload shots automatically
+        description: Upload shots automatically when they finish (opt-in; off by default)
+        default: false
 
     PluginInstallResult:
       type: object
