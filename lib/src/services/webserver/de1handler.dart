@@ -70,7 +70,15 @@ class De1Handler {
     app.put('/api/v1/machine/cupWarmer', (Request r) async {
       final dynamic json;
       try {
-        json = jsonDecode(await r.readAsString());
+        json = jsonDecode(
+          await readBoundedRequestBodyString(
+            r,
+            maxBytes: smallRequestBodyBytes,
+            timeout: smallRequestBodyTimeout,
+          ),
+        );
+      } on RequestBodyReadException {
+        rethrow;
       } catch (e) {
         return jsonBadRequest({'error': 'Invalid JSON body'});
       }
@@ -129,7 +137,15 @@ class De1Handler {
     app.put('/api/v1/machine/cupWarmer/preheat', (Request r) async {
       final dynamic json;
       try {
-        json = jsonDecode(await r.readAsString());
+        json = jsonDecode(
+          await readBoundedRequestBodyString(
+            r,
+            maxBytes: smallRequestBodyBytes,
+            timeout: smallRequestBodyTimeout,
+          ),
+        );
+      } on RequestBodyReadException {
+        rethrow;
       } catch (e) {
         return jsonBadRequest({'error': 'Invalid JSON body'});
       }
@@ -208,7 +224,15 @@ class De1Handler {
     app.put('/api/v1/machine/ledStrip', (Request r) async {
       final dynamic json;
       try {
-        json = jsonDecode(await r.readAsString());
+        json = jsonDecode(
+          await readBoundedRequestBodyString(
+            r,
+            maxBytes: smallRequestBodyBytes,
+            timeout: smallRequestBodyTimeout,
+          ),
+        );
+      } on RequestBodyReadException {
+        rethrow;
       } catch (e) {
         return jsonBadRequest({'error': 'Invalid JSON body'});
       }
@@ -259,7 +283,15 @@ class De1Handler {
     app.put('/api/v1/machine/scaleCalibration', (Request r) async {
       final dynamic json;
       try {
-        json = jsonDecode(await r.readAsString());
+        json = jsonDecode(
+          await readBoundedRequestBodyString(
+            r,
+            maxBytes: smallRequestBodyBytes,
+            timeout: smallRequestBodyTimeout,
+          ),
+        );
+      } on RequestBodyReadException {
+        rethrow;
       } catch (e) {
         return jsonBadRequest({'error': 'Invalid JSON body'});
       }
@@ -315,7 +347,15 @@ class De1Handler {
     app.post('/api/v1/machine/waterLevels', (Request r) async {
       final dynamic json;
       try {
-        json = jsonDecode(await r.readAsString());
+        json = jsonDecode(
+          await readBoundedRequestBodyString(
+            r,
+            maxBytes: smallRequestBodyBytes,
+            timeout: smallRequestBodyTimeout,
+          ),
+        );
+      } on RequestBodyReadException {
+        rethrow;
       } catch (e) {
         return jsonBadRequest({'error': 'Invalid JSON body'});
       }
@@ -336,7 +376,15 @@ class De1Handler {
     app.post('/api/v1/machine/settings', (Request r) async {
       final dynamic json;
       try {
-        json = jsonDecode(await r.readAsString());
+        json = jsonDecode(
+          await readBoundedRequestBodyString(
+            r,
+            maxBytes: smallRequestBodyBytes,
+            timeout: smallRequestBodyTimeout,
+          ),
+        );
+      } on RequestBodyReadException {
+        rethrow;
       } catch (e) {
         return jsonBadRequest({'error': 'Invalid JSON body'});
       }
@@ -403,7 +451,15 @@ class De1Handler {
     app.post('/api/v1/machine/settings/advanced', (Request r) async {
       final dynamic json;
       try {
-        json = jsonDecode(await r.readAsString());
+        json = jsonDecode(
+          await readBoundedRequestBodyString(
+            r,
+            maxBytes: smallRequestBodyBytes,
+            timeout: smallRequestBodyTimeout,
+          ),
+        );
+      } on RequestBodyReadException {
+        rethrow;
       } catch (e) {
         return jsonBadRequest({'error': 'Invalid JSON body'});
       }
@@ -487,7 +543,15 @@ class De1Handler {
     app.post('/api/v1/machine/calibration', (Request r) async {
       final dynamic json;
       try {
-        json = jsonDecode(await r.readAsString());
+        json = jsonDecode(
+          await readBoundedRequestBodyString(
+            r,
+            maxBytes: smallRequestBodyBytes,
+            timeout: smallRequestBodyTimeout,
+          ),
+        );
+      } on RequestBodyReadException {
+        rethrow;
       } catch (e) {
         return jsonBadRequest({'error': 'Invalid JSON body'});
       }
@@ -546,7 +610,15 @@ class De1Handler {
       }
       final dynamic json;
       try {
-        json = jsonDecode(await r.readAsString());
+        json = jsonDecode(
+          await readBoundedRequestBodyString(
+            r,
+            maxBytes: smallRequestBodyBytes,
+            timeout: smallRequestBodyTimeout,
+          ),
+        );
+      } on RequestBodyReadException {
+        rethrow;
       } catch (e) {
         return jsonBadRequest({'error': 'Invalid JSON body'});
       }
@@ -616,6 +688,8 @@ class De1Handler {
   Future<Response> _mapDe1WriteErrors(Future<Response> Function() call) async {
     try {
       return await call();
+    } on RequestBodyReadException {
+      rethrow;
     } on De1WriteQueueFullException catch (e) {
       return jsonServiceUnavailable({
         'error': 'Machine write queue is full',
@@ -783,7 +857,11 @@ class De1Handler {
 
   Future<Response> _profileHandler(Request request) async {
     return withDe1((_) async {
-      final payload = await request.readAsString();
+      final payload = await readBoundedRequestBodyString(
+        request,
+        maxBytes: recordRequestBodyBytes,
+        timeout: recordRequestBodyTimeout,
+      );
 
       Map<String, dynamic> json;
       try {
@@ -799,7 +877,10 @@ class De1Handler {
 
   Future<Response> _shotSettingsHandler(Request request) async {
     return withDe1((_) async {
-      final payload = await request.readAsString();
+      final payload = await readBoundedRequestBodyString(
+        request,
+        maxBytes: largeRequestBodyBytes,
+      );
 
       Map<String, dynamic> json;
       try {
