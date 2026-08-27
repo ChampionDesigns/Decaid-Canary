@@ -43,6 +43,7 @@ void main() {
     String baseUrl = 'https://decentespresso.com',
     Future<bool> Function(String callerId) requireConsent = _allowConsent,
     void Function()? onAuthFailure,
+    Future<bool> Function()? isAuthKnownInvalid,
   }) {
     return DecentProxyService(
       httpClient: http_testing.MockClient(handler),
@@ -50,6 +51,7 @@ void main() {
       requireConsent: requireConsent,
       baseUrl: baseUrl,
       onAuthFailure: onAuthFailure,
+      isAuthKnownInvalid: isAuthKnownInvalid,
     );
   }
 
@@ -505,5 +507,128 @@ void main() {
     await service.proxyGet(callerId: 'skin', path: 'support/api/sn');
 
     expect(failures, 0);
+  });
+
+  test('forwards when auth is not known-invalid', () async {
+    await linkAccount();
+    final service = buildService(
+      (request) async => http.Response('ok', 200),
+      isAuthKnownInvalid: () async => false,
+    );
+
+    final response = await service.proxyGet(
+      callerId: 'skin',
+      path: 'support/api/sn',
+    );
+
+    expect(response.statusCode, 200);
+  });
+
+  test(
+    'blocks known-invalid credentials locally without upstream traffic',
+    () async {
+      await linkAccount();
+      final service = buildService((request) async {
+        fail(
+          'must not call upstream when credentials are known-invalid: '
+          '${request.url}',
+        );
+      }, isAuthKnownInvalid: () async => true);
+
+      await expectLater(
+        service.proxyGet(callerId: 'skin', path: 'support/api/sn'),
+        throwsA(isA<DecentAccountAuthInvalidException>()),
+      );
+    },
+  );
+
+  test('successful login restores proxy access after a block', () async {
+    await store.write(key: 'email', value: 'old@example.com');
+    await store.write(key: 'password', value: 'stale_cryptpw');
+    final oldAuth = base64Encode(utf8.encode('old@example.com:stale_cryptpw'));
+    final accountService = DecentAccountService(
+      httpClient: http_testing.MockClient((request) async {
+        if (request.headers['authorization'] == 'Basic $oldAuth') {
+          return http.Response('0\n', 200); // rejected
+        }
+        return http.Response('newcryptpw\n', 200); // accepted
+      }),
+      credentialStore: store,
+    );
+
+    // Stale stored credentials are rejected by validation: auth is
+    // known-invalid and the proxy blocks locally.
+    expect(await accountService.verifyStoredCredentials(), isFalse);
+    expect(await accountService.isAuthKnownInvalid(), isTrue);
+
+    final service = buildService(
+      (request) async => http.Response('ok', 200),
+      isAuthKnownInvalid: () => accountService.isAuthKnownInvalid(),
+    );
+
+    await expectLater(
+      service.proxyGet(callerId: 'skin', path: 'support/api/sn'),
+      throwsA(isA<DecentAccountAuthInvalidException>()),
+    );
+
+    // A successful login flips the real auth state; proxy traffic flows again.
+    expect(await accountService.login('new@example.com', 'goodpw'), isTrue);
+    expect(await accountService.isAuthKnownInvalid(), isFalse);
+
+    final response = await service.proxyGet(
+      callerId: 'skin',
+      path: 'support/api/sn',
+    );
+    expect(response.statusCode, 200);
+  });
+
+  test(
+    'upstream 401 invalidates auth and the next proxy call is blocked',
+    () async {
+      await linkAccount();
+      var authInvalid = false;
+      var upstreamCalls = 0;
+
+      final service = buildService(
+        (request) async {
+          upstreamCalls++;
+          if (upstreamCalls == 1) {
+            return http.Response('unauthorized', 401);
+          } else {
+            fail('must not call upstream after auth is known-invalid');
+          }
+        },
+        onAuthFailure: () => authInvalid = true,
+        isAuthKnownInvalid: () async => authInvalid,
+      );
+
+      final response = await service.proxyGet(
+        callerId: 'skin',
+        path: 'support/api/sn',
+      );
+      expect(response.statusCode, 401);
+      expect(upstreamCalls, 1);
+
+      await expectLater(
+        service.proxyGet(callerId: 'skin', path: 'support/api/sn'),
+        throwsA(isA<DecentAccountAuthInvalidException>()),
+      );
+      expect(upstreamCalls, 1);
+    },
+  );
+
+  test('indeterminate auth state does not block proxy traffic', () async {
+    await linkAccount();
+    final service = buildService(
+      (request) async => http.Response('ok', 200),
+      isAuthKnownInvalid: () async => false,
+    );
+
+    final response = await service.proxyGet(
+      callerId: 'skin',
+      path: 'support/api/sn',
+    );
+
+    expect(response.statusCode, 200);
   });
 }
