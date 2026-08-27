@@ -859,8 +859,8 @@ class De1Handler {
     return withDe1((_) async {
       final payload = await readBoundedRequestBodyString(
         request,
-        maxBytes: recordRequestBodyBytes,
-        timeout: recordRequestBodyTimeout,
+        maxBytes: largeRequestBodyBytes,
+        timeout: largeRequestBodyTimeout,
       );
 
       Map<String, dynamic> json;
