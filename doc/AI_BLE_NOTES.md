@@ -24,6 +24,12 @@ The single BLE transport is `UniversalBleTransport` in `lib/src/services/ble/uni
 
 `UnifiedDe1Transport` wraps `UniversalBleTransport` and adds MMR read/write on top of raw characteristic I/O. It provides `rawData` stream, `readMmr()`, `writeMmr()`, and typed connection guards (`DeviceNotConnectedException.machine()` on read/write when disconnected).
 
+## Terminal Lifecycle Teardown
+
+`AppLifecycleObserver` treats `detached` and `didRequestAppExit()` as best-effort terminal events. It cancels its state subscriptions, awaits `ConnectionManager.disconnectMachine()`, then `disconnectScale()`, isolates each failure, and disposes the plugin loader last. `paused` and `hidden` preserve active connections.
+
+Android does not guarantee any Dart, activity, application, or Flutter-engine callback for Settings Force stop, SIGKILL, or other abrupt process death. Those paths can skip cleanup entirely and must not be described as supported. Decaid still pins `universal_ble` 2.2.6, whose Android `onDetachedFromEngine()` does not close active central GATT clients, so native engine-detach cleanup is not shipped with this lifecycle change.
+
 ## Connection Flow
 
 `ConnectionManager` supports three distinct connection intents, selected via

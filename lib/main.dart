@@ -638,6 +638,7 @@ void main(List<String> args) async {
       de1Controller: de1Controller,
       displayController: displayController,
       pluginLoaderService: pluginService,
+      connectionManager: connectionManager,
     ),
   );
 
@@ -683,6 +684,7 @@ class AppLifecycleObserver with WidgetsBindingObserver {
   final De1Controller? de1Controller;
   final DisplayController? displayController;
   final PluginLoaderService? pluginLoaderService;
+  final ConnectionManager? connectionManager;
 
   late Timer _memTimer;
   bool _wasBackgrounded = false;
@@ -696,6 +698,7 @@ class AppLifecycleObserver with WidgetsBindingObserver {
     this.de1Controller,
     this.displayController,
     this.pluginLoaderService,
+    this.connectionManager,
   }) {
     _memTimer = Timer.periodic(Duration(minutes: 5), (t) {
       final rss = ProcessInfo.currentRss / (1024 * 1024);
@@ -784,6 +787,16 @@ class AppLifecycleObserver with WidgetsBindingObserver {
       await stateSubscription?.cancel();
     } catch (error, stackTrace) {
       _log.warning('State subscription detach failed', error, stackTrace);
+    }
+    try {
+      await connectionManager?.disconnectMachine();
+    } catch (error, stackTrace) {
+      _log.warning('Machine disconnect failed', error, stackTrace);
+    }
+    try {
+      await connectionManager?.disconnectScale();
+    } catch (error, stackTrace) {
+      _log.warning('Scale disconnect failed', error, stackTrace);
     }
     try {
       await pluginLoaderService?.dispose();
