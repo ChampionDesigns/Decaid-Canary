@@ -253,6 +253,33 @@ failed attachments preserve the previous preference and return control to the
 existing preferred-machine recovery policy (or surface the normal connection
 failure). A connected machine is never replaced.
 
+USB intent is latched on the attach event, before the 500 ms settle delay, and
+automatic preferred-machine selection is paused while latched:
+`AttachReconnectCoordinator.onLatched` cancels the machine reconnect timer and
+supersedes an in-flight automatic/adapter-recovery attempt (generation bump +
+`stopScan`). Automatic connects are refused at `connectMachine` and deferred at
+`_executeConnect` while latched; explicit direct connects, explicit scans, and
+scale-only work are untouched. The `_activeAutomaticMachineAttempt` gate
+requires an active `_isConnecting` operation with automatic/adapter-recovery
+intent, so the sticky default status intent cannot misclassify a direct REST or
+picker connect. A machine connected by the superseded attempt inside the
+settle window is released through the intentional `disconnectMachine()` path
+(both the tracked-connect and remembered quick-connect routes) before the
+queued probe runs, so a BLE connect that finishes mid-window cannot win.
+`_shouldAttemptAttachReconnect` treats that transient machine as
+not-established so settle expiry queues the attach instead of skipping it. A
+single completion helper clears the latch, consumes the supersession marker,
+and resumes whatever the latch interrupted — replaying a deferred automatic
+connect or re-arming recovery.
+
+Startup ordering matters: `ConnectionManager` (and the coordinator
+subscription) is constructed before onboarding initializes `DeviceController`,
+and `DeviceController` subscribes to each service's attach stream before
+awaiting its `initialize()`. `SerialServiceAndroid.initialize()` therefore
+emits one metadata-free startup hint for a non-empty enumeration, and the hint
+flows through the existing latch → settle → probe → adopt path before the
+onboarding scan step calls `connect()`.
+
 Attach attempts never run in parallel with another connect. An attach arriving
 while an automatic/recovery connect is in flight supersedes that scan via the
 existing generation mechanism and runs one coalesced probe as soon as the

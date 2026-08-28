@@ -219,7 +219,10 @@ Detach and unknown USB actions do not emit attach hints.
 `DeviceController` aggregates notifier streams without adding attach events to
 the required `DeviceScanner` interface. A scanner exposes attach hints only when
 it also implements `DeviceAttachNotifier`, so BLE, Wi-Fi, and simulated scanners
-remain unchanged.
+remain unchanged. It subscribes to each service's attach stream before awaiting
+that service's `initialize()`, so an attach hint emitted from inside
+initialization (such as the serial service's startup enumeration hint) is not
+lost.
 
 `AttachReconnectCoordinator` owns the attach subscription, configurable 500 ms
 settle timer, burst coalescing, in-flight guard, and disposal. Disposal waits
@@ -247,13 +250,28 @@ adopts the connected machine, and persists its USB device id as the preferred
 machine. A stale BLE preference, a different preferred USB machine, a
 simulated preference, or no preference at all are all overridden by the
 physically attached machine; no BLE scan runs and no machine picker opens.
+
+USB intent is latched as soon as the attach event is received, not at settle
+expiry. `AttachReconnectCoordinator.onLatched` arms while `ConnectionManager`
+pauses passive automatic selection: the machine reconnect timer is cancelled,
+and an in-flight automatic/adapter-recovery attempt is superseded through the
+scan-generation mechanism and `stopScan()`. While latched, automatic machine
+connects are refused at `connectMachine()` and deferred at `_executeConnect`;
+explicit direct connects, explicit scans, and scale-only work are not
+interrupted. A machine that an already-superseded automatic attempt connects
+inside the settle window is released through the intentional disconnect path
+before the queued probe runs, so the USB machine cannot lose the race to a BLE
+connection that completes mid-window.
 An attached machine that fails to connect preserves the previous preference
 and returns control to the existing preferred-machine recovery policy (or
 surfaces the normal machine-connection failure when no preference exists).
 Unsupported or uncorrelated attachments change nothing — no scan, no picker,
 no preference update, and an already scheduled recovery attempt is left
 alone. A machine that is already connected is never replaced; the attach
-attempt re-checks before executing.
+attempt re-checks before executing. When the latch pauses an interrupted
+automatic connect or recovery attempt and the probe does not adopt a machine,
+the interrupted automatic policy resumes (recovery re-arms its reconnect
+timer, or the deferred automatic connect replays) once the latch clears.
 
 When the probe capability is unavailable (a notifier-only scanner, or a
 `DeviceController` whose originating service cannot probe), the original
@@ -268,6 +286,16 @@ is superseded through the existing scan-generation mechanism, while explicit
 user scans and scale-only connects are waited out. The queued probe runs
 before other drained work, re-checks that no machine connected meanwhile, and
 never runs in parallel with another connect.
+
+At startup, `SerialServiceAndroid.initialize()` subscribes to the platform USB
+event stream before enumerating (closing the list-versus-listener gap) and,
+when enumeration finds devices, emits one metadata-free startup attach hint.
+The hint reuses the latch → settle → probe → adopt path, so a supported USB
+DE1 already attached before Decaid starts takes priority over a saved BLE
+preference. One generic hint is deliberate: the coordinator keeps only the
+latest burst event, and a null-id event makes the probe inspect all not-yet-
+known USB devices; an unrelated keyboard or scale still resolves to
+"unsupported" and the normal policy continues.
 
 The original incident showed 20.3 seconds between USB enumeration and connection
 because recovery was waiting for its backoff timer; the existing backoff can
