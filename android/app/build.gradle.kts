@@ -37,18 +37,18 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file("canary-release.keystore")
-            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "442f4e4bca093a8d9c67914c"
-            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "canary"
-            keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "442f4e4bca093a8d9c67914c"
+            storeFile = file("debug.keystore")
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "android"
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "androiddebugkey"
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "android"
         }
     }
 
     buildTypes {
         getByName("release") {
-            // Sign with the local canary keystore when present; CI has no
-            // keystore and Gradle then emits app-release-unsigned.apk.
-            if (file("canary-release.keystore").exists()) {
+            // Sign when the keystore is present; CI has none and Gradle then
+            // emits app-release-unsigned.apk instead of failing the build.
+            if (file("debug.keystore").exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }

@@ -78,3 +78,7 @@ pubspec_overrides.yaml
 .superpowers/
 # Added by code-review-graph
 .code-review-graph/
+
+# Signing identities. The password is public by design; the keystore is not.
+*.keystore
+*.jks
