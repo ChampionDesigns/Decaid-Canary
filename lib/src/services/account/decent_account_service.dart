@@ -4,16 +4,12 @@ import 'package:clock/clock.dart';
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 
-List<String> parseSerialNumbers(String body) {
-  return const LineSplitter()
-      .convert(body)
-      .map((line) => line.trim())
-      .where((line) => line.isNotEmpty)
-      .map((line) => line.split(RegExp(r'\s+')).first)
-      .where((serial) => serial.isNotEmpty)
-      .toSet()
-      .toList();
-}
+import 'registered_decent_machine.dart';
+
+/// Serial-only projection of the account machine-list body, kept for
+/// compatibility; the richer records come from [parseRegisteredMachines].
+List<String> parseSerialNumbers(String body) =>
+    parseRegisteredMachines(body).map((m) => m.serial).toList();
 
 abstract class CredentialStore {
   Future<String?> read({required String key});
