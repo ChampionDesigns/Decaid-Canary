@@ -76,12 +76,27 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Android APK
-        run: ./flutter_with_commit.sh build apk --release
+      - name: Restore Android signing keystore
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_B64"
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > android/app/canary-release.keystore
+
+      - name: Build signed Android APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_PASSWORD"
+          ./flutter_with_commit.sh build apk --release
 
       - name: Package Android APK
         run: |
-          APK=$(ls build/app/outputs/flutter-apk/app-release*.apk | head -1)
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          test -f "$APK"
           cp "$APK" decaid-canary-android-develop-${{ steps.build-id.outputs.short_sha }}.apk
 
       - name: Upload Android APK

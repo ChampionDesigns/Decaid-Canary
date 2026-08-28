@@ -35,20 +35,19 @@ android {
         versionName = flutter.versionName
     }
 
+    val releaseKeystore = file("canary-release.keystore")
     signingConfigs {
         create("release") {
-            storeFile = file("debug.keystore")
-            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "android"
-            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "androiddebugkey"
-            keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "android"
+            storeFile = releaseKeystore
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = "canary"
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
         }
     }
 
     buildTypes {
         getByName("release") {
-            // Sign when the keystore is present; CI has none and Gradle then
-            // emits app-release-unsigned.apk instead of failing the build.
-            if (file("debug.keystore").exists()) {
+            if (releaseKeystore.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
