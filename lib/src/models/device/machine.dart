@@ -79,24 +79,53 @@ class MachineSnapshot {
     return value;
   }
 
-  /// Puck hydraulic resistance **R = P / F²** in bar·s²/mL².
+  // Each of the three has a MEASURED counterpart on the Bengle puck-estimator
+  // sensor (`/api/v1/sensors/<machine>-puckestimator`, live stream at
+  // `ws/v1/sensors/<id>/snapshot`). Same quantity, same units; the difference is
+  // which flow it is computed from. These use reported group flow (Q_in) — the
+  // only flow every machine has. The firmware uses Q_puck, the flow actually
+  // passing through the puck, taken from the pair its resistance fit consumes.
+  // They agree in steady state and diverge during compliance transients.
+  //
+  // PREFER THE MEASURED VALUE WHEN THE MACHINE OFFERS IT. These exist because
+  // they work everywhere — every machine, including a plain DE1, and every
+  // historical shot, since they are recomputed on read.
+  //
+  // The two also go null at DIFFERENT times, so a client switching between them
+  // sees gaps in different places rather than a continuous trace: these gate on
+  // `flow >= 0.3 && pressure >= 0.3`, while the measured ones follow the
+  // firmware's own QOUT_GATE and its not-yet-observed sentinel. Switching source
+  // mid-shot will look like a glitch unless the client expects it.
+
+  /// Puck hydraulic resistance **R = P / F²** in bar·s²/mL², DERIVED.
   ///
   /// How strongly the puck resists water flow; rises as the puck compacts
   /// or clogs, drops on channeling/erosion. `null` (and omitted from
   /// [toJson]) unless flow ≥ 0.3 mL/s and pressure ≥ 0.3 bar.
-  double? get puckResistance => _derivedOrNull(pressure / (flow * flow));
+  ///
+  /// Measured equivalent: `r2` on the puck-estimator sensor (the firmware's
+  /// n=2 resistance fit). Prefer it when present.
+  double? get puckResistanceDerived => _derivedOrNull(pressure / (flow * flow));
 
-  /// Hydraulic load impedance **Z = P / F** in bar·s/mL.
+  /// Hydraulic load impedance **Z = P / F** in bar·s/mL, DERIVED.
   ///
   /// Pressure-to-flow ratio at the current operating point (the "AC"
-  /// analogue of [puckResistance]). Same ≥ 0.3 gating as [puckResistance].
-  double? get loadImpedance => _derivedOrNull(pressure / flow);
-
-  /// Hydraulic power delivered to the puck **W = 0.1 · P · F** in watts
-  /// (1 bar × 1 mL/s = 0.1 W; espresso is roughly 0.5–4 W).
+  /// analogue of [puckResistanceDerived]). Same ≥ 0.3 gating.
   ///
-  /// Same ≥ 0.3 gating as [puckResistance].
-  double? get hydraulicPower => _derivedOrNull(0.1 * pressure * flow);
+  /// Measured equivalent: `r1` on the puck-estimator sensor (the firmware's
+  /// n=1 resistance fit). Prefer it when present.
+  double? get loadImpedanceDerived => _derivedOrNull(pressure / flow);
+
+  /// Hydraulic power delivered to the puck **W = 0.1 · P · F** in watts,
+  /// DERIVED (1 bar × 1 mL/s = 0.1 W; espresso is roughly 0.5–4 W).
+  ///
+  /// Same ≥ 0.3 gating as [puckResistanceDerived].
+  ///
+  /// Measured equivalent: `hydraulicPowerMeasured` on the puck-estimator
+  /// sensor, present when the machine reports BengleEstSample rev ≥ 3. Prefer
+  /// it when present — it uses Q_puck, so it is the power actually delivered
+  /// rather than the power supplied.
+  double? get hydraulicPowerDerived => _derivedOrNull(0.1 * pressure * flow);
 
   MachineSnapshot copyWith({
     DateTime? timestamp,
@@ -146,9 +175,12 @@ class MachineSnapshot {
       // Derived channels. Keys are OMITTED (not null) when gated — old skins
       // never see them, and consumers can rely on key presence as the
       // validity signal.
-      if (puckResistance != null) 'puckResistance': puckResistance,
-      if (loadImpedance != null) 'loadImpedance': loadImpedance,
-      if (hydraulicPower != null) 'hydraulicPower': hydraulicPower,
+      if (puckResistanceDerived != null)
+        'puckResistanceDerived': puckResistanceDerived,
+      if (loadImpedanceDerived != null)
+        'loadImpedanceDerived': loadImpedanceDerived,
+      if (hydraulicPowerDerived != null)
+        'hydraulicPowerDerived': hydraulicPowerDerived,
     };
   }
 
