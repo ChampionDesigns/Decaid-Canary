@@ -144,7 +144,7 @@ class _FakeBlePlatform extends UniversalBlePlatform {
 }
 
 class _TrackingFakeBleTransport extends FakeBleTransport {
-  int disconnectCalls = 0;
+  // disconnectCalls is inherited from FakeBleTransport, which now counts it.
   int disposeCalls = 0;
   bool _disposed = false;
 
@@ -410,9 +410,11 @@ void main() {
         final prefixes = platform.startScanCalls
             .map((c) => c.filter?.withNamePrefix ?? const <String>[])
             .toList();
-        expect(prefixes.first, [
-          'Decent Scale',
-        ], reason: 'the raced watch start settles before the burst starts');
+        expect(
+          prefixes.first,
+          ['Decent Scale'],
+          reason: 'the raced watch start settles before the burst starts',
+        );
         expect(
           prefixes[1],
           isEmpty,
