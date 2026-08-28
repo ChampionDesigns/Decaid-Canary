@@ -149,7 +149,7 @@ jobs:
       - name: Create development ZIP
         run: |
           cd build/macos/Build/Products/Release
-          ditto -c -k --keepParent Decaid-Canary.app ../../../../../decaid-canary-macos-develop-${{ steps.build-id.outputs.short_sha }}.zip
+          ditto -c -k --keepParent Decide.app ../../../../../decaid-canary-macos-develop-${{ steps.build-id.outputs.short_sha }}.zip
 
       - name: Upload macOS app
         uses: actions/upload-artifact@v7

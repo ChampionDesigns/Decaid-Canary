@@ -73,7 +73,7 @@ export PATH="${TOOLS_DIR}/bin:${PATH}"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
-APPDIR="${WORK_DIR}/Decaid-Canary.AppDir"
+APPDIR="${WORK_DIR}/Decide.AppDir"
 mkdir -p "${APPDIR}/usr/lib/decaid-canary"
 cp -a "${BUNDLE}/." "${APPDIR}/usr/lib/decaid-canary/"
 install -m 0755 "${APPRUN}" "${APPDIR}/AppRun"

@@ -146,19 +146,19 @@ jobs:
       - name: Create release ZIP
         run: |
           cd build/macos/Build/Products/Release
-          ditto -c -k --keepParent Decaid-Canary.app ../../../../../decaid-canary-macos-${{ needs.release-metadata.outputs.version }}.zip
+          ditto -c -k --keepParent Decide.app ../../../../../decaid-canary-macos-${{ needs.release-metadata.outputs.version }}.zip
 
       # ---- DMG (unsigned) ----
       - name: Create DMG
         run: |
-          APP="build/macos/Build/Products/Release/Decaid-Canary.app"
+          APP="build/macos/Build/Products/Release/Decide.app"
           DMG_STAGE="$RUNNER_TEMP/dmg-stage"
           rm -rf "$DMG_STAGE"
           mkdir -p "$DMG_STAGE"
           cp -R "$APP" "$DMG_STAGE/"
           ln -s /Applications "$DMG_STAGE/Applications"
           hdiutil create \
-            -volname Decaid-Canary \
+            -volname Decide \
             -srcfolder "$DMG_STAGE" \
             -ov -format UDZO \
             decaid-canary-macos-${{ needs.release-metadata.outputs.version }}.dmg
@@ -172,11 +172,11 @@ jobs:
           mkdir -p "$MOUNT"
           hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$MOUNT"
           trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
-          test -d "$MOUNT/Decaid-Canary.app"
+          test -d "$MOUNT/Decide.app"
           test -L "$MOUNT/Applications"
           mkdir -p "$RUNNER_TEMP/Applications"
-          cp -R "$MOUNT/Decaid-Canary.app" "$RUNNER_TEMP/Applications/"
-          "$RUNNER_TEMP/Applications/Decaid-Canary.app/Contents/MacOS/Decaid-Canary" --print-storage-paths
+          cp -R "$MOUNT/Decide.app" "$RUNNER_TEMP/Applications/"
+          "$RUNNER_TEMP/Applications/Decide.app/Contents/MacOS/Decide" --print-storage-paths
 
       - uses: actions/upload-artifact@v7
         with:
@@ -372,14 +372,14 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $extract
           # GUI-subsystem executables cannot be awaited with & or -Wait on the
           # runner; inherit the console and wait with a bound.
-          $exe = Join-Path $extract 'Decaid-Canary.exe'
+          $exe = Join-Path $extract 'Decide.exe'
           $proc = Start-Process -FilePath $exe -ArgumentList '--print-storage-paths' -NoNewWindow -PassThru
           if (-not $proc.WaitForExit(60000)) {
             $proc.Kill()
-            throw 'Decaid-Canary.exe did not exit within 60s'
+            throw 'Decide.exe did not exit within 60s'
           }
-          if ($proc.ExitCode -ne 0) { throw "Decaid-Canary.exe exited with code $($proc.ExitCode)" }
-          foreach ($name in @('Decaid-Canary.exe','flutter_windows.dll','vcruntime140.dll','msvcp140.dll','data')) {
+          if ($proc.ExitCode -ne 0) { throw "Decide.exe exited with code $($proc.ExitCode)" }
+          foreach ($name in @('Decide.exe','flutter_windows.dll','vcruntime140.dll','msvcp140.dll','data')) {
             if (-not (Test-Path (Join-Path $extract $name))) { throw "missing $name in extracted ZIP" }
           }
 
@@ -521,7 +521,7 @@ jobs:
             decaid-canary-${{ needs.release-metadata.outputs.version }}-SHA256SUMS.txt
             decaid-canary-latest-SHA256SUMS.txt
           tag_name: ${{ needs.release-metadata.outputs.tag }}
-          name: Decaid-Canary ${{ needs.release-metadata.outputs.version }}
+          name: Decide ${{ needs.release-metadata.outputs.version }}
           draft: false
           prerelease: ${{ contains(needs.release-metadata.outputs.version, 'beta') || contains(needs.release-metadata.outputs.version, 'alpha') || contains(needs.release-metadata.outputs.version, 'rc') }}
           body_path: release-notes.md
