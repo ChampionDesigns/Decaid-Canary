@@ -244,9 +244,9 @@ void main() {
       });
 
       test('validates only once per session', () async {
-        var calls = 0;
+        var loginCalls = 0;
         httpClient = http_testing.MockClient((request) async {
-          calls++;
+          if (request.url.path == '/support/api/login_test') loginCalls++;
           return http.Response('cryptpw_abc123', 200);
         });
         await store.write(key: 'email', value: 'returning@example.com');
@@ -259,16 +259,19 @@ void main() {
 
         expect(await service.isLoggedIn(), isTrue);
         expect(await service.isLoggedIn(), isTrue);
-        expect(calls, 1);
+        expect(loginCalls, 1);
       });
 
       test(
         'retries validation after an indeterminate network failure',
         () async {
-          var calls = 0;
+          var loginCalls = 0;
           httpClient = http_testing.MockClient((request) async {
-            calls++;
-            if (calls == 1) throw Exception('SocketException');
+            if (request.url.path != '/support/api/login_test') {
+              return http.Response('cryptpw_abc123\n', 200);
+            }
+            loginCalls++;
+            if (loginCalls == 1) throw Exception('SocketException');
             return http.Response('cryptpw_abc123\n', 200);
           });
           await store.write(key: 'email', value: 'returning@example.com');
@@ -282,7 +285,7 @@ void main() {
 
           expect(await service.isLoggedIn(), isFalse);
           expect(await service.isLoggedIn(), isTrue);
-          expect(calls, 2);
+          expect(loginCalls, 2);
         },
       );
 
@@ -694,11 +697,12 @@ void main() {
       }
 
       Future<void> seedMachinesCache(
-        List<Map<String, dynamic>> machines,
-      ) async {
+        List<Map<String, dynamic>> machines, {
+        String account = 'user@example.com',
+      }) async {
         await store.write(
           key: 'registered_machines',
-          value: jsonEncode({'machines': machines}),
+          value: jsonEncode({'account': account, 'machines': machines}),
         );
       }
 
@@ -930,7 +934,7 @@ void main() {
           await seedAccount('old@example.com', 'oldcrypt');
           await seedMachinesCache([
             {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
-          ]);
+          ], account: 'old@example.com');
           await store.write(
             key: 'identity_mappings',
             value: jsonEncode({
@@ -989,7 +993,7 @@ void main() {
           await seedAccount('good@example.com', 'cryptpw_abc123');
           await seedMachinesCache([
             {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
-          ]);
+          ], account: 'good@example.com');
           service = DecentAccountService(
             httpClient: httpClient,
             credentialStore: store,
@@ -1114,6 +1118,183 @@ void main() {
             ),
             isNull,
           );
+        },
+      );
+
+      test('hasUsableAccountCache stays false without linked credentials even '
+          'with a cached machine list', () async {
+        await seedMachinesCache([
+          {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+        ]);
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        await service.initialize();
+
+        expect(service.hasUsableAccountCache, isFalse);
+        expect(service.usableRegisteredMachines, isEmpty);
+      });
+
+      test('a machine cache bound to another account is not loaded', () async {
+        await seedAccount('user@example.com', 'cryptpw_abc123');
+        await seedMachinesCache([
+          {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+        ], account: 'other@example.com');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        await service.initialize();
+
+        expect(service.usableRegisteredMachines, isEmpty);
+      });
+
+      test('a malformed machine cache is ignored', () async {
+        await seedAccount('user@example.com', 'cryptpw_abc123');
+        await store.write(key: 'registered_machines', value: '{not json');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        await service.initialize();
+
+        expect(service.usableRegisteredMachines, isEmpty);
+      });
+
+      test(
+        'a mapping persisted without an account binding is not loaded',
+        () async {
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          await store.write(
+            key: 'identity_mappings',
+            value: jsonEncode({
+              'mappings': [
+                {
+                  'transportType': 'ble',
+                  'deviceId': 'AA:BB:CC',
+                  'serial': '1337',
+                },
+              ],
+            }),
+          );
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+
+          expect(
+            await service.lookupMapping(
+              transportType: 'ble',
+              deviceId: 'AA:BB:CC',
+            ),
+            isNull,
+          );
+        },
+      );
+
+      test('saveMapping without a linked account throws', () async {
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+        await service.initialize();
+
+        expect(
+          () => service.saveMapping(
+            transportType: 'ble',
+            deviceId: 'AA:BB:CC',
+            serial: '1338',
+          ),
+          throwsA(isA<StateError>()),
+        );
+      });
+
+      test('a later successful validation after a transient failure refreshes '
+          'the machine list', () async {
+        var loginCalls = 0;
+        var snCalls = 0;
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/login_test') {
+            loginCalls++;
+            if (loginCalls == 1) throw Exception('SocketException');
+            return http.Response('cryptpw_abc123\n', 200);
+          }
+          if (request.url.path == '/support/api/sn') {
+            snCalls++;
+            return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+          }
+          return http.Response('0\n', 200);
+        });
+        await seedAccount('user@example.com', 'cryptpw_abc123');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+          retryInterval: Duration.zero,
+        );
+
+        await service.initialize();
+        await pumpEventQueue();
+
+        // Startup validation failed transiently; no refresh happened.
+        expect(snCalls, 0);
+        expect(service.usableRegisteredMachines, isEmpty);
+
+        // A later successful validation refreshes the machine list.
+        expect(await service.isLoggedIn(), isTrue);
+        await pumpEventQueue();
+
+        expect(snCalls, 1);
+        expect(service.usableRegisteredMachines.map((m) => m.serial), ['1338']);
+      });
+
+      test(
+        'accountReady completes once the shared startup refresh settles',
+        () async {
+          final snGate = Completer<void>();
+          var snCalls = 0;
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/login_test') {
+              return http.Response('cryptpw_abc123\n', 200);
+            }
+            if (request.url.path == '/support/api/sn') {
+              snCalls++;
+              await snGate.future;
+              return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+            }
+            return http.Response('0\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+          await pumpEventQueue();
+
+          final ready = service.accountReady;
+          expect(snCalls, 1);
+
+          snGate.complete();
+          await ready;
+
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1338',
+          ]);
+          expect(snCalls, 1);
         },
       );
     });
