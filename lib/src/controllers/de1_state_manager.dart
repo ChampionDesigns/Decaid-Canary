@@ -211,6 +211,10 @@ class De1StateManager with WidgetsBindingObserver {
     bool allowPrompts = true,
   }) async {
     final account = _accountService!;
+    // Wait for the shared startup validation + refresh so we resolve against
+    // the post-refresh machine list, not an empty pre-refresh state.
+    await account.accountReady;
+    if (!_stillCurrent(machine)) return;
     final rawInfo = machine.rawMachineInfo;
     final rawSerial = rawInfo.serialNumber;
     final rawModelValue = machine.rawModelValue ?? 0;
@@ -265,10 +269,10 @@ class De1StateManager with WidgetsBindingObserver {
     RegisteredDecentMachine record, {
     required bool persistMapping,
   }) async {
-    // Unknown SKU formats retain the raw machine model on exact serial match.
+    if (!_stillCurrent(machine)) return;
     final model = record.recognizedModel?.name ?? machine.rawMachineInfo.model;
     machine.applyEffectiveIdentity(serial: record.serial, model: model);
-    if (persistMapping && _stillCurrent(machine)) {
+    if (persistMapping) {
       final account = _accountService;
       if (account != null) {
         try {
@@ -338,8 +342,8 @@ class De1StateManager with WidgetsBindingObserver {
         return AlertDialog(
           title: const Text('Link your Decent account'),
           content: const Text(
-            'This machine does not report a serial number. Link your Decent '
-            'account so Decaid can identify it.',
+            'This machine does not report a serial number or machine model. '
+            'Link your Decent account so Decaid can identify it.',
           ),
           actions: [
             TextButton(

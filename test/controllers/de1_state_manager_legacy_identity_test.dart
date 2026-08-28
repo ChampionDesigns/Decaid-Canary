@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -192,7 +193,10 @@ void main() {
     }
     await store.write(
       key: 'registered_machines',
-      value: jsonEncode({'machines': machines}),
+      value: jsonEncode({
+        'account': withCredentials ? 'user@example.com' : null,
+        'machines': machines,
+      }),
     );
   }
 
@@ -474,8 +478,11 @@ void main() {
 
   testWidgets('accepting the link prompt navigates to AccountPage and retries '
       'resolution once', (tester) async {
+    // The mock account starts with no machines; after linking, the account
+    // lists the connected machine so the post-link refresh can resolve it.
+    final machines = <Map<String, dynamic>>[];
     final accountService = await seededService(
-      const [],
+      machines,
       withCredentials: false,
     );
     await createManager(tester, accountService: accountService);
@@ -491,14 +498,11 @@ void main() {
     // User links an account that lists the machine, then returns.
     await store.write(key: 'email', value: 'user@example.com');
     await store.write(key: 'password', value: 'cryptpw_abc123');
-    await store.write(
-      key: 'registered_machines',
-      value: jsonEncode({
-        'machines': [
-          {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
-        ],
-      }),
-    );
+    machines.add({
+      'serial': '1338',
+      'sku': 'DE-DE1PRO220V7-00533',
+      'model': 'DE1Pro',
+    });
     await accountService.initialize();
 
     navigatorKey.currentState!.pop();
@@ -547,6 +551,141 @@ void main() {
     expect(find.text('Link your Decent account'), findsNothing);
     expect(find.text('Select your machine'), findsNothing);
     await mockDe1.dispose();
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets(
+    'a machine connecting during the startup refresh resolves once the '
+    'refresh completes',
+    (tester) async {
+      final snGate = Completer<void>();
+      final client = http_testing.MockClient((request) async {
+        if (request.url.path == '/support/api/login_test') {
+          return http.Response('cryptpw_abc123\n', 200);
+        }
+        if (request.url.path == '/support/api/sn') {
+          await snGate.future;
+          return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+        }
+        return http.Response('0\n', 200);
+      });
+      final service = DecentAccountService(
+        httpClient: client,
+        credentialStore: store,
+      );
+      await store.write(key: 'email', value: 'user@example.com');
+      await store.write(key: 'password', value: 'cryptpw_abc123');
+      await service.initialize();
+      await createManager(tester, accountService: service);
+
+      final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+      await pumpUntil(tester, () async {});
+
+      // Refresh still pending: resolution must wait, not resolve empty.
+      expect(de1.machineInfo.serialNumber, '0');
+
+      snGate.complete();
+      await pumpUntil(tester, () async {});
+
+      expect(de1.machineInfo.serialNumber, '1338');
+      expect(de1.machineInfo.model, 'DE1Pro');
+      await disconnectAndSettle(tester);
+    },
+  );
+
+  testWidgets(
+    'a machine replaced while the startup refresh is pending is not mutated',
+    (tester) async {
+      final snGate = Completer<void>();
+      final client = http_testing.MockClient((request) async {
+        if (request.url.path == '/support/api/login_test') {
+          return http.Response('cryptpw_abc123\n', 200);
+        }
+        if (request.url.path == '/support/api/sn') {
+          await snGate.future;
+          return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+        }
+        return http.Response('0\n', 200);
+      });
+      final service = DecentAccountService(
+        httpClient: client,
+        credentialStore: store,
+      );
+      await store.write(key: 'email', value: 'user@example.com');
+      await store.write(key: 'password', value: 'cryptpw_abc123');
+      await service.initialize();
+      await createManager(tester, accountService: service);
+
+      final first = await connectMachine(tester, v13Model: 0, serialN: 0);
+      await pumpUntil(tester, () async {});
+
+      // Replace the machine while the refresh is still pending.
+      final second = await connectMachine(tester, v13Model: 0, serialN: 0);
+      await pumpUntil(tester, () async {});
+
+      snGate.complete();
+      await pumpUntil(tester, () async {});
+
+      // The stale machine must never be mutated.
+      expect(first.machineInfo.serialNumber, '0');
+      expect(first.machineInfo.model, 'Unknown');
+      expect(second.machineInfo.serialNumber, '1338');
+      await disconnectAndSettle(tester);
+    },
+  );
+
+  testWidgets('a linked account with a transient refresh failure keeps the raw '
+      'identity and does not prompt to link again', (tester) async {
+    final client = http_testing.MockClient((request) async {
+      if (request.url.path == '/support/api/login_test') {
+        return http.Response('cryptpw_abc123\n', 200);
+      }
+      if (request.url.path == '/support/api/sn') {
+        throw Exception('timeout');
+      }
+      return http.Response('0\n', 200);
+    });
+    final service = DecentAccountService(
+      httpClient: client,
+      credentialStore: store,
+    );
+    await store.write(key: 'email', value: 'user@example.com');
+    await store.write(key: 'password', value: 'cryptpw_abc123');
+    await service.initialize();
+    await createManager(tester, accountService: service);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Link your Decent account'), findsNothing);
+    expect(de1.machineInfo.serialNumber, '0');
+    expect(de1.machineInfo.model, 'Unknown');
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets('a definitively rejected account still gets the nonblocking '
+      'link prompt', (tester) async {
+    final client = http_testing.MockClient((request) async {
+      return http.Response('0\n', 200);
+    });
+    final service = DecentAccountService(
+      httpClient: client,
+      credentialStore: store,
+    );
+    await store.write(key: 'email', value: 'user@example.com');
+    await store.write(key: 'password', value: 'stale_cryptpw');
+    await service.initialize();
+    await createManager(tester, accountService: service);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Link your Decent account'), findsOneWidget);
+
+    await tester.tap(find.text('Not now'));
+    await pumpUntil(tester, () async {});
+
+    expect(de1.machineInfo.serialNumber, '0');
     await disconnectAndSettle(tester);
   });
 }
