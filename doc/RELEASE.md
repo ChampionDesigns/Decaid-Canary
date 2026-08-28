@@ -4,19 +4,17 @@ This document describes how to create releases for the **Decaid-Canary** fork.
 
 ## Overview
 
-Decaid-Canary is a canary fork of upstream Decaid. Releases are **unsigned,
-artifact-only**: no Apple Developer ID / notarization, no TestFlight upload, no
-Android distribution keystore in CI, and no Sparkle auto-update feed. Every
-artifact is published to the `ChampionDesigns/Decaid-Canary` GitHub Release for
-manual download.
+Decaid-Canary is a canary fork of upstream Decaid. Releases are artifact-only:
+no Apple Developer ID / notarization, no TestFlight upload, and no Sparkle
+auto-update feed. Android APKs are signed in CI; every artifact is published to
+the `ChampionDesigns/Decaid-Canary` GitHub Release for manual download.
 
 Signing exceptions:
 
-- **Android (local builds only):** `android/app/canary-release.keystore` is a
-  private keystore kept out of the repository. When it exists, local release
-  builds are signed with it so the in-app auto-updater can install them. CI has
-  no keystore and emits `app-release-unsigned.apk`. Keep a backup of the
-  keystore; if it is lost, existing installs can no longer be auto-updated.
+- **Android:** `android/app/canary-release.keystore` is private and kept out of
+  the repository. CI restores it from GitHub Actions secrets and signs release
+  builds so the in-app auto-updater can install them. Keep a private backup; if
+  the keystore is lost, existing installs can no longer be auto-updated.
 - **macOS:** builds use Xcode's default ad-hoc signature only. No Developer ID,
   no notarization, no stapling. Users must right-click > Open the first time.
 - **iOS:** the IPA is unsigned and must be signed with a profile of the user's
@@ -28,7 +26,7 @@ Signing exceptions:
 Decaid-Canary uses git tags to trigger automatic releases. When you push a tag,
 GitHub Actions will:
 
-1. Build all supported platforms (unsigned)
+1. Build all supported platforms (Android signed; other platforms unsigned)
 2. Package the macOS ZIP + DMG, Linux tarballs + AppImages, and the VC++-runtime
    bundle in the Windows ZIP
 3. Generate release notes from merged pull requests using GitHub's release-notes
@@ -47,12 +45,12 @@ Each tagged release attaches these files:
 | Linux x86_64 | `decaid-canary-linux-x86_64-<version>.AppImage` | `chmod +x` and run. No installation needed. |
 | Linux ARM64 | `decaid-canary-linux-aarch64-<version>.AppImage` | `chmod +x` and run. No installation needed. |
 | Linux portable | `decaid-canary-linux-x64-<version>.tar.gz`, `decaid-canary-linux-arm64-<version>.tar.gz` | Extract and run `decaid-canary` from the bundle directory. |
-| Android | `decaid-canary-android-<version>-unsigned.apk` | Sign with a key of your choice before installing (CI build); local canary-signed builds are named `app-release.apk`. |
+| Android | `decaid-canary-android-<version>.apk` | Install directly; it is signed with the canary key. |
 | iOS | `decaid-canary-ios-unsigned-<version>.ipa` | Sign with your own provisioning profile before installing. |
 
 All files are covered by `decaid-canary-<version>-SHA256SUMS.txt` in the release.
 
-Every file also ships as a `-latest` alias (`decaid-canary-android-latest-unsigned.apk`,
+Every file also ships as a `-latest` alias (`decaid-canary-android-latest.apk`,
 `decaid-canary-macos-latest.dmg`, `decaid-canary-linux-x86_64-latest.AppImage`, ...), so
 `https://github.com/ChampionDesigns/Decaid-Canary/releases/latest/download/decaid-canary-macos-latest.zip`
 always points at the newest stable release. The aliases are covered by
@@ -147,8 +145,8 @@ Pre-releases are automatically detected by:
 - GitHub's pre-release flag
 
 Update checks query `ChampionDesigns/Decaid-Canary` releases. Android shows an
-in-app download/install flow for builds signed with the canary keystore; all
-other platforms (and unsigned APKs) open the Release page.
+in-app download/install flow for canary-signed builds; all other platforms open
+the Release page.
 
 ## Editing Release Notes
 
@@ -172,10 +170,9 @@ Development builds use stable GitHub Actions artifact names, while the packaged 
 | Windows x64 | `decaid-canary-windows-x64-develop` | `decaid-canary-windows-x64-develop-<short-sha>.zip` |
 | iOS | `decaid-canary-ios-unsigned-develop` | `decaid-canary-ios-unsigned-develop-<short-sha>.ipa` |
 
-## No Distribution Signing
+## Distribution Signing
 
-Decaid-Canary deliberately has no CI signing secrets. The workflows use only the
-automatically provided `GITHUB_TOKEN` (required for checkout, dependency
-downloads, and the GitHub Release API). There is no Apple certificate, no
-provisioning profile, no Android keystore, no TestFlight/App Store Connect
-credentials, and no Sparkle EdDSA key in CI.
+Android CI requires the `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, and
+`ANDROID_KEY_PASSWORD` GitHub Actions secrets. There is no Apple certificate,
+provisioning profile, TestFlight/App Store Connect credential, or Sparkle EdDSA
+key in CI.

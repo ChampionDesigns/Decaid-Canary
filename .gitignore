@@ -79,6 +79,6 @@ pubspec_overrides.yaml
 # Added by code-review-graph
 .code-review-graph/
 
-# Signing identities. The password is public by design; the keystore is not.
+# Signing identities and credentials stay private.
 *.keystore
 *.jks

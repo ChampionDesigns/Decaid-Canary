@@ -78,22 +78,35 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Android APK
-        run: ./flutter_with_commit.sh build apk --release
+      - name: Restore Android signing keystore
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_B64"
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > android/app/canary-release.keystore
 
-      # CI has no canary keystore, so the release APK is unsigned.
-      # Locally-built release APKs are signed with the private canary keystore.
+      - name: Build signed Android APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_PASSWORD"
+          ./flutter_with_commit.sh build apk --release
+
       - name: Rename APK with version
         run: |
-          APK=$(ls build/app/outputs/flutter-apk/app-release*.apk | head -1)
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          test -f "$APK"
           mv "$APK" \
-             build/app/outputs/flutter-apk/decaid-canary-android-${{ needs.release-metadata.outputs.version }}-unsigned.apk
+             build/app/outputs/flutter-apk/decaid-canary-android-${{ needs.release-metadata.outputs.version }}.apk
 
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v7
         with:
           name: android-apk
-          path: build/app/outputs/flutter-apk/decaid-canary-android-${{ needs.release-metadata.outputs.version }}-unsigned.apk
+          path: build/app/outputs/flutter-apk/decaid-canary-android-${{ needs.release-metadata.outputs.version }}.apk
 
   build-macos:
     needs: release-metadata
@@ -457,7 +470,7 @@ jobs:
           set -euo pipefail
           VERSION="${{ needs.release-metadata.outputs.version }}"
           EXPECTED=(
-            "release-artifacts/android-apk/decaid-canary-android-${VERSION}-unsigned.apk"
+            "release-artifacts/android-apk/decaid-canary-android-${VERSION}.apk"
             "release-artifacts/macos-app/decaid-canary-macos-${VERSION}.zip"
             "release-artifacts/macos-app/decaid-canary-macos-${VERSION}.dmg"
             "release-artifacts/linux-app/decaid-canary-linux-x64-${VERSION}.tar.gz"

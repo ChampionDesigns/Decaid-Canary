@@ -9,7 +9,7 @@ VERSION=1.2.3
 ARTIFACTS="$TMP/release-artifacts"
 MANIFEST="$TMP/decaid-canary-latest-SHA256SUMS.txt"
 SOURCE_PATHS=(
-  "android-apk/decaid-canary-android-${VERSION}-unsigned.apk"
+  "android-apk/decaid-canary-android-${VERSION}.apk"
   "macos-app/decaid-canary-macos-${VERSION}.zip"
   "macos-app/decaid-canary-macos-${VERSION}.dmg"
   "linux-app/decaid-canary-linux-x64-${VERSION}.tar.gz"
@@ -20,7 +20,7 @@ SOURCE_PATHS=(
   "ios-ipa-unsigned/decaid-canary-ios-unsigned-${VERSION}.ipa"
 )
 ALIAS_PATHS=(
-  "android-apk/decaid-canary-android-latest-unsigned.apk"
+  "android-apk/decaid-canary-android-latest.apk"
   "macos-app/decaid-canary-macos-latest.zip"
   "macos-app/decaid-canary-macos-latest.dmg"
   "linux-app/decaid-canary-linux-x64-latest.tar.gz"
