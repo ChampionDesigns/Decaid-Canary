@@ -320,6 +320,7 @@ void main() {
     // API model overrides the conflicting raw v13Model=4 (DE1XL).
     expect(de1.machineInfo.model, 'DE1Pro');
     expect(de1.rawMachineInfo.serialNumber, '1338');
+    expect(de1Controller.seenSerials, contains('1338'));
     await disconnectAndSettle(tester);
   });
 
@@ -687,5 +688,72 @@ void main() {
 
     expect(de1.machineInfo.serialNumber, '0');
     await disconnectAndSettle(tester);
+  });
+
+  testWidgets('identity prompts skipped while backgrounded are retried on '
+      'resume', (tester) async {
+    final accountService = await seededService(const [
+      {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await createManager(tester, accountService: accountService);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    // Prompt suppressed while backgrounded.
+    expect(find.text('Select your machine'), findsNothing);
+    expect(de1.machineInfo.serialNumber, '0');
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Select your machine'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await pumpUntil(tester, () async {});
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets('disposing while the startup refresh is pending leaves the '
+      'machine untouched', (tester) async {
+    final snGate = Completer<void>();
+    final client = http_testing.MockClient((request) async {
+      if (request.url.path == '/support/api/login_test') {
+        return http.Response('cryptpw_abc123\n', 200);
+      }
+      if (request.url.path == '/support/api/sn') {
+        await snGate.future;
+        return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+      }
+      return http.Response('0\n', 200);
+    });
+    final service = DecentAccountService(
+      httpClient: client,
+      credentialStore: store,
+    );
+    await store.write(key: 'email', value: 'user@example.com');
+    await store.write(key: 'password', value: 'cryptpw_abc123');
+    await service.initialize();
+    await createManager(tester, accountService: service);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    manager.dispose();
+    await tester.pump();
+
+    snGate.complete();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(de1.machineInfo.serialNumber, '0');
+    expect(de1.machineInfo.model, 'Unknown');
+    expect(find.text('Select your machine'), findsNothing);
+    expect(find.text('Link your Decent account'), findsNothing);
+    de1Controller.disconnect();
+    await tester.pump();
   });
 }

@@ -49,6 +49,8 @@ class De1StateManager with WidgetsBindingObserver {
   final LegacyDe1IdentityResolver _identityResolver =
       const LegacyDe1IdentityResolver();
   final Set<UnifiedDe1> _identityPromptedMachines = {};
+  final Set<UnifiedDe1> _identityResolving = {};
+  bool _disposed = false;
   StreamSubscription<MachineSnapshot>? _snapshotSubscription;
   ShotSequencer? _currentShotSequencer;
   StreamSubscription<ShotState>? _shotStateSubscription;
@@ -166,6 +168,7 @@ class De1StateManager with WidgetsBindingObserver {
 
     if (state == AppLifecycleState.resumed) {
       _checkNavigationContext();
+      unawaited(_retryPendingIdentityResolution());
     }
     if (!Platform.isAndroid && !Platform.isIOS) {
       _logger.fine(
@@ -204,63 +207,91 @@ class De1StateManager with WidgetsBindingObserver {
   }
 
   bool _stillCurrent(UnifiedDe1 machine) =>
-      identical(machine, _de1Controller.connectedDe1OrNull);
+      !_disposed && identical(machine, _de1Controller.connectedDe1OrNull);
+
+  Future<void> _retryPendingIdentityResolution() {
+    if (_disposed) return Future.value();
+    final machine = _de1Controller.connectedDe1OrNull;
+    if (machine is! UnifiedDe1 || !_stillCurrent(machine)) {
+      return Future.value();
+    }
+    if (_accountService == null) return Future.value();
+    final rawInfo = machine.rawMachineInfo;
+    final rawSerial = rawInfo.serialNumber;
+    final rawModelValue = machine.rawModelValue ?? 0;
+    final effective = machine.machineInfo;
+    final needsIdentity =
+        (rawSerial == '0' || rawModelValue == 0) &&
+        (effective.serialNumber == '0' || effective.serialNumber.isEmpty);
+    if (!needsIdentity) return Future.value();
+    return _resolveLegacyIdentity(machine);
+  }
 
   Future<void> _resolveLegacyIdentity(
     UnifiedDe1 machine, {
     bool allowPrompts = true,
   }) async {
-    final account = _accountService!;
-    // Wait for the shared startup validation + refresh so we resolve against
-    // the post-refresh machine list, not an empty pre-refresh state.
-    await account.accountReady;
-    if (!_stillCurrent(machine)) return;
-    final rawInfo = machine.rawMachineInfo;
-    final rawSerial = rawInfo.serialNumber;
-    final rawModelValue = machine.rawModelValue ?? 0;
-
-    RegisteredDecentMachine? mapped;
-    if (rawSerial == '0' && !await account.isAuthKnownInvalid()) {
-      mapped = await account.lookupMapping(
-        transportType: machine.transportType.name,
-        deviceId: machine.deviceId,
-      );
+    if (allowPrompts) {
+      if (_identityResolving.contains(machine)) return;
+      _identityResolving.add(machine);
     }
+    try {
+      final account = _accountService!;
+      // Wait for the shared startup validation + refresh so we resolve
+      // against the post-refresh machine list, not an empty pre-refresh
+      // state.
+      await account.accountReady;
+      if (!_stillCurrent(machine)) return;
+      final rawInfo = machine.rawMachineInfo;
+      final rawSerial = rawInfo.serialNumber;
+      final rawModelValue = machine.rawModelValue ?? 0;
 
-    final resolution = _identityResolver.resolve(
-      rawSerial: rawSerial,
-      rawModelValue: rawModelValue,
-      registeredMachines: account.usableRegisteredMachines,
-      mappedMachine: mapped,
-    );
+      RegisteredDecentMachine? mapped;
+      if (rawSerial == '0' && !await account.isAuthKnownInvalid()) {
+        mapped = await account.lookupMapping(
+          transportType: machine.transportType.name,
+          deviceId: machine.deviceId,
+        );
+      }
 
-    switch (resolution) {
-      case ResolvedLegacyDe1Identity():
-        _logger.info(
-          'Legacy DE1 identity resolved to serial '
-          '${resolution.machine.serial}',
-        );
-        await _applyResolvedIdentity(
-          machine,
-          resolution.machine,
-          persistMapping: false,
-        );
-      case AmbiguousLegacyDe1Identity():
-        if (!allowPrompts) break;
-        final selected = await _promptMachineSelection(
-          machine,
-          resolution.candidates,
-        );
-        if (selected != null && _stillCurrent(machine)) {
-          await _applyResolvedIdentity(machine, selected, persistMapping: true);
-        }
-      case UnavailableLegacyDe1Identity():
-        if (rawSerial.isNotEmpty && rawSerial != '0') {
-          _maybeCheckSerialOwnership(rawSerial);
-        }
-        if (allowPrompts && (rawSerial == '0' || rawModelValue == 0)) {
-          await _maybePromptLinkAccount(machine);
-        }
+      final resolution = _identityResolver.resolve(
+        rawSerial: rawSerial,
+        rawModelValue: rawModelValue,
+        registeredMachines: account.usableRegisteredMachines,
+        mappedMachine: mapped,
+      );
+
+      switch (resolution) {
+        case ResolvedLegacyDe1Identity():
+          _logger.info('Legacy DE1 identity resolved from account records');
+          await _applyResolvedIdentity(
+            machine,
+            resolution.machine,
+            persistMapping: false,
+          );
+        case AmbiguousLegacyDe1Identity():
+          if (!allowPrompts) break;
+          final selected = await _promptMachineSelection(
+            machine,
+            resolution.candidates,
+          );
+          if (selected != null && _stillCurrent(machine)) {
+            await _applyResolvedIdentity(
+              machine,
+              selected,
+              persistMapping: true,
+            );
+          }
+        case UnavailableLegacyDe1Identity():
+          if (rawSerial.isNotEmpty && rawSerial != '0') {
+            _maybeCheckSerialOwnership(rawSerial);
+          }
+          if (allowPrompts && (rawSerial == '0' || rawModelValue == 0)) {
+            await _maybePromptLinkAccount(machine);
+          }
+      }
+    } finally {
+      if (allowPrompts) _identityResolving.remove(machine);
     }
   }
 
@@ -272,6 +303,7 @@ class De1StateManager with WidgetsBindingObserver {
     if (!_stillCurrent(machine)) return;
     final model = record.recognizedModel?.name ?? machine.rawMachineInfo.model;
     machine.applyEffectiveIdentity(serial: record.serial, model: model);
+    _de1Controller.recordResolvedSerial(record.serial);
     if (persistMapping) {
       final account = _accountService;
       if (account != null) {
@@ -292,6 +324,7 @@ class De1StateManager with WidgetsBindingObserver {
     UnifiedDe1 machine,
     List<RegisteredDecentMachine> candidates,
   ) async {
+    if (_disposed) return null;
     if (_identityPromptedMachines.contains(machine)) return null;
     if (!_appIsInForeground) return null;
     final context = _navigatorKey.currentContext;
@@ -327,7 +360,7 @@ class De1StateManager with WidgetsBindingObserver {
 
   Future<void> _maybePromptLinkAccount(UnifiedDe1 machine) async {
     final account = _accountService;
-    if (account == null) return;
+    if (account == null || _disposed) return;
     final linked = await account.hasLinkedAccount();
     final authInvalid = await account.isAuthKnownInvalid();
     if (linked && !authInvalid) return;
@@ -888,6 +921,7 @@ class De1StateManager with WidgetsBindingObserver {
   }
 
   void dispose() {
+    _disposed = true;
     _logger.fine('Disposing De1StateManager');
 
     WidgetsBinding.instance.removeObserver(this);
