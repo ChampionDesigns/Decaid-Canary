@@ -10,7 +10,7 @@ class StartupFailureShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ShadApp(
-      title: 'Decaid',
+      title: 'Decide',
       debugShowCheckedModeBanner: false,
       theme: buildDecentTheme(),
       darkTheme: _buildDarkTheme(),
