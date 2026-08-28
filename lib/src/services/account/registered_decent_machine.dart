@@ -73,15 +73,18 @@ DecentMachineModel? parseSkuModel(String sku) {
   if (modelPart.isEmpty) return null;
   for (final (token, model) in _skuModelTokens) {
     if (!modelPart.startsWith(token)) continue;
-    if (token == 'DE1') {
-      // The base DE1 token only matches at a boundary so partial tokens such
-      // as DE1C... or DE1X... stay unknown instead of being guessed.
-      final rest = modelPart.substring(token.length);
-      if (rest.isNotEmpty && RegExp(r'[A-Z]').hasMatch(rest[0])) continue;
-    }
-    return model;
+    if (_matchesAtTokenBoundary(modelPart, token)) return model;
   }
   return null;
+}
+
+/// True when [modelPart] starts with [token] and the token sits at a
+/// boundary. The bare DE1 token must not swallow unknown longer variants
+/// (DE1C..., DE1X...); those stay unknown instead of being guessed.
+bool _matchesAtTokenBoundary(String modelPart, String token) {
+  if (token != 'DE1') return true;
+  final rest = modelPart.substring(token.length);
+  return rest.isEmpty || !RegExp(r'[A-Z]').hasMatch(rest[0]);
 }
 
 /// Parses the support API machine-list body (`serial SKU` per line).
