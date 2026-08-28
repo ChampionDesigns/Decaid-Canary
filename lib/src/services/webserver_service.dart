@@ -70,7 +70,7 @@ import 'package:reaprime/src/models/device/led_strip.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/calibration_codec.dart';
 import 'package:reaprime/src/models/device/transport/ble_timeout_exception.dart';
-import 'package:shelf/shelf_io.dart' as io;
+import 'package:reaprime/src/services/webserver/port_binding.dart';
 import 'package:shelf_web_socket/shelf_web_socket.dart' as sws;
 import 'package:shelf_cors_headers/shelf_cors_headers.dart';
 import 'package:stack_trace/stack_trace.dart';
@@ -341,7 +341,7 @@ Future<void> startWebServer(
     );
   }
 
-  final server = await io.serve(
+  final server = await serveOrReportPortInUse(
     _init(
       deviceHandler,
       de1Handler,
@@ -641,7 +641,7 @@ Future<void> startApiDocsServer() async {
     listDirectories: true,
   );
 
-  final apiServer = await io.serve(apiHandler, '0.0.0.0', 4001);
+  final apiServer = await serveOrReportPortInUse(apiHandler, '0.0.0.0', 4001);
   log.info(
     '✅ API Docs server running at http://${apiServer.address.host}:${apiServer.port}',
   );
