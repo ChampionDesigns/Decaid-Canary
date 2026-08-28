@@ -26,7 +26,7 @@ test -f squashfs-root/com.decentespresso.decaid-canary.desktop
 test -e squashfs-root/com.decentespresso.decaid-canary.png
 desktop-file-validate squashfs-root/com.decentespresso.decaid-canary.desktop
 test -x squashfs-root/usr/lib/decaid-canary/decaid-canary
-test -f squashfs-root/usr/lib/decaid/data/flutter_assets/AssetManifest.json \
-  -o -f squashfs-root/usr/lib/decaid/data/flutter_assets/AssetManifest.bin
+test -f squashfs-root/usr/lib/decaid-canary/data/flutter_assets/AssetManifest.json \
+  -o -f squashfs-root/usr/lib/decaid-canary/data/flutter_assets/AssetManifest.bin
 
 echo "OK: $APPIMAGE ($(du -h "$APPIMAGE" | cut -f1))"
