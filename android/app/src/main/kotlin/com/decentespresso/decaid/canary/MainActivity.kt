@@ -1,4 +1,4 @@
-package net.tadel.reaprime
+package com.decentespresso.decaid.canary
 
 import android.app.Activity
 import android.content.Context
