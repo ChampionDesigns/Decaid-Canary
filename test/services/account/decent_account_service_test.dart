@@ -61,7 +61,9 @@ void main() {
         required String body,
       }) {
         final client = http_testing.MockClient((request) async {
-          capturedRequest = request;
+          if (capturedRequest.url.toString() == 'about:blank') {
+            capturedRequest = request;
+          }
           return http.Response(body, statusCode);
         });
         return DecentAccountService(
@@ -674,6 +676,446 @@ void main() {
           throwsA(isA<StateError>()),
         );
       });
+    });
+
+    group('registered machines and identity mappings', () {
+      http_testing.MockClient clientWithSn({required String snBody}) {
+        return http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/sn') {
+            return http.Response(snBody, 200);
+          }
+          return http.Response('cryptpw_abc123\n', 200);
+        });
+      }
+
+      Future<void> seedAccount(String email, String password) async {
+        await store.write(key: 'email', value: email);
+        await store.write(key: 'password', value: password);
+      }
+
+      Future<void> seedMachinesCache(
+        List<Map<String, dynamic>> machines,
+      ) async {
+        await store.write(
+          key: 'registered_machines',
+          value: jsonEncode({'machines': machines}),
+        );
+      }
+
+      test(
+        'registered-machine fetch uses onlyespressomachines=1&withskus=1',
+        () async {
+          http.BaseRequest? captured;
+          final client = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/sn') {
+              captured = request;
+              return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+            }
+            return http.Response('cryptpw_abc123\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          service = DecentAccountService(
+            httpClient: client,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+          await pumpEventQueue();
+
+          expect(
+            captured?.url.toString(),
+            '$_baseUrl/support/api/sn?onlyespressomachines=1&withskus=1',
+          );
+        },
+      );
+
+      test('successful login fetches and persists the machine list', () async {
+        var snCalls = 0;
+        httpClient = clientWithSn(snBody: '1338 DE-DE1PRO220V7-00533\n');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        final ok = await service.login('test@example.com', 'hunter2');
+
+        expect(ok, isTrue);
+        expect(snCalls, 0);
+        expect(service.usableRegisteredMachines.map((m) => m.serial), ['1338']);
+        expect(await store.read(key: 'registered_machines'), isNotNull);
+      });
+
+      test(
+        'a machine-list fetch failure does not fail a valid login',
+        () async {
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/sn') {
+              throw Exception('timeout');
+            }
+            return http.Response('cryptpw_abc123\n', 200);
+          });
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          final ok = await service.login('test@example.com', 'hunter2');
+
+          expect(ok, isTrue);
+          expect(await service.isLoggedIn(), isTrue);
+        },
+      );
+
+      test('startup loads the cached machine list before refreshing', () async {
+        var snCalls = 0;
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/sn') {
+            snCalls++;
+            return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+          }
+          return http.Response('cryptpw_abc123\n', 200);
+        });
+        await seedAccount('user@example.com', 'cryptpw_abc123');
+        await seedMachinesCache([
+          {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+        ]);
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        await service.initialize();
+
+        expect(service.usableRegisteredMachines.map((m) => m.serial), ['1337']);
+        expect(snCalls, 0);
+
+        await pumpEventQueue();
+
+        expect(snCalls, 1);
+        expect(service.usableRegisteredMachines.map((m) => m.serial), ['1338']);
+      });
+
+      test('startup refresh only happens after credentials validate', () async {
+        var snCalls = 0;
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/sn') {
+            snCalls++;
+            return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+          }
+          return http.Response('0\n', 200); // login_test rejects
+        });
+        await seedAccount('user@example.com', 'stale_cryptpw');
+        await seedMachinesCache([
+          {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+        ]);
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        await service.initialize();
+        await pumpEventQueue();
+
+        expect(snCalls, 0);
+        expect(await service.isLoggedIn(), isFalse);
+        expect(service.usableRegisteredMachines, isEmpty);
+      });
+
+      test('transient fetch failure preserves the last good cache', () async {
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/sn') {
+            throw Exception('timeout');
+          }
+          return http.Response('cryptpw_abc123\n', 200);
+        });
+        await seedAccount('user@example.com', 'cryptpw_abc123');
+        await seedMachinesCache([
+          {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+        ]);
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        await service.initialize();
+        await pumpEventQueue();
+
+        expect(service.usableRegisteredMachines.map((m) => m.serial), ['1337']);
+        expect(await service.isLoggedIn(), isTrue);
+      });
+
+      test(
+        'definitive rejection retains persisted data but makes it unusable',
+        () async {
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/sn') {
+              return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+            }
+            return http.Response('0\n', 200); // login_test rejects
+          });
+          await seedAccount('user@example.com', 'stale_cryptpw');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          ]);
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+          await pumpEventQueue();
+
+          expect(await service.isLoggedIn(), isFalse);
+          expect(service.hasUsableAccountCache, isFalse);
+          expect(service.usableRegisteredMachines, isEmpty);
+          expect(
+            await store.read(key: 'registered_machines'),
+            isNotNull, // persisted recovery data retained
+          );
+        },
+      );
+
+      test('logout clears the scoped machine cache and mappings', () async {
+        await seedAccount('user@example.com', 'cryptpw_abc123');
+        await seedMachinesCache([
+          {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+        ]);
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+        await service.initialize();
+        await service.saveMapping(
+          transportType: 'ble',
+          deviceId: 'AA:BB:CC',
+          serial: '1337',
+        );
+
+        await service.logout();
+
+        expect(service.usableRegisteredMachines, isEmpty);
+        expect(service.hasUsableAccountCache, isFalse);
+        expect(
+          await service.lookupMapping(
+            transportType: 'ble',
+            deviceId: 'AA:BB:CC',
+          ),
+          isNull,
+        );
+        expect(await store.read(key: 'registered_machines'), isNull);
+        expect(await store.read(key: 'identity_mappings'), isNull);
+      });
+
+      test(
+        'successful account replacement clears the previous scoped state',
+        () async {
+          final oldAuth = base64Encode(utf8.encode('old@example.com:oldcrypt'));
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/login_test') {
+              if (request.headers['authorization'] == 'Basic $oldAuth') {
+                return http.Response('0\n', 200);
+              }
+              return http.Response('newcrypt\n', 200);
+            }
+            return http.Response('0\n', 200);
+          });
+          await seedAccount('old@example.com', 'oldcrypt');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          ]);
+          await store.write(
+            key: 'identity_mappings',
+            value: jsonEncode({
+              'account': 'old@example.com',
+              'mappings': [
+                {
+                  'transportType': 'ble',
+                  'deviceId': 'AA:BB:CC',
+                  'serial': '1337',
+                },
+              ],
+            }),
+          );
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+          await service.initialize();
+          expect(
+            (await service.lookupMapping(
+              transportType: 'ble',
+              deviceId: 'AA:BB:CC',
+            ))?.serial,
+            '1337',
+          );
+
+          final ok = await service.login('new@example.com', 'newpw');
+
+          expect(ok, isTrue);
+          expect(await store.read(key: 'email'), 'new@example.com');
+          expect(service.usableRegisteredMachines, isEmpty);
+          expect(await store.read(key: 'registered_machines'), isNull);
+          expect(
+            await service.lookupMapping(
+              transportType: 'ble',
+              deviceId: 'AA:BB:CC',
+            ),
+            isNull,
+          );
+        },
+      );
+
+      test(
+        'failed replacement login preserves account data and cache',
+        () async {
+          final goodAuth = base64Encode(
+            utf8.encode('good@example.com:cryptpw_abc123'),
+          );
+          httpClient = http_testing.MockClient((request) async {
+            if (request.headers['authorization'] == 'Basic $goodAuth') {
+              return http.Response('cryptpw_abc123\n', 200);
+            }
+            return http.Response('0\n', 200);
+          });
+          await seedAccount('good@example.com', 'cryptpw_abc123');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          ]);
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+          await service.initialize();
+
+          final ok = await service.login('bad@example.com', 'wrongpw');
+
+          expect(ok, isFalse);
+          expect(await store.read(key: 'email'), 'good@example.com');
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1337',
+          ]);
+          expect(await store.read(key: 'registered_machines'), isNotNull);
+        },
+      );
+
+      test('mapping round-trip persists across service instances', () async {
+        await seedAccount('user@example.com', 'cryptpw_abc123');
+        await seedMachinesCache([
+          {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+        ]);
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+        await service.initialize();
+
+        await service.saveMapping(
+          transportType: 'ble',
+          deviceId: 'AA:BB:CC',
+          serial: '1338',
+        );
+        await service.saveMapping(
+          transportType: 'ble',
+          deviceId: 'AA:BB:CC',
+          serial: '1337', // replaces the earlier mapping for same device
+        );
+
+        expect(
+          (await service.lookupMapping(
+            transportType: 'ble',
+            deviceId: 'AA:BB:CC',
+          ))?.serial,
+          '1337',
+        );
+        expect(
+          await service.lookupMapping(
+            transportType: 'wifi',
+            deviceId: 'AA:BB:CC',
+          ),
+          isNull,
+        );
+        expect(
+          await service.lookupMapping(
+            transportType: 'ble',
+            deviceId: 'DD:EE:FF',
+          ),
+          isNull,
+        );
+
+        final restarted = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+        await restarted.initialize();
+        expect(
+          (await restarted.lookupMapping(
+            transportType: 'ble',
+            deviceId: 'AA:BB:CC',
+          ))?.serial,
+          '1337',
+        );
+      });
+
+      test(
+        'mappings are pruned when their serial leaves the account list',
+        () async {
+          httpClient = clientWithSn(snBody: '1338 DE-DE1PRO220V7-00533\n');
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+            {
+              'serial': '1338',
+              'sku': 'DE-DE1PRO220V7-00533',
+              'model': 'DE1Pro',
+            },
+          ]);
+          await store.write(
+            key: 'identity_mappings',
+            value: jsonEncode({
+              'account': 'user@example.com',
+              'mappings': [
+                {
+                  'transportType': 'ble',
+                  'deviceId': 'AA:BB:CC',
+                  'serial': '1337', // not in the refreshed list
+                },
+              ],
+            }),
+          );
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+          await service.initialize();
+
+          await pumpEventQueue();
+
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1338',
+          ]);
+          expect(
+            await service.lookupMapping(
+              transportType: 'ble',
+              deviceId: 'AA:BB:CC',
+            ),
+            isNull,
+          );
+        },
+      );
     });
   });
 }

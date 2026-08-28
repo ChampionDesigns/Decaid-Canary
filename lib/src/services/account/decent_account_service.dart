@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:clock/clock.dart';
@@ -19,8 +20,38 @@ abstract class CredentialStore {
   Future<void> delete({required String key});
 }
 
+/// Persisted device-to-serial association for identity resolution, scoped to
+/// the linked account.
+class _IdentityMapping {
+  final String transportType;
+  final String deviceId;
+  final String serial;
+
+  const _IdentityMapping({
+    required this.transportType,
+    required this.deviceId,
+    required this.serial,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'transportType': transportType,
+    'deviceId': deviceId,
+    'serial': serial,
+  };
+
+  factory _IdentityMapping.fromJson(Map<String, dynamic> json) =>
+      _IdentityMapping(
+        transportType: json['transportType'] as String,
+        deviceId: json['deviceId'] as String,
+        serial: json['serial'] as String,
+      );
+}
+
 class DecentAccountService {
   static const bool kEnableSerialVerification = true;
+
+  static const String _registeredMachinesKey = 'registered_machines';
+  static const String _identityMappingsKey = 'identity_mappings';
 
   final http.Client _httpClient;
   final CredentialStore _store;
@@ -33,6 +64,10 @@ class DecentAccountService {
   DateTime? _cooldownUntil;
   int _authGeneration = 0;
 
+  List<RegisteredDecentMachine> _machines = const [];
+  List<_IdentityMapping> _mappings = const [];
+  bool _cacheLoaded = false;
+
   DecentAccountService({
     required http.Client httpClient,
     required CredentialStore credentialStore,
@@ -40,6 +75,93 @@ class DecentAccountService {
     this.retryInterval = const Duration(seconds: 30),
   }) : _httpClient = httpClient,
        _store = credentialStore;
+
+  /// Loads the linked account's cached registered machines and identity
+  /// mappings, then refreshes the machine list in the background after stored
+  /// credentials validate. The secure-store cache load is awaited; the network
+  /// refresh is best-effort and never blocks startup.
+  Future<void> initialize() async {
+    await _loadCachedRegisteredMachines();
+    await _loadCachedMappings();
+    _cacheLoaded = true;
+    unawaited(_backgroundRefresh());
+  }
+
+  Future<void> _backgroundRefresh() async {
+    try {
+      if (!await hasLinkedAccount()) return;
+      if (!await isLoggedIn()) return;
+      await refreshRegisteredMachines();
+    } catch (e) {
+      _log.info('Background registered-machine refresh unavailable: $e');
+    }
+  }
+
+  Future<void> _loadCachedRegisteredMachines() async {
+    try {
+      final raw = await _store.read(key: _registeredMachinesKey);
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final machinesJson = decoded['machines'] as List? ?? const [];
+      _machines = [
+        for (final m in machinesJson)
+          RegisteredDecentMachine.fromJson(m as Map<String, dynamic>),
+      ];
+    } catch (e) {
+      _log.warning('Failed to load cached registered machines: $e');
+    }
+  }
+
+  Future<void> _loadCachedMappings() async {
+    try {
+      final raw = await _store.read(key: _identityMappingsKey);
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final storedAccount = decoded['account'] as String?;
+      final currentEmail = await _store.read(key: 'email');
+      if (_normalizeEmail(storedAccount ?? '') !=
+          _normalizeEmail(currentEmail ?? '')) {
+        return;
+      }
+      _mappings = [
+        for (final m in (decoded['mappings'] as List? ?? const []))
+          _IdentityMapping.fromJson(m as Map<String, dynamic>),
+      ];
+    } catch (e) {
+      _log.warning('Failed to load cached identity mappings: $e');
+    }
+  }
+
+  Future<void> _persistRegisteredMachines(
+    List<RegisteredDecentMachine> machines,
+  ) async {
+    await _store.write(
+      key: _registeredMachinesKey,
+      value: jsonEncode({
+        'machines': [for (final m in machines) m.toJson()],
+      }),
+    );
+  }
+
+  Future<void> _persistMappings() async {
+    final email = await _store.read(key: 'email');
+    await _store.write(
+      key: _identityMappingsKey,
+      value: jsonEncode({
+        'account': email,
+        'mappings': [for (final m in _mappings) m.toJson()],
+      }),
+    );
+  }
+
+  Future<void> _clearAccountScopedState() async {
+    _machines = const [];
+    _mappings = const [];
+    await _store.delete(key: _registeredMachinesKey);
+    await _store.delete(key: _identityMappingsKey);
+  }
+
+  static String _normalizeEmail(String email) => email.trim().toLowerCase();
 
   Future<bool> login(String email, String password) async {
     final response = await _authedGet(
@@ -49,11 +171,22 @@ class DecentAccountService {
     );
 
     if (response.statusCode == 200 && response.body.trim() != '0') {
+      final storedEmail = await _store.read(key: 'email');
+      final emailChanged =
+          _normalizeEmail(storedEmail ?? '') != _normalizeEmail(email);
       await _store.write(key: 'email', value: email);
       await _store.write(key: 'password', value: response.body.trim());
       _authGeneration++;
       _authenticated = true;
+      if (emailChanged) {
+        await _clearAccountScopedState();
+      }
       _log.info('login -> accepted');
+      try {
+        await refreshRegisteredMachines();
+      } catch (e) {
+        _log.warning('Registered-machine refresh after login failed: $e');
+      }
       return true;
     }
     _log.warning('login -> rejected');
@@ -61,6 +194,7 @@ class DecentAccountService {
   }
 
   Future<void> logout() async {
+    await _clearAccountScopedState();
     await _store.delete(key: 'email');
     await _store.delete(key: 'password');
     _authGeneration++;
@@ -70,6 +204,91 @@ class DecentAccountService {
   Future<bool> hasLinkedAccount() async =>
       await _store.read(key: 'email') != null &&
       await _store.read(key: 'password') != null;
+
+  /// Whether the current linked-account cache may be used as identity
+  /// authority. False before [initialize] completes and after a definitive
+  /// auth rejection; persisted recovery data is retained but unusable.
+  bool get hasUsableAccountCache => _cacheLoaded && _authenticated != false;
+
+  /// Registered machines for the linked account; empty when no usable cache
+  /// exists (not initialized, or auth definitively invalid).
+  List<RegisteredDecentMachine> get usableRegisteredMachines =>
+      hasUsableAccountCache ? List.unmodifiable(_machines) : const [];
+
+  /// Fetches the registered machine list with SKU metadata, replaces the
+  /// in-memory cache on success, persists it, and prunes stale mappings.
+  Future<void> refreshRegisteredMachines() async {
+    final email = await _store.read(key: 'email');
+    final password = await _store.read(key: 'password');
+    if (email == null || password == null) {
+      throw StateError('not logged in');
+    }
+    final response = await _authedGet(
+      email,
+      password,
+      '/support/api/sn?onlyespressomachines=1&withskus=1',
+    );
+    if (response.statusCode != 200) {
+      throw Exception(
+        'registered machine fetch failed (${response.statusCode}): '
+        '${response.body.trim()}',
+      );
+    }
+    final body = response.body.trim();
+    if (body == '0') {
+      throw StateError('Unexpected response: $body');
+    }
+    final machines = parseRegisteredMachines(body);
+    _machines = machines;
+    _cacheLoaded = true;
+    await _persistRegisteredMachines(machines);
+    await _pruneMappings(machines);
+  }
+
+  /// Persists a manual identity choice keyed by account + transport + opaque
+  /// device id.
+  Future<void> saveMapping({
+    required String transportType,
+    required String deviceId,
+    required String serial,
+  }) async {
+    _mappings = [
+      ..._mappings.where(
+        (m) => !(m.transportType == transportType && m.deviceId == deviceId),
+      ),
+      _IdentityMapping(
+        transportType: transportType,
+        deviceId: deviceId,
+        serial: serial,
+      ),
+    ];
+    await _persistMappings();
+  }
+
+  /// Returns the registered machine for a persisted mapping, or null when no
+  /// mapping exists for the transport/device or its serial is no longer in the
+  /// current account list.
+  Future<RegisteredDecentMachine?> lookupMapping({
+    required String transportType,
+    required String deviceId,
+  }) async {
+    final serial = _mappings
+        .where(
+          (m) => m.transportType == transportType && m.deviceId == deviceId,
+        )
+        .map((m) => m.serial)
+        .firstOrNull;
+    if (serial == null) return null;
+    return _machines.where((m) => m.serial == serial).firstOrNull;
+  }
+
+  Future<void> _pruneMappings(List<RegisteredDecentMachine> machines) async {
+    final serials = machines.map((m) => m.serial).toSet();
+    final pruned = _mappings.where((m) => serials.contains(m.serial)).toList();
+    if (pruned.length == _mappings.length) return;
+    _mappings = pruned;
+    await _persistMappings();
+  }
 
   Future<bool> isLoggedIn() async {
     if (!await hasLinkedAccount()) return false;
