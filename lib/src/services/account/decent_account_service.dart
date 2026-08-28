@@ -7,8 +7,6 @@ import 'package:logging/logging.dart';
 
 import 'registered_decent_machine.dart';
 
-/// Serial-only projection of the account machine-list body, kept for
-/// compatibility; the richer records come from [parseRegisteredMachines].
 List<String> parseSerialNumbers(String body) =>
     parseRegisteredMachines(body).map((m) => m.serial).toList();
 
@@ -20,8 +18,6 @@ abstract class CredentialStore {
   Future<void> delete({required String key});
 }
 
-/// Persisted device-to-serial association for identity resolution, scoped to
-/// the linked account.
 class _IdentityMapping {
   final String transportType;
   final String deviceId;
@@ -79,11 +75,6 @@ class DecentAccountService {
   }) : _httpClient = httpClient,
        _store = credentialStore;
 
-  /// Loads the linked account's cached registered machines and identity
-  /// mappings, then refreshes the machine list in the background after stored
-  /// credentials validate. The secure-store cache load is awaited; the network
-  /// refresh is best-effort and never blocks startup. Callers that need the
-  /// post-refresh list (e.g. legacy identity resolution) await [accountReady].
   Future<void> initialize() async {
     _hasLinkedAccount = await hasLinkedAccount();
     await _loadCachedRegisteredMachines();
@@ -92,9 +83,6 @@ class DecentAccountService {
     unawaited(_ensureMachinesFresh());
   }
 
-  /// Completes when the shared startup validation + machine-list refresh has
-  /// settled. Identity resolution awaits this before reading the machine list
-  /// so it never resolves against an empty pre-refresh state.
   Future<void> get accountReady => _refreshFuture ?? Future.value();
 
   Future<void> _ensureMachinesFresh() {
@@ -161,9 +149,6 @@ class DecentAccountService {
     );
   }
 
-  /// Whether a persisted cache/mapping blob belongs to the currently linked
-  /// account. Caches written before account binding, or bound to a different
-  /// account, are stale scope and must not be loaded.
   Future<bool> _cacheMatchesCurrentAccount(Map<String, dynamic> decoded) async {
     final storedAccount = decoded['account'] as String?;
     final currentEmail = await _store.read(key: 'email');
@@ -237,20 +222,12 @@ class DecentAccountService {
       await _store.read(key: 'email') != null &&
       await _store.read(key: 'password') != null;
 
-  /// Whether the current linked-account cache may be used as identity
-  /// authority. False before [initialize] completes, without a linked account,
-  /// or after a definitive auth rejection; persisted recovery data is retained
-  /// but unusable.
   bool get hasUsableAccountCache =>
       _cacheLoaded && _hasLinkedAccount && _authenticated != false;
 
-  /// Registered machines for the linked account; empty when no usable cache
-  /// exists (not initialized, or auth definitively invalid).
   List<RegisteredDecentMachine> get usableRegisteredMachines =>
       hasUsableAccountCache ? List.unmodifiable(_machines) : const [];
 
-  /// Fetches the registered machine list with SKU metadata. Does not mutate
-  /// any cache; [refreshRegisteredMachines] decides whether to persist.
   Future<List<RegisteredDecentMachine>> fetchRegisteredMachines() async {
     final email = await _store.read(key: 'email');
     final password = await _store.read(key: 'password');
@@ -275,12 +252,6 @@ class DecentAccountService {
     return parseRegisteredMachines(body);
   }
 
-  /// Fetches the registered machine list with SKU metadata, replaces the
-  /// in-memory cache on success, persists it, and prunes stale mappings.
-  ///
-  /// A refresh that started before a login, logout, or account replacement
-  /// must not overwrite the newer account state, so the result is applied
-  /// only when the auth generation and linked account are still current.
   Future<void> refreshRegisteredMachines() async {
     final generation = _authGeneration;
     final email = await _store.read(key: 'email');
@@ -301,9 +272,6 @@ class DecentAccountService {
     await _pruneMappings(machines);
   }
 
-  /// Persists a manual identity choice keyed by account + transport + opaque
-  /// device id. Requires a linked current account so mappings never get
-  /// written without an account binding.
   Future<void> saveMapping({
     required String transportType,
     required String deviceId,
@@ -325,9 +293,6 @@ class DecentAccountService {
     await _persistMappings();
   }
 
-  /// Returns the registered machine for a persisted mapping, or null when no
-  /// mapping exists for the transport/device, its serial is no longer in the
-  /// current account list, or no linked account is current.
   Future<RegisteredDecentMachine?> lookupMapping({
     required String transportType,
     required String deviceId,

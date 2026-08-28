@@ -76,6 +76,15 @@ void main() {
       expect(parseSkuModel(''), isNull);
       expect(parseSkuModel('DE1PRO220V'), isNull);
     });
+
+    test('longer unknown variants sharing a known prefix stay unknown', () {
+      expect(parseSkuModel('DE-DE1PROXL220V-00001'), isNull);
+      expect(parseSkuModel('DE-DE1CAFEX220V-00001'), isNull);
+      expect(parseSkuModel('DE-DE1XXXLZ230V-00001'), isNull);
+      expect(parseSkuModel('DE-DE1XXLZ230V-00001'), isNull);
+      expect(parseSkuModel('DE-DE1XLZ120V-00001'), isNull);
+      expect(parseSkuModel('DE-DE1Z220V-00001'), isNull);
+    });
   });
 
   group('parseRegisteredMachines', () {

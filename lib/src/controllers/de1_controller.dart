@@ -223,8 +223,6 @@ class De1Controller {
     }
   }
 
-  /// Records a serial resolved from account data so export and log
-  /// anonymization see the effective machine identity.
   void recordResolvedSerial(String serial) {
     if (serial.isNotEmpty && serial != '0') {
       _seenSerials.add(serial);

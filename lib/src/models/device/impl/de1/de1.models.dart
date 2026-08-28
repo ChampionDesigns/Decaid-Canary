@@ -385,9 +385,6 @@ enum MMRItem implements MmrAddress {
 
 bool isBengleModelValue(int value) => value >= 128;
 
-/// Canonical DE1 machine models. Firmware values are 0 (unset) through 7;
-/// Bengle hardware reports values >= 128 and is outside the legacy DE1
-/// identity-resolution flow.
 enum DecentMachineModel {
   Unknown(0),
   DE1(1),

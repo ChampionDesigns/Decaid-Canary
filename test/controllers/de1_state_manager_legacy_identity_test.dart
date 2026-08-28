@@ -556,6 +556,27 @@ void main() {
   });
 
   testWidgets(
+    'a UnifiedDe1 reporting a Bengle model value never enters identity '
+    'resolution',
+    (tester) async {
+      final accountService = await seededService(const [
+        {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+      ]);
+      await createManager(tester, accountService: accountService);
+
+      final de1 = await connectMachine(tester, v13Model: 129, serialN: 0);
+      await pumpUntil(tester, () async {});
+
+      expect(de1.machineInfo.serialNumber, '0');
+      expect(de1.machineInfo.model, 'Bengle');
+      expect(de1Controller.seenSerials, isNot(contains('1338')));
+      expect(find.text('Link your Decent account'), findsNothing);
+      expect(find.text('Select your machine'), findsNothing);
+      await disconnectAndSettle(tester);
+    },
+  );
+
+  testWidgets(
     'a machine connecting during the startup refresh resolves once the '
     'refresh completes',
     (tester) async {

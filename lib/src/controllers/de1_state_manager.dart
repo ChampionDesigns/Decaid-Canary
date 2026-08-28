@@ -18,6 +18,7 @@ import 'package:reaprime/src/models/data/shot_state_event.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/device.dart' as device;
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/realtime_shot_feature/realtime_shot_feature.dart';
@@ -231,15 +232,13 @@ class De1StateManager with WidgetsBindingObserver {
     UnifiedDe1 machine, {
     bool allowPrompts = true,
   }) async {
+    if (isBengleModelValue(machine.rawModelValue ?? 0)) return;
     if (allowPrompts) {
       if (_identityResolving.contains(machine)) return;
       _identityResolving.add(machine);
     }
     try {
       final account = _accountService!;
-      // Wait for the shared startup validation + refresh so we resolve
-      // against the post-refresh machine list, not an empty pre-refresh
-      // state.
       await account.accountReady;
       if (!_stillCurrent(machine)) return;
       final rawInfo = machine.rawMachineInfo;

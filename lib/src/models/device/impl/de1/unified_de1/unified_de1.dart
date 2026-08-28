@@ -133,11 +133,8 @@ class UnifiedDe1 implements De1Interface {
   MachineInfo? _info;
   MachineInfo? _rawInfo;
 
-  /// Raw identity read from MMR, retained for diagnostics. [machineInfo] may
-  /// expose a resolved effective identity after [applyEffectiveIdentity].
   MachineInfo get rawMachineInfo => _rawInfo ?? machineInfo;
 
-  /// Raw `v13Model` value read from MMR on connect.
   int? get rawModelValue => _connectedModelValue;
 
   @override
@@ -151,9 +148,6 @@ class UnifiedDe1 implements De1Interface {
         extra: {},
       );
 
-  /// Applies an account-resolved serial/model to the effective machine info.
-  /// Never writes to the machine; firmware, GHC, voltage, refill-kit and other
-  /// fields stay byte-for-byte identical to the raw read.
   void applyEffectiveIdentity({required String serial, required String model}) {
     final info = _info;
     if (info == null) return;
