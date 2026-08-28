@@ -131,6 +131,15 @@ class UnifiedDe1 implements De1Interface {
   TransportType get transportType => _transport.transportType;
 
   MachineInfo? _info;
+  MachineInfo? _rawInfo;
+
+  /// Raw identity read from MMR, retained for diagnostics. [machineInfo] may
+  /// expose a resolved effective identity after [applyEffectiveIdentity].
+  MachineInfo get rawMachineInfo => _rawInfo ?? machineInfo;
+
+  /// Raw `v13Model` value read from MMR on connect.
+  int? get rawModelValue => _connectedModelValue;
+
   @override
   MachineInfo get machineInfo =>
       _info ??
@@ -141,6 +150,22 @@ class UnifiedDe1 implements De1Interface {
         groupHeadControllerPresent: false,
         extra: {},
       );
+
+  /// Applies an account-resolved serial/model to the effective machine info.
+  /// Never writes to the machine; firmware, GHC, voltage, refill-kit and other
+  /// fields stay byte-for-byte identical to the raw read.
+  void applyEffectiveIdentity({required String serial, required String model}) {
+    final info = _info;
+    if (info == null) return;
+    _rawInfo ??= info;
+    _info = MachineInfo(
+      version: info.version,
+      model: model,
+      serialNumber: serial,
+      groupHeadControllerPresent: info.groupHeadControllerPresent,
+      extra: info.extra,
+    );
+  }
 
   @override
   Future<void> disconnect() async {

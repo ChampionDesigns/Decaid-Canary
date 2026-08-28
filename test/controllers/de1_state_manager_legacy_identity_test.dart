@@ -1,0 +1,552 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart' as http_testing;
+import 'package:reaprime/src/account/account_page.dart';
+import 'package:reaprime/src/controllers/connection_manager.dart';
+import 'package:reaprime/src/controllers/de1_controller.dart';
+import 'package:reaprime/src/controllers/de1_state_manager.dart';
+import 'package:reaprime/src/controllers/device_controller.dart';
+import 'package:reaprime/src/controllers/persistence_controller.dart';
+import 'package:reaprime/src/controllers/scale_controller.dart';
+import 'package:reaprime/src/controllers/workflow_controller.dart';
+import 'package:reaprime/src/models/data/shot_record.dart';
+import 'package:reaprime/src/models/data/steam_record.dart';
+import 'package:reaprime/src/models/data/workflow.dart';
+import 'package:reaprime/src/models/device/de1_interface.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
+import 'package:reaprime/src/models/device/impl/mock_de1/mock_de1.dart';
+import 'package:reaprime/src/services/account/decent_account_service.dart';
+import 'package:reaprime/src/services/storage/storage_service.dart';
+import 'package:reaprime/src/settings/gateway_mode.dart';
+import 'package:reaprime/src/settings/settings_controller.dart';
+import 'package:rxdart/rxdart.dart';
+
+import '../helpers/fake_ble_transport.dart';
+import '../helpers/mock_device_discovery_service.dart';
+import '../helpers/mock_settings_service.dart';
+
+class _IdentityTestDe1Controller extends De1Controller {
+  final BehaviorSubject<De1Interface?> de1Subject = BehaviorSubject.seeded(
+    null,
+  );
+  De1Interface? current;
+
+  _IdentityTestDe1Controller({required super.controller});
+
+  @override
+  Stream<De1Interface?> get de1 => de1Subject.stream;
+
+  @override
+  De1Interface connectedDe1() {
+    final de1 = current;
+    if (de1 == null) throw 'no de1 connected';
+    return de1;
+  }
+
+  @override
+  De1Interface? get connectedDe1OrNull => current;
+
+  void connect(De1Interface de1) {
+    current = de1;
+    de1Subject.add(de1);
+  }
+
+  void disconnect() {
+    current = null;
+    de1Subject.add(null);
+  }
+}
+
+class _FakeCredentialStore implements CredentialStore {
+  final Map<String, String> _store = {};
+
+  @override
+  Future<String?> read({required String key}) async => _store[key];
+
+  @override
+  Future<void> write({required String key, required String value}) async {
+    _store[key] = value;
+  }
+
+  @override
+  Future<void> delete({required String key}) async {
+    _store.remove(key);
+  }
+}
+
+class _EmptyStorageService implements StorageService {
+  @override
+  Future<void> storeShot(ShotRecord record) async {}
+  @override
+  Future<void> updateShot(ShotRecord record) async {}
+  @override
+  Future<void> deleteShot(String id) async {}
+  @override
+  Future<List<String>> getShotIds() async => [];
+  @override
+  Future<List<ShotRecord>> getAllShots() async => [];
+  @override
+  Future<ShotRecord?> getShot(String id) async => null;
+  @override
+  Future<void> storeCurrentWorkflow(Workflow workflow) async {}
+  @override
+  Future<Workflow?> loadCurrentWorkflow() async => null;
+  @override
+  Future<List<ShotRecord>> getShotsPaginated({
+    int limit = 20,
+    int offset = 0,
+    String? grinderId,
+    String? grinderModel,
+    String? beanBatchId,
+    List<String>? beanBatchIds,
+    String? coffeeName,
+    String? coffeeRoaster,
+    String? profileTitle,
+    String? search,
+    bool ascending = false,
+  }) async => [];
+  @override
+  Future<int> countShots({
+    String? grinderId,
+    String? grinderModel,
+    String? beanBatchId,
+    List<String>? beanBatchIds,
+    String? coffeeName,
+    String? coffeeRoaster,
+    String? profileTitle,
+    String? search,
+  }) async => 0;
+  @override
+  Future<ShotRecord?> getLatestShot() async => null;
+  @override
+  Future<ShotRecord?> getLatestShotMeta() async => null;
+  @override
+  Future<void> storeSteam(SteamRecord record) async {}
+  @override
+  Future<void> updateSteam(SteamRecord record) async {}
+  @override
+  Future<void> deleteSteam(String id) async {}
+  @override
+  Future<List<String>> getSteamIds() async => [];
+  @override
+  Future<List<SteamRecord>> getAllSteams() async => [];
+  @override
+  Future<SteamRecord?> getSteam(String id) async => null;
+  @override
+  Future<SteamRecord?> getLatestSteam() async => null;
+  @override
+  Future<SteamRecord?> getLatestSteamMeta() async => null;
+}
+
+class _FakeBleTransportWithId extends FakeBleTransport {
+  _FakeBleTransportWithId(this.customId);
+
+  final String customId;
+
+  @override
+  String get id => customId;
+}
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late _IdentityTestDe1Controller de1Controller;
+  late _FakeCredentialStore store;
+  late De1StateManager manager;
+  late GlobalKey<NavigatorState> navigatorKey;
+  late DeviceController deviceController;
+
+  http_testing.MockClient machinesClient(
+    List<Map<String, dynamic>> machines, {
+    List<String> emailRequests = const [],
+  }) {
+    return http_testing.MockClient((request) async {
+      final path = request.url.path;
+      if (path == '/support/api/login_test') {
+        return http.Response('cryptpw_abc123\n', 200);
+      }
+      if (path == '/support/api/sn') {
+        return http.Response(
+          '${[for (final m in machines) '${m['serial']} ${m['sku']}'].join('\n')}\n',
+          200,
+        );
+      }
+      if (path == '/support/api/email') {
+        (emailRequests as List).add(request.url.toString());
+        return http.Response('1', 200);
+      }
+      return http.Response('0\n', 200);
+    });
+  }
+
+  Future<void> seedAccount(
+    List<Map<String, dynamic>> machines, {
+    bool withCredentials = true,
+  }) async {
+    if (withCredentials) {
+      await store.write(key: 'email', value: 'user@example.com');
+      await store.write(key: 'password', value: 'cryptpw_abc123');
+    }
+    await store.write(
+      key: 'registered_machines',
+      value: jsonEncode({'machines': machines}),
+    );
+  }
+
+  Future<DecentAccountService> seededService(
+    List<Map<String, dynamic>> machines, {
+    bool withCredentials = true,
+    List<String> emailRequests = const [],
+  }) async {
+    final service = DecentAccountService(
+      httpClient: machinesClient(machines, emailRequests: emailRequests),
+      credentialStore: store,
+    );
+    await seedAccount(machines, withCredentials: withCredentials);
+    await service.initialize();
+    return service;
+  }
+
+  Future<De1StateManager> createManager(
+    WidgetTester tester, {
+    DecentAccountService? accountService,
+  }) async {
+    final scaleController = ScaleController();
+    final settingsService = MockSettingsService();
+    await settingsService.updateGatewayMode(GatewayMode.tracking);
+    final settingsController = SettingsController(settingsService);
+    await settingsController.loadSettings();
+    final connectionManager = ConnectionManager(
+      deviceScanner: deviceController,
+      de1Controller: de1Controller,
+      scaleController: scaleController,
+      settingsController: settingsController,
+    );
+    navigatorKey = GlobalKey<NavigatorState>();
+    manager = De1StateManager(
+      de1Controller: de1Controller,
+      scaleController: scaleController,
+      workflowController: WorkflowController(),
+      persistenceController: PersistenceController(
+        storageService: _EmptyStorageService(),
+      ),
+      settingsController: settingsController,
+      connectionManager: connectionManager,
+      accountService: accountService,
+      navigatorKey: navigatorKey,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: navigatorKey,
+        home: const Scaffold(body: Text('home')),
+        onGenerateRoute: (settings) {
+          if (settings.name == AccountPage.routeName) {
+            return MaterialPageRoute<void>(
+              builder: (_) => const Scaffold(body: Text('AccountPage stub')),
+            );
+          }
+          return null;
+        },
+      ),
+    );
+    return manager;
+  }
+
+  Future<UnifiedDe1> connectMachine(
+    WidgetTester tester, {
+    int v13Model = 0,
+    int serialN = 0,
+    String deviceId = 'fake-ble',
+  }) async {
+    final transport = _FakeBleTransportWithId(deviceId)
+      ..queueOnConnectResponses(v13Model: v13Model, serialN: serialN);
+    final de1 = UnifiedDe1(transport: transport);
+    // MMR reads use timer-based timeouts, so connect outside the FakeAsync
+    // test zone.
+    await tester.runAsync(() => de1.onConnect());
+    de1Controller.connect(de1);
+    return de1;
+  }
+
+  Future<void> pumpUntil(
+    WidgetTester tester,
+    Future<void> Function() action,
+  ) async {
+    await action();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 600));
+  }
+
+  /// Disconnects the machine inside the test body so ConnectionManager's
+  /// snapshot-staleness watchdog is cancelled before the widget tree is
+  /// disposed (the pending-timer invariant).
+  Future<void> disconnectAndSettle(WidgetTester tester) async {
+    de1Controller.disconnect();
+    await tester.pump();
+  }
+
+  setUp(() async {
+    store = _FakeCredentialStore();
+    deviceController = DeviceController([MockDeviceDiscoveryService()]);
+    await deviceController.initialize();
+    de1Controller = _IdentityTestDe1Controller(controller: deviceController);
+  });
+
+  tearDown(() async {
+    manager.dispose();
+    de1Controller.disconnect();
+  });
+
+  testWidgets('exact nonzero serial match applies the effective identity', (
+    tester,
+  ) async {
+    final accountService = await seededService(const [
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(tester, v13Model: 4, serialN: 1338);
+    await pumpUntil(tester, () async {});
+
+    expect(de1.machineInfo.serialNumber, '1338');
+    // API model overrides the conflicting raw v13Model=4 (DE1XL).
+    expect(de1.machineInfo.model, 'DE1Pro');
+    expect(de1.rawMachineInfo.serialNumber, '1338');
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets('unknown SKU retains the raw model on exact serial match', (
+    tester,
+  ) async {
+    final accountService = await seededService(const [
+      {'serial': '1338', 'sku': 'DE-SOMETHINGELSE'},
+    ]);
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(tester, v13Model: 3, serialN: 1338);
+    await pumpUntil(tester, () async {});
+
+    expect(de1.machineInfo.serialNumber, '1338');
+    expect(de1.machineInfo.model, 'DE1Pro');
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets('serial 0 with a single legacy candidate resolves without a '
+      'dialog', (tester) async {
+    final accountService = await seededService(const [
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    expect(de1.machineInfo.serialNumber, '1338');
+    expect(de1.machineInfo.model, 'DE1Pro');
+    expect(find.text('Select your machine'), findsNothing);
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets(
+    'ambiguous candidates show the selection dialog and manual choice '
+    'persists a mapping',
+    (tester) async {
+      final accountService = await seededService(const [
+        {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+        {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+      ]);
+      await createManager(tester, accountService: accountService);
+
+      final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+      await pumpUntil(tester, () async {});
+
+      expect(find.text('Select your machine'), findsOneWidget);
+
+      await tester.tap(find.textContaining('1338 · DE1Pro'));
+      await pumpUntil(tester, () async {});
+
+      expect(de1.machineInfo.serialNumber, '1338');
+      final mapped = await accountService.lookupMapping(
+        transportType: 'ble',
+        deviceId: de1.deviceId,
+      );
+      expect(mapped?.serial, '1338');
+      await disconnectAndSettle(tester);
+    },
+  );
+
+  testWidgets('a persisted mapping is reused on reconnect without a dialog', (
+    tester,
+  ) async {
+    final accountService = await seededService(const [
+      {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await accountService.saveMapping(
+      transportType: 'ble',
+      deviceId: 'fake-ble',
+      serial: '1338',
+    );
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    expect(de1.machineInfo.serialNumber, '1338');
+    expect(find.text('Select your machine'), findsNothing);
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets('a changed device id falls back to normal matching', (
+    tester,
+  ) async {
+    final accountService = await seededService(const [
+      {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    // Mapping was recorded against a previous device id.
+    await accountService.saveMapping(
+      transportType: 'ble',
+      deviceId: 'old-device-id',
+      serial: '1338',
+    );
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(
+      tester,
+      v13Model: 0,
+      serialN: 0,
+      deviceId: 'new-device-id',
+    );
+    await pumpUntil(tester, () async {});
+
+    // Mapping missed; ambiguous candidates fall back to the dialog.
+    expect(find.text('Select your machine'), findsOneWidget);
+    expect(de1.machineInfo.serialNumber, '0');
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets('dismissing the selection dialog leaves raw identity untouched', (
+    tester,
+  ) async {
+    final accountService = await seededService(const [
+      {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    await tester.tap(find.text('Cancel'));
+    await pumpUntil(tester, () async {});
+
+    expect(de1.machineInfo.serialNumber, '0');
+    expect(de1.machineInfo.model, 'Unknown');
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets('no linked account prompts to link but dismissal keeps the '
+      'machine usable', (tester) async {
+    final accountService = await seededService(
+      const [],
+      withCredentials: false,
+    );
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Link your Decent account'), findsOneWidget);
+
+    await tester.tap(find.text('Not now'));
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Link your Decent account'), findsNothing);
+    expect(de1.machineInfo.serialNumber, '0');
+    expect(de1.machineInfo.model, 'Unknown');
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets('accepting the link prompt navigates to AccountPage and retries '
+      'resolution once', (tester) async {
+    final accountService = await seededService(
+      const [],
+      withCredentials: false,
+    );
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    await tester.tap(find.text('Link account'));
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('AccountPage stub'), findsOneWidget);
+
+    // User links an account that lists the machine, then returns.
+    await store.write(key: 'email', value: 'user@example.com');
+    await store.write(key: 'password', value: 'cryptpw_abc123');
+    await store.write(
+      key: 'registered_machines',
+      value: jsonEncode({
+        'machines': [
+          {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+        ],
+      }),
+    );
+    await accountService.initialize();
+
+    navigatorKey.currentState!.pop();
+    await pumpUntil(tester, () async {});
+
+    expect(de1.machineInfo.serialNumber, '1338');
+    expect(de1.machineInfo.model, 'DE1Pro');
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets(
+    'a real nonzero serial not on the account still reports the mismatch',
+    (tester) async {
+      final emailRequests = <String>[];
+      final accountService = await seededService(const [
+        {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+      ], emailRequests: emailRequests);
+      await createManager(tester, accountService: accountService);
+
+      await connectMachine(tester, v13Model: 3, serialN: 9999);
+      await pumpUntil(tester, () async {});
+      await pumpUntil(tester, () async {});
+
+      expect(
+        emailRequests.any((url) => url.contains('/support/api/email')),
+        isTrue,
+      );
+      expect(emailRequests.first, contains('9999'));
+      await disconnectAndSettle(tester);
+    },
+  );
+
+  testWidgets('no prompt or resolution applies for mock or Bengle machines', (
+    tester,
+  ) async {
+    final accountService = await seededService(const [
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await createManager(tester, accountService: accountService);
+
+    // MockDe1 reports implementation unifiedDe1 but is not a UnifiedDe1.
+    final mockDe1 = MockDe1();
+    de1Controller.connect(mockDe1);
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Link your Decent account'), findsNothing);
+    expect(find.text('Select your machine'), findsNothing);
+    await mockDe1.dispose();
+    await disconnectAndSettle(tester);
+  });
+}

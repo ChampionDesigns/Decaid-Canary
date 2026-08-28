@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:logging/logging.dart';
+import 'package:reaprime/src/account/account_page.dart';
 import 'package:reaprime/src/controllers/connection_manager.dart';
 import 'package:reaprime/src/controllers/de1_controller.dart';
 import 'package:reaprime/src/controllers/persistence_controller.dart';
@@ -17,11 +18,14 @@ import 'package:reaprime/src/models/data/shot_state_event.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/device.dart' as device;
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/realtime_shot_feature/realtime_shot_feature.dart';
 import 'package:reaprime/src/realtime_steam_feature/realtime_steam_feature.dart';
 import 'package:reaprime/src/launcher/launcher_view.dart';
 import 'package:reaprime/src/services/account/decent_account_service.dart';
+import 'package:reaprime/src/services/account/legacy_de1_identity_resolver.dart';
+import 'package:reaprime/src/services/account/registered_decent_machine.dart';
 import 'package:reaprime/src/settings/feature_flags.dart';
 import 'package:reaprime/src/settings/gateway_mode.dart';
 import 'package:reaprime/src/settings/scale_power_mode.dart';
@@ -42,6 +46,9 @@ class De1StateManager with WidgetsBindingObserver {
 
   StreamSubscription<Machine?>? _de1Subscription;
   final _emailedSerials = <String>{};
+  final LegacyDe1IdentityResolver _identityResolver =
+      const LegacyDe1IdentityResolver();
+  final Set<UnifiedDe1> _identityPromptedMachines = {};
   StreamSubscription<MachineSnapshot>? _snapshotSubscription;
   ShotSequencer? _currentShotSequencer;
   StreamSubscription<ShotState>? _shotStateSubscription;
@@ -171,21 +178,189 @@ class De1StateManager with WidgetsBindingObserver {
   void _handleDe1Change(Machine? machine) {
     _snapshotSubscription?.cancel();
     _snapshotSubscription = null;
+    _identityPromptedMachines.clear();
 
     if (machine != null) {
       _logger.info('DE1 connected, starting to listen for state changes');
       _snapshotSubscription = machine.currentSnapshot.listen(_handleSnapshot);
 
-      final sn = machine.machineInfo.serialNumber;
-      if (sn != '0' &&
-          sn.isNotEmpty &&
-          !['mock-bengle', 'mock-de1'].contains(sn)) {
-        unawaited(_checkSerialOwnership(sn));
+      if (machine is UnifiedDe1 && _accountService != null) {
+        unawaited(_resolveLegacyIdentity(machine));
+      } else {
+        _maybeCheckSerialOwnership(machine.machineInfo.serialNumber);
       }
     } else {
       _logger.info('DE1 disconnected');
       _cleanupShotSequencer();
     }
+  }
+
+  void _maybeCheckSerialOwnership(String serial) {
+    if (serial != '0' &&
+        serial.isNotEmpty &&
+        !['mock-bengle', 'mock-de1'].contains(serial)) {
+      unawaited(_checkSerialOwnership(serial));
+    }
+  }
+
+  bool _stillCurrent(UnifiedDe1 machine) =>
+      identical(machine, _de1Controller.connectedDe1OrNull);
+
+  Future<void> _resolveLegacyIdentity(
+    UnifiedDe1 machine, {
+    bool allowPrompts = true,
+  }) async {
+    final account = _accountService!;
+    final rawInfo = machine.rawMachineInfo;
+    final rawSerial = rawInfo.serialNumber;
+    final rawModelValue = machine.rawModelValue ?? 0;
+
+    RegisteredDecentMachine? mapped;
+    if (rawSerial == '0' && !await account.isAuthKnownInvalid()) {
+      mapped = await account.lookupMapping(
+        transportType: machine.transportType.name,
+        deviceId: machine.deviceId,
+      );
+    }
+
+    final resolution = _identityResolver.resolve(
+      rawSerial: rawSerial,
+      rawModelValue: rawModelValue,
+      registeredMachines: account.usableRegisteredMachines,
+      mappedMachine: mapped,
+    );
+
+    switch (resolution) {
+      case ResolvedLegacyDe1Identity():
+        _logger.info(
+          'Legacy DE1 identity resolved to serial '
+          '${resolution.machine.serial}',
+        );
+        await _applyResolvedIdentity(
+          machine,
+          resolution.machine,
+          persistMapping: false,
+        );
+      case AmbiguousLegacyDe1Identity():
+        if (!allowPrompts) break;
+        final selected = await _promptMachineSelection(
+          machine,
+          resolution.candidates,
+        );
+        if (selected != null && _stillCurrent(machine)) {
+          await _applyResolvedIdentity(machine, selected, persistMapping: true);
+        }
+      case UnavailableLegacyDe1Identity():
+        if (rawSerial.isNotEmpty && rawSerial != '0') {
+          _maybeCheckSerialOwnership(rawSerial);
+        }
+        if (allowPrompts && (rawSerial == '0' || rawModelValue == 0)) {
+          await _maybePromptLinkAccount(machine);
+        }
+    }
+  }
+
+  Future<void> _applyResolvedIdentity(
+    UnifiedDe1 machine,
+    RegisteredDecentMachine record, {
+    required bool persistMapping,
+  }) async {
+    // Unknown SKU formats retain the raw machine model on exact serial match.
+    final model = record.recognizedModel?.name ?? machine.rawMachineInfo.model;
+    machine.applyEffectiveIdentity(serial: record.serial, model: model);
+    if (persistMapping && _stillCurrent(machine)) {
+      final account = _accountService;
+      if (account != null) {
+        try {
+          await account.saveMapping(
+            transportType: machine.transportType.name,
+            deviceId: machine.deviceId,
+            serial: record.serial,
+          );
+        } catch (e) {
+          _logger.warning('Failed to persist identity mapping: $e');
+        }
+      }
+    }
+  }
+
+  Future<RegisteredDecentMachine?> _promptMachineSelection(
+    UnifiedDe1 machine,
+    List<RegisteredDecentMachine> candidates,
+  ) async {
+    if (_identityPromptedMachines.contains(machine)) return null;
+    if (!_appIsInForeground) return null;
+    final context = _navigatorKey.currentContext;
+    if (context == null || !context.mounted) return null;
+    _identityPromptedMachines.add(machine);
+    return showDialog<RegisteredDecentMachine>(
+      context: context,
+      builder: (dialogContext) {
+        return SimpleDialog(
+          title: const Text('Select your machine'),
+          children: [
+            for (final candidate in candidates)
+              SimpleDialogOption(
+                onPressed: () => Navigator.of(dialogContext).pop(candidate),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text(
+                    '${candidate.serial} · '
+                    '${candidate.recognizedModel?.displayName ?? 'Unknown'}'
+                    '${candidate.rawSku.isEmpty ? '' : ' · ${candidate.rawSku}'}',
+                  ),
+                ),
+              ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _maybePromptLinkAccount(UnifiedDe1 machine) async {
+    final account = _accountService;
+    if (account == null) return;
+    final linked = await account.hasLinkedAccount();
+    final authInvalid = await account.isAuthKnownInvalid();
+    if (linked && !authInvalid) return;
+    if (_identityPromptedMachines.contains(machine)) return;
+    if (!_appIsInForeground) return;
+    final context = _navigatorKey.currentContext;
+    if (context == null || !context.mounted) return;
+    _identityPromptedMachines.add(machine);
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Link your Decent account'),
+          content: const Text(
+            'This machine does not report a serial number. Link your Decent '
+            'account so Decaid can identify it.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Not now'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Link account'),
+            ),
+          ],
+        );
+      },
+    );
+    if (accepted != true) return;
+    if (!_stillCurrent(machine)) return;
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) return;
+    await navigator.pushNamed(AccountPage.routeName);
+    if (!_stillCurrent(machine)) return;
+    await _resolveLegacyIdentity(machine, allowPrompts: false);
   }
 
   Future<void> _checkSerialOwnership(String serial) async {
