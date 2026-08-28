@@ -159,6 +159,17 @@ class ConnectionManager {
   StreamSubscription<AdapterState>? _adapterSub;
   AttachReconnectCoordinator? _attachReconnectCoordinator;
 
+  bool _usbAttachLatched = false;
+  bool _automaticMachineAttemptSuperseded = false;
+  bool _resumeAutomaticAfterUsbAttach = false;
+
+  bool get _activeAutomaticMachineAttempt =>
+      _isConnecting &&
+      !_activeScaleOnlyScan &&
+      !_attachProbeInFlight &&
+      (currentStatus.intent == ConnectionIntent.automatic ||
+          currentStatus.intent == ConnectionIntent.adapterRecovery);
+
   final DisconnectExpectations _disconnectExpectations =
       DisconnectExpectations();
 
@@ -276,11 +287,13 @@ class ConnectionManager {
             shouldAttempt: _shouldAttemptAttachReconnect,
             attempt: _attemptAttachReconnect,
             recover: _ensureMachineRecoveryArmed,
+            onLatched: _onUsbAttachLatched,
+            onSettled: _onUsbAttachSettled,
           );
   }
 
   bool _shouldAttemptAttachReconnect() {
-    if (_machineConnected) return false;
+    if (_machineConnected && !_automaticMachineAttemptSuperseded) return false;
     if (_attachProbe != null) return true;
     final preferredMachineId = settingsController.preferredMachineId;
     return preferredMachineId != null && preferredMachineId.isNotEmpty;
@@ -291,10 +304,68 @@ class ConnectionManager {
 
   bool _pendingAttachAttempt = false;
   DeviceAttachedEvent? _pendingAttachEvent;
+  bool _attachProbeInFlight = false;
+
+  void _onUsbAttachLatched() {
+    _usbAttachLatched = true;
+    _resumeAutomaticAfterUsbAttach =
+        _machineRecoveryActive ||
+        _machineReconnect != null ||
+        _activeAutomaticMachineAttempt;
+    _machineReconnect?.cancel();
+    _machineReconnect = null;
+    if (_activeAutomaticMachineAttempt) {
+      _automaticMachineAttemptSuperseded = true;
+      _explicitScanGeneration++;
+      deviceScanner.stopScan();
+    }
+  }
+
+  void _onUsbAttachSettled() {
+    unawaited(_completeUsbAttachLifecycle());
+  }
+
+  Future<void> _completeUsbAttachLifecycle() async {
+    _usbAttachLatched = false;
+    _automaticMachineAttemptSuperseded = false;
+    if (_machineConnected) {
+      _resumeAutomaticAfterUsbAttach = false;
+      return;
+    }
+    if (!_resumeAutomaticAfterUsbAttach) return;
+    _resumeAutomaticAfterUsbAttach = false;
+    if (_machineRecoveryActive) {
+      _maybeScheduleMachineReconnect();
+      return;
+    }
+    if (settingsController.preferredMachineId != null &&
+        settingsController.preferredMachineId!.isNotEmpty) {
+      _log.info(
+        'USB attach resolved without adoption; resuming automatic '
+        'machine selection',
+      );
+      await _attemptAutomaticConnect();
+    }
+  }
+
+  Future<bool> _releaseSupersededAutomaticMachine() async {
+    if (!_automaticMachineAttemptSuperseded) return false;
+    _automaticMachineAttemptSuperseded = false;
+    if (!_machineConnected) return false;
+    _log.info(
+      'USB attach superseded automatic machine connect; releasing '
+      '${_disconnectSupervisor.latestMachine?.deviceId}',
+    );
+    await disconnectMachine();
+    return true;
+  }
 
   Future<bool> _attemptAttachReconnect(DeviceAttachedEvent event) async {
-    if (_machineConnected) return true;
-    if (_attachProbe == null) return _attemptAutomaticConnect();
+    if (_machineConnected && !_automaticMachineAttemptSuperseded) return true;
+    if (_attachProbe == null) {
+      _completeUsbAttachLifecycle();
+      return _attemptAutomaticConnect();
+    }
     if (_isConnecting) {
       _pendingAttachEvent = event;
       _pendingAttachAttempt = true;
@@ -312,8 +383,11 @@ class ConnectionManager {
       attachEvent: event,
     );
     if (!handled && settingsController.preferredMachineId != null) {
+      _resumeAutomaticAfterUsbAttach = false;
+      await _completeUsbAttachLifecycle();
       return _attemptAutomaticConnect();
     }
+    await _completeUsbAttachLifecycle();
     return true;
   }
 
@@ -332,6 +406,7 @@ class ConnectionManager {
   Future<bool> _executeAttachProbe(DeviceAttachedEvent event) async {
     if (_machineConnected) return true;
     _isConnecting = true;
+    _attachProbeInFlight = true;
     try {
       final probe = _attachProbe;
       if (probe == null) return false;
@@ -381,6 +456,7 @@ class ConnectionManager {
           return true;
       }
     } finally {
+      _attachProbeInFlight = false;
       _isConnecting = false;
     }
   }
@@ -393,6 +469,10 @@ class ConnectionManager {
       ),
     );
     de1Controller.adoptDevice(machine);
+    await de1Controller.de1.firstWhere(
+      (connected) => connected == machine,
+      orElse: () => machine,
+    );
     await settingsController.setPreferredMachineId(machine.deviceId);
     _log.info('Attach probe: machine adopted (${machine.deviceId})');
     if (machine is BengleInterface) {
@@ -653,8 +733,14 @@ class ConnectionManager {
           if (event != null && !_machineConnected) {
             final handled = await _executeAttachProbe(event);
             if (!handled && settingsController.preferredMachineId != null) {
+              _resumeAutomaticAfterUsbAttach = false;
+              await _completeUsbAttachLifecycle();
               await _attemptAutomaticConnect();
+            } else {
+              await _completeUsbAttachLifecycle();
             }
+          } else {
+            await _completeUsbAttachLifecycle();
           }
           continue;
         }
@@ -701,16 +787,26 @@ class ConnectionManager {
     required ConnectionAttemptPolicy policy,
     ConnectionIntent? intent,
   }) async {
+    final resolvedIntent =
+        intent ??
+        (identical(policy, ConnectionAttemptPolicy.explicitScan)
+            ? ConnectionIntent.explicitDiscovery
+            : identical(policy, ConnectionAttemptPolicy.scaleRecovery)
+            ? ConnectionIntent.scaleRecovery
+            : ConnectionIntent.automatic);
+    final isAutomaticMachineAttempt =
+        !scaleOnly &&
+        (resolvedIntent == ConnectionIntent.automatic ||
+            resolvedIntent == ConnectionIntent.adapterRecovery);
+    if (isAutomaticMachineAttempt && _usbAttachLatched) {
+      _resumeAutomaticAfterUsbAttach = true;
+      _log.fine('USB attach latched; deferring automatic machine connect');
+      return;
+    }
     _isConnecting = true;
     _publishStatus(
       currentStatus.copyWith(
-        intent:
-            intent ??
-            (identical(policy, ConnectionAttemptPolicy.explicitScan)
-                ? ConnectionIntent.explicitDiscovery
-                : identical(policy, ConnectionAttemptPolicy.scaleRecovery)
-                ? ConnectionIntent.scaleRecovery
-                : ConnectionIntent.automatic),
+        intent: resolvedIntent,
         activeTargetTransport: () => null,
       ),
     );
@@ -724,6 +820,9 @@ class ConnectionManager {
         _activeScaleOnlyScan = false;
       }
       _isConnecting = false;
+      if (_automaticMachineAttemptSuperseded && !_machineConnected) {
+        _automaticMachineAttemptSuperseded = false;
+      }
     }
   }
 
@@ -821,6 +920,7 @@ class ConnectionManager {
       );
       final qcMachine = await _tryQuickConnectMachine();
       if (qcMachine != null) {
+        if (await _releaseSupersededAutomaticMachine()) return;
         _log.info('Quick-connect: machine connected, proceeding to ready');
         if (qcMachine is BengleInterface) {
           await _attachBengleVirtualScale(qcMachine);
@@ -955,7 +1055,7 @@ class ConnectionManager {
     );
     switch (machineAction) {
       case ConnectMachineAction(machine: final m):
-        await _connectMachineTracked(m, scanReport);
+        if (await _connectMachineTracked(m, scanReport)) return;
         final alternatives = machines.where((machine) => machine != m).toList();
         if (!_machineConnected && alternatives.isNotEmpty) {
           _publishStatus(
@@ -1167,6 +1267,7 @@ class ConnectionManager {
   }
 
   void _maybeScheduleMachineReconnect() {
+    if (_usbAttachLatched) return;
     if (_machineReconnect != null) return;
     if (!_shouldRetryMachine()) return;
     final delay = _machineReconnectBackoff;
@@ -1373,6 +1474,13 @@ class ConnectionManager {
   }
 
   Future<ConnectionResult> connectMachine(De1Interface machine) async {
+    if (_usbAttachLatched && _activeAutomaticMachineAttempt) {
+      _log.fine(
+        'connectMachine: superseded by USB attach intent, skipping '
+        '${machine.deviceId}',
+      );
+      return const ConnectionResult.conflict();
+    }
     if (_isConnectingMachine) {
       _log.fine('connectMachine: already connecting, skipping');
       return const ConnectionResult.conflict();
@@ -1604,13 +1712,14 @@ class ConnectionManager {
     return result;
   }
 
-  Future<void> _connectMachineTracked(
+  Future<bool> _connectMachineTracked(
     De1Interface machine,
     ScanReportBuilder scanReport,
   ) async {
     scanReport.markAttempted(machine.deviceId);
     final result = await connectMachine(machine);
     scanReport.recordResult(machine.deviceId, result);
+    return _releaseSupersededAutomaticMachine();
   }
 
   Future<void> _connectScaleTrackedGated(
