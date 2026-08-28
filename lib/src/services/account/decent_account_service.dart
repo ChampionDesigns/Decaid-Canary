@@ -249,9 +249,9 @@ class DecentAccountService {
   List<RegisteredDecentMachine> get usableRegisteredMachines =>
       hasUsableAccountCache ? List.unmodifiable(_machines) : const [];
 
-  /// Fetches the registered machine list with SKU metadata, replaces the
-  /// in-memory cache on success, persists it, and prunes stale mappings.
-  Future<void> refreshRegisteredMachines() async {
+  /// Fetches the registered machine list with SKU metadata. Does not mutate
+  /// any cache; [refreshRegisteredMachines] decides whether to persist.
+  Future<List<RegisteredDecentMachine>> fetchRegisteredMachines() async {
     final email = await _store.read(key: 'email');
     final password = await _store.read(key: 'password');
     if (email == null || password == null) {
@@ -272,7 +272,28 @@ class DecentAccountService {
     if (body == '0') {
       throw StateError('Unexpected response: $body');
     }
-    final machines = parseRegisteredMachines(body);
+    return parseRegisteredMachines(body);
+  }
+
+  /// Fetches the registered machine list with SKU metadata, replaces the
+  /// in-memory cache on success, persists it, and prunes stale mappings.
+  ///
+  /// A refresh that started before a login, logout, or account replacement
+  /// must not overwrite the newer account state, so the result is applied
+  /// only when the auth generation and linked account are still current.
+  Future<void> refreshRegisteredMachines() async {
+    final generation = _authGeneration;
+    final email = await _store.read(key: 'email');
+    if (email == null) {
+      throw StateError('not logged in');
+    }
+    final account = _normalizeEmail(email);
+    final machines = await fetchRegisteredMachines();
+    if (generation != _authGeneration) return;
+    final currentEmail = await _store.read(key: 'email');
+    if (currentEmail == null || _normalizeEmail(currentEmail) != account) {
+      return;
+    }
     _machines = machines;
     _cacheLoaded = true;
     _machinesRefreshed = true;
@@ -402,34 +423,8 @@ class DecentAccountService {
 
   Future<String?> getEmail() async => _store.read(key: 'email');
 
-  Future<List<String>> fetchSerialNumbers() async {
-    final email = await _store.read(key: 'email');
-    final password = await _store.read(key: 'password');
-    if (email == null || password == null) {
-      throw StateError('not logged in');
-    }
-    final response = await _authedGet(
-      email,
-      password,
-      '/support/api/sn?onlyespressomachines=1',
-    );
-    if (response.statusCode != 200) {
-      throw Exception(
-        'serial fetch failed (${response.statusCode}): ${response.body.trim()}',
-      );
-    }
-    final body = response.body.trim();
-
-    if (body == '0') {
-      throw StateError('Unexpected response: $body');
-    }
-
-    if (body.isEmpty) {
-      return [];
-    }
-
-    return parseSerialNumbers(body);
-  }
+  Future<List<String>> fetchSerialNumbers() async =>
+      (await fetchRegisteredMachines()).map((m) => m.serial).toList();
 
   Future<bool> verifyMachineSerial(String serial) async {
     final list = await fetchSerialNumbers();

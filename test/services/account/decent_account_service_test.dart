@@ -514,25 +514,23 @@ void main() {
         capturedRequest = http.Request('GET', Uri.parse('about:blank'));
       });
 
-      test(
-        'calls /support/api/sn?onlyespressomachines=1 with Basic Auth from stored credentials',
-        () async {
-          const expectedAuth =
-              'Basic dGVzdEBleGFtcGxlLmNvbTpjcnlwdHB3X2FiYzEyMw==';
-          final s = serviceWithCapture(statusCode: 200, body: 'DE1-0001');
-          await store.write(key: 'email', value: 'test@example.com');
-          await store.write(key: 'password', value: 'cryptpw_abc123');
+      test('calls /support/api/sn?onlyespressomachines=1&withskus=1 with Basic '
+          'Auth from stored credentials', () async {
+        const expectedAuth =
+            'Basic dGVzdEBleGFtcGxlLmNvbTpjcnlwdHB3X2FiYzEyMw==';
+        final s = serviceWithCapture(statusCode: 200, body: 'DE1-0001');
+        await store.write(key: 'email', value: 'test@example.com');
+        await store.write(key: 'password', value: 'cryptpw_abc123');
 
-          await s.fetchSerialNumbers();
+        await s.fetchSerialNumbers();
 
-          expect(
-            capturedRequest.url.toString(),
-            '$_baseUrl/support/api/sn?onlyespressomachines=1',
-          );
-          expect(capturedRequest.headers['authorization'], expectedAuth);
-          expect(capturedRequest.method, 'GET');
-        },
-      );
+        expect(
+          capturedRequest.url.toString(),
+          '$_baseUrl/support/api/sn?onlyespressomachines=1&withskus=1',
+        );
+        expect(capturedRequest.headers['authorization'], expectedAuth);
+        expect(capturedRequest.method, 'GET');
+      });
 
       test('returns parsed list of serials', () async {
         httpClient = _mockClient(statusCode: 200, body: 'DE1-0001\nDE1-0042');
@@ -1295,6 +1293,86 @@ void main() {
             '1338',
           ]);
           expect(snCalls, 1);
+        },
+      );
+
+      test('an in-flight refresh from the old account cannot overwrite a '
+          'replacement login', () async {
+        final oldSnGate = Completer<void>();
+        var snCalls = 0;
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/login_test') {
+            return http.Response('cryptpw_abc123\n', 200);
+          }
+          if (request.url.path == '/support/api/sn') {
+            snCalls++;
+            if (snCalls == 1) {
+              // The old account's startup refresh stays pending.
+              await oldSnGate.future;
+              return http.Response('1111 DE-DE1220V-00001\n', 200);
+            }
+            return http.Response('2222 DE-DE1PRO220V7-00533\n', 200);
+          }
+          return http.Response('0\n', 200);
+        });
+        await seedAccount('old@example.com', 'cryptpw_abc123');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+        await service.initialize();
+        await pumpEventQueue();
+
+        expect(await service.login('new@example.com', 'hunter2'), isTrue);
+        await pumpEventQueue();
+        expect(service.usableRegisteredMachines.map((m) => m.serial), ['2222']);
+
+        oldSnGate.complete();
+        await pumpEventQueue();
+
+        expect(service.usableRegisteredMachines.map((m) => m.serial), ['2222']);
+        final persisted =
+            jsonDecode((await store.read(key: 'registered_machines'))!)
+                as Map<String, dynamic>;
+        expect(persisted['account'], 'new@example.com');
+        expect(
+          (persisted['machines'] as List).map((m) => (m as Map)['serial']),
+          ['2222'],
+        );
+      });
+
+      test(
+        'an in-flight refresh cannot resurrect scoped data after logout',
+        () async {
+          final snGate = Completer<void>();
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/login_test') {
+              return http.Response('cryptpw_abc123\n', 200);
+            }
+            if (request.url.path == '/support/api/sn') {
+              await snGate.future;
+              return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+            }
+            return http.Response('0\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+          await service.initialize();
+          await pumpEventQueue();
+
+          await service.logout();
+          expect(store.hasCredentials, isFalse);
+
+          snGate.complete();
+          await pumpEventQueue();
+
+          expect(service.usableRegisteredMachines, isEmpty);
+          expect(await store.read(key: 'registered_machines'), isNull);
         },
       );
     });
