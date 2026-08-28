@@ -223,7 +223,7 @@ class AdvancedPage extends StatelessWidget {
                     color: Theme.of(context).colorScheme.error,
                   ),
                   title: Text(
-                    'Exit Decaid-Canary',
+                    'Exit Decide',
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                     ),

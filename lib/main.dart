@@ -217,7 +217,7 @@ void main(List<String> args) async {
   final webViewLogService = WebViewLogService(logDirectoryPath: logDir);
   await webViewLogService.initialize();
 
-  Logger.root.info("==== Decaid-Canary starting ====");
+  Logger.root.info("==== Decide starting ====");
   BootTiming.start();
 
   unawaited(MulticastLockService().acquire());
@@ -1059,17 +1059,17 @@ class _AppRootState extends State<AppRoot> {
   List<PlatformMenuItem> _buildPlatformMenus() {
     return [
       PlatformMenu(
-        label: 'Decaid-Canary',
+        label: 'Decide',
         menus: [
           PlatformMenuItemGroup(
             members: [
-              PlatformMenuItem(label: 'About Decaid-Canary', onSelected: null),
+              PlatformMenuItem(label: 'About Decide', onSelected: null),
             ],
           ),
           PlatformMenuItemGroup(
             members: [
               PlatformMenuItem(
-                label: 'Quit Decaid-Canary',
+                label: 'Quit Decide',
                 shortcut: const SingleActivator(
                   LogicalKeyboardKey.keyQ,
                   meta: true,

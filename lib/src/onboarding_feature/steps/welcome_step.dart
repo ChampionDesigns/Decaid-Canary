@@ -23,7 +23,7 @@ class _WelcomeStepView extends StatelessWidget {
     final theme = ShadTheme.of(context);
 
     return OnboardingScaffold(
-      title: 'Welcome to Decaid-Canary',
+      title: 'Welcome to Decide',
       semanticsLabel: 'Welcome screen',
       body: [
         Text(

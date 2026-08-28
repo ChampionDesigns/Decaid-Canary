@@ -363,8 +363,9 @@ class SettingsView extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 'License',
-                style: Theme.of(context).textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.bold),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 4),
               Text(
@@ -401,8 +402,9 @@ class SettingsView extends StatelessWidget {
         } catch (e, st) {
           Logger('Settings View').warning('Sparkle manual check failed', e, st);
           if (!context.mounted) return;
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text('Update check failed: $e')));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Update check failed: $e')));
         }
         return;
       }
@@ -413,7 +415,7 @@ class SettingsView extends StatelessWidget {
           title: const Text('Auto-update unavailable'),
           content: const Text(
             'The built-in updater could not be configured on this Mac. '
-            'Download the latest Decaid-Canary build from GitHub Releases.',
+            'Download the latest Decide build from GitHub Releases.',
           ),
           actions: [
             TextButton(

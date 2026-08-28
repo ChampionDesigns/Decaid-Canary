@@ -48,8 +48,8 @@ List<TroubleshootingStep> troubleshootingSteps({
           ? 'Bluetooth Permission Required'
           : 'Is Bluetooth enabled?',
       description: adapterState == AdapterState.unauthorized
-          ? 'Decaid-Canary needs Bluetooth permission to discover your espresso machine. '
-                'Go to Settings > Privacy & Security > Bluetooth and enable it for Decaid-Canary.'
+          ? 'Decide needs Bluetooth permission to discover your espresso machine. '
+                'Go to Settings > Privacy & Security > Bluetooth and enable it for Decide.'
           : 'Bluetooth adapter state: ${adapterState.name}',
       buttonText: 'Continue',
       shouldShow: () => runningOnIOS && adapterState != AdapterState.poweredOn,

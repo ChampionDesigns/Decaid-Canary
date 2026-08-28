@@ -461,7 +461,7 @@ class ConnectionManager {
           message: 'Bluetooth permission was denied.',
           suggestion:
               'Go to Settings > Privacy & Security > Bluetooth and enable '
-              'permission for Decaid-Canary.',
+              'permission for Decide.',
         );
         _setTransportCondition(error);
         _emit(error);
