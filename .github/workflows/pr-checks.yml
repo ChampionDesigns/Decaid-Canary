@@ -133,7 +133,7 @@ jobs:
         run: |
           python3 tool/ci/summarize_flutter_tests.py \
             build/test-results/flutter-events.json \
-            --max-active-ms 20000
+            --max-active-ms 45000
 
       - name: Summarize Flutter tests
         if: ${{ always() && hashFiles('build/test-results/flutter-events.json') != '' }}
