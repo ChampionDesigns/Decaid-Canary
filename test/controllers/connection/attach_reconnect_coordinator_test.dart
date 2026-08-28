@@ -208,33 +208,36 @@ void main() {
     });
   });
 
-  test('onLatched fires once when the settle timer arms, not per burst event', () {
-    fakeAsync((async) {
-      final events = StreamController<DeviceAttachedEvent>.broadcast(
-        sync: true,
-      );
-      var latches = 0;
-      final coordinator = AttachReconnectCoordinator(
-        attachEvents: events.stream,
-        settleDelay: settleDelay,
-        shouldAttempt: () => true,
-        attempt: (_) async => true,
-        recover: () {},
-        onLatched: () => latches++,
-      );
+  test(
+    'onLatched fires once when the settle timer arms, not per burst event',
+    () {
+      fakeAsync((async) {
+        final events = StreamController<DeviceAttachedEvent>.broadcast(
+          sync: true,
+        );
+        var latches = 0;
+        final coordinator = AttachReconnectCoordinator(
+          attachEvents: events.stream,
+          settleDelay: settleDelay,
+          shouldAttempt: () => true,
+          attempt: (_) async => true,
+          recover: () {},
+          onLatched: () => latches++,
+        );
 
-      events
-        ..add(const DeviceAttachedEvent())
-        ..add(const DeviceAttachedEvent())
-        ..add(const DeviceAttachedEvent());
-      async.elapse(settleDelay);
-      async.flushMicrotasks();
+        events
+          ..add(const DeviceAttachedEvent())
+          ..add(const DeviceAttachedEvent())
+          ..add(const DeviceAttachedEvent());
+        async.elapse(settleDelay);
+        async.flushMicrotasks();
 
-      expect(latches, 1);
-      coordinator.dispose();
-      events.close();
-    });
-  });
+        expect(latches, 1);
+        coordinator.dispose();
+        events.close();
+      });
+    },
+  );
 
   test('onLatched does not fire when a machine is already connected', () {
     fakeAsync((async) {

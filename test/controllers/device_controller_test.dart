@@ -388,8 +388,7 @@ void main() {
       },
     );
 
-    test('an attach emitted during a service initialize is not lost',
-        () async {
+    test('an attach emitted during a service initialize is not lost', () async {
       final notifier = _AttachNotifyingDiscoveryService(
         emitAttachInInitialize: true,
       );

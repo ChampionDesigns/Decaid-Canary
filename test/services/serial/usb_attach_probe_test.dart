@@ -329,33 +329,29 @@ void main() {
   });
 
   for (final order in ['de1-first', 'keyboard-first']) {
-    test(
-      'generic startup hint with multiple devices ($order) still finds '
-      'the supported machine',
-      () async {
-        final machine = _FakeMachine();
-        final keyboard = _device(
-          vid: 0x046D,
-          pid: 0xC31C,
-          serial: 'kbd-1',
-          productName: 'USB Keyboard',
-        );
-        listed = order == 'de1-first'
-            ? [_device(), keyboard]
-            : [keyboard, _device()];
-        detection = (d) async =>
-            d.productName == 'USB Keyboard' ? null : machine;
-        service = build();
+    test('generic startup hint with multiple devices ($order) still finds '
+        'the supported machine', () async {
+      final machine = _FakeMachine();
+      final keyboard = _device(
+        vid: 0x046D,
+        pid: 0xC31C,
+        serial: 'kbd-1',
+        productName: 'USB Keyboard',
+      );
+      listed = order == 'de1-first'
+          ? [_device(), keyboard]
+          : [keyboard, _device()];
+      detection = (d) async => d.productName == 'USB Keyboard' ? null : machine;
+      service = build();
 
-        final result = await service.connectAttachedMachine(
-          const DeviceAttachedEvent(),
-        );
+      final result = await service.connectAttachedMachine(
+        const DeviceAttachedEvent(),
+      );
 
-        expect(result, isA<AttachProbeConnected>());
-        expect((result as AttachProbeConnected).machine, same(machine));
-        expect(machine.onConnectCalls, 1);
-        expect(await service.devices.first, contains(machine));
-      },
-    );
+      expect(result, isA<AttachProbeConnected>());
+      expect((result as AttachProbeConnected).machine, same(machine));
+      expect(machine.onConnectCalls, 1);
+      expect(await service.devices.first, contains(machine));
+    });
   }
 }
