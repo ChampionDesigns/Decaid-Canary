@@ -717,6 +717,33 @@ void main() {
     await disconnectAndSettle(tester);
   });
 
+  testWidgets(
+    'a model-only link prompt skipped in background retries on resume',
+    (tester) async {
+      final accountService = await seededService(
+        const [],
+        withCredentials: false,
+      );
+      await createManager(tester, accountService: accountService);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+
+      await connectMachine(tester, v13Model: 0, serialN: 1338);
+      await pumpUntil(tester, () async {});
+
+      expect(find.text('Link your Decent account'), findsNothing);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await pumpUntil(tester, () async {});
+
+      expect(find.text('Link your Decent account'), findsOneWidget);
+      await tester.tap(find.text('Not now'));
+      await pumpUntil(tester, () async {});
+      await disconnectAndSettle(tester);
+    },
+  );
+
   testWidgets('disposing while the startup refresh is pending leaves the '
       'machine untouched', (tester) async {
     final snGate = Completer<void>();

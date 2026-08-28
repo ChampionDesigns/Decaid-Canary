@@ -221,8 +221,8 @@ class De1StateManager with WidgetsBindingObserver {
     final rawModelValue = machine.rawModelValue ?? 0;
     final effective = machine.machineInfo;
     final needsIdentity =
-        (rawSerial == '0' || rawModelValue == 0) &&
-        (effective.serialNumber == '0' || effective.serialNumber.isEmpty);
+        (rawSerial == '0' && effective.serialNumber == rawSerial) ||
+        (rawModelValue == 0 && effective.model == rawInfo.model);
     if (!needsIdentity) return Future.value();
     return _resolveLegacyIdentity(machine);
   }
