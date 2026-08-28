@@ -454,7 +454,7 @@ void main(List<String> args) async {
       callerLabelRegistrar: gate.registerCallerLabel,
     );
     await accountTokensController.initialize();
-    await decentAccountService?.initialize();
+    await decentAccountService.initialize();
   }
   webUIService.skinProxyTokenProvider = (path) {
     final skin = _activeSkinConsent(path, webUIStorage);
