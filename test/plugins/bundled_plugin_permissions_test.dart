@@ -38,6 +38,11 @@ void main() {
       PluginPermissions.eventsMachine,
       PluginPermissions.eventsShots,
     },
+    'weather.reaplugin': {
+      PluginPermissions.log,
+      PluginPermissions.emit,
+      PluginPermissions.pluginStorage,
+    },
   };
   const versionsBeforePermissionEnforcement = <String, String>{
     'time-to-ready.reaplugin': '1.0.2',
