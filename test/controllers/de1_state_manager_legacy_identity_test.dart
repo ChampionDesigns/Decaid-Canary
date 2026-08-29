@@ -577,6 +577,33 @@ void main() {
   );
 
   testWidgets(
+    'a Bengle UnifiedDe1 with a real nonzero serial still runs serial '
+    'ownership verification without identity resolution',
+    (tester) async {
+      final emailRequests = <String>[];
+      final accountService = await seededService(const [
+        {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+      ], emailRequests: emailRequests);
+      await createManager(tester, accountService: accountService);
+
+      final de1 = await connectMachine(tester, v13Model: 129, serialN: 9999);
+      await pumpUntil(tester, () async {});
+      await pumpUntil(tester, () async {});
+
+      expect(de1.machineInfo.serialNumber, '9999');
+      expect(de1.machineInfo.model, 'Bengle');
+      expect(
+        emailRequests.any((url) => url.contains('/support/api/email')),
+        isTrue,
+      );
+      expect(emailRequests.first, contains('9999'));
+      expect(find.text('Link your Decent account'), findsNothing);
+      expect(find.text('Select your machine'), findsNothing);
+      await disconnectAndSettle(tester);
+    },
+  );
+
+  testWidgets(
     'a machine connecting during the startup refresh resolves once the '
     'refresh completes',
     (tester) async {

@@ -188,7 +188,10 @@ class De1StateManager with WidgetsBindingObserver {
       _logger.info('DE1 connected, starting to listen for state changes');
       _snapshotSubscription = machine.currentSnapshot.listen(_handleSnapshot);
 
-      if (machine is UnifiedDe1 && _accountService != null) {
+      final isLegacyDe1 =
+          machine is UnifiedDe1 &&
+          !isBengleModelValue(machine.rawModelValue ?? 0);
+      if (isLegacyDe1 && _accountService != null) {
         unawaited(_resolveLegacyIdentity(machine));
       } else {
         _maybeCheckSerialOwnership(machine.machineInfo.serialNumber);
