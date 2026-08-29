@@ -68,9 +68,6 @@ DecentMachineModel? parseSkuModel(String sku) {
   return null;
 }
 
-/// True when [modelPart] starts with [token] and the token sits at a
-/// boundary. A token must not swallow longer variants (DE1C..., DE1X...,
-/// DE1PROX...); those stay unknown instead of being guessed.
 bool _matchesAtTokenBoundary(String modelPart, String token) {
   final rest = modelPart.substring(token.length);
   return rest.isEmpty || !RegExp(r'[A-Z]').hasMatch(rest[0]);

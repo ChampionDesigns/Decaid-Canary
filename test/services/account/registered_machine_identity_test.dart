@@ -231,6 +231,29 @@ void main() {
       expect((narrowed as ResolvedLegacyDe1Identity).machine.serial, '1338');
     });
 
+    test('a persisted mapping to an unknown-SKU record is not accepted for '
+        'serial 0', () {
+      final result = resolver.resolve(
+        rawSerial: '0',
+        rawModelValue: 0,
+        registeredMachines: [
+          machine('1338', sku: 'DE-SOMETHINGELSE'),
+          pro('1339'),
+        ],
+        mappedMachine: machine('1338', sku: 'DE-SOMETHINGELSE'),
+      );
+      expect(result, isA<ResolvedLegacyDe1Identity>());
+      expect((result as ResolvedLegacyDe1Identity).machine.serial, '1339');
+
+      final onlyUnknown = resolver.resolve(
+        rawSerial: '0',
+        rawModelValue: 0,
+        registeredMachines: [machine('1338', sku: 'DE-SOMETHINGELSE')],
+        mappedMachine: machine('1338', sku: 'DE-SOMETHINGELSE'),
+      );
+      expect(onlyUnknown, isA<UnavailableLegacyDe1Identity>());
+    });
+
     test('one known legacy DE1 candidate resolves automatically', () {
       final result = resolver.resolve(
         rawSerial: '0',

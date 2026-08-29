@@ -40,7 +40,7 @@ class LegacyDe1IdentityResolver {
 
     final mappedSerial = mappedMachine?.serial;
     if (mappedMachine != null &&
-        !mappedMachine.isBengle &&
+        mappedMachine.isLegacyDe1Candidate &&
         mappedSerial != null &&
         registeredMachines.any((m) => m.serial == mappedSerial)) {
       return ResolvedLegacyDe1Identity(mappedMachine);
