@@ -3973,7 +3973,10 @@ paths:
                   port:
                     type: integer
                     nullable: true
-                    description: Active per-generation skin origin port
+                    description: >-
+                      Active skin origin port. Assigned once per skin identity
+                      and persisted, so the same skin is served on the same
+                      port across app launches.
                   ip:
                     type: string
                     nullable: true

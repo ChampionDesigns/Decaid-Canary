@@ -115,9 +115,11 @@ Future<List<String>> _listDeviceAddresses() async {
 class WebUIService {
   final _log = Logger("WebUIService");
   final Future<List<String>> Function() _listLocalAddresses;
+  final Future<Map<String, int>> Function()? _loadSkinPortAssignments;
+  final Future<void> Function(Map<String, int>)? _saveSkinPortAssignments;
   HttpServer? _server;
   HttpServer? _entryServer;
-  final Set<int> _usedPorts = {};
+  Map<String, int>? _skinPortAssignments;
   int port = 3000;
   String _path = "";
   String? _localIP;
@@ -132,11 +134,26 @@ class WebUIService {
   @visibleForTesting
   static Duration hostResolutionTtl = const Duration(seconds: 30);
 
+  @visibleForTesting
+  static int skinPortRangeStart = 24800;
+
+  @visibleForTesting
+  static int skinPortRangeSize = 4096;
+
+  static const Set<int> _reservedSkinPorts = {3000, 4001, 8080};
+  static const int _skinPortBindAttempts = 3;
+  static const Duration _skinPortBindRetryDelay = Duration(milliseconds: 150);
+
   static const int _resolvedHostLimit = 128;
   final Map<String, _ResolvedHost> _resolvedHosts = {};
 
-  WebUIService({Future<List<String>> Function()? listLocalAddresses})
-    : _listLocalAddresses = listLocalAddresses ?? _listDeviceAddresses;
+  WebUIService({
+    Future<List<String>> Function()? listLocalAddresses,
+    Future<Map<String, int>> Function()? loadSkinPortAssignments,
+    Future<void> Function(Map<String, int>)? saveSkinPortAssignments,
+  }) : _listLocalAddresses = listLocalAddresses ?? _listDeviceAddresses,
+       _loadSkinPortAssignments = loadSkinPortAssignments,
+       _saveSkinPortAssignments = saveSkinPortAssignments;
 
   Future<String> _resolveLocalIP() async {
     try {
@@ -153,6 +170,7 @@ class WebUIService {
   String? skinProxyToken;
   String? Function(String path)? skinProxyTokenProvider;
   void Function()? skinProxyTokenRevoker;
+  String? Function(String path)? skinIdentityProvider;
 
   Future<bool> _isDeviceAddress(String host) async {
     if (host == 'localhost' || host == '127.0.0.1' || host == '::1') {
@@ -312,7 +330,8 @@ class WebUIService {
 
     try {
       if (tokenProvider != null) skinProxyToken = tokenProvider(path);
-      _server = await _serveFresh(handler);
+      final identity = skinIdentityProvider?.call(path) ?? path;
+      _server = await _serveStable(handler, identity);
       this.port = _server!.port;
       await _serveEntryPoint(port);
       _log.fine("serving $path");
@@ -333,11 +352,90 @@ class WebUIService {
     skinProxyToken = null;
   }
 
-  Future<HttpServer> _serveFresh(Handler handler) async {
-    while (true) {
-      final server = await shelf_io.serve(handler, '0.0.0.0', 0);
-      if (_usedPorts.add(server.port)) return server;
-      await server.close(force: true);
+  int _fnv1a(String value) {
+    var hash = 0x811c9dc5;
+    for (final byte in utf8.encode(value)) {
+      hash = (hash ^ byte) & 0xFFFFFFFF;
+      hash = (hash * 0x01000193) & 0xFFFFFFFF;
+    }
+    return hash;
+  }
+
+  Future<Map<String, int>> _loadedSkinPortAssignments() async {
+    final cached = _skinPortAssignments;
+    if (cached != null) return cached;
+    final loader = _loadSkinPortAssignments;
+    var loaded = <String, int>{};
+    if (loader != null) {
+      try {
+        loaded = Map<String, int>.from(await loader());
+      } catch (e) {
+        _log.warning('Failed to load skin port assignments', e);
+      }
+    }
+    _skinPortAssignments = loaded;
+    return loaded;
+  }
+
+  Future<HttpServer?> _bindSkinPort(Handler handler, int port) async {
+    try {
+      return await shelf_io.serve(handler, '0.0.0.0', port);
+    } on SocketException catch (e) {
+      _log.fine('Skin port $port unavailable: $e');
+      return null;
+    }
+  }
+
+  Future<HttpServer?> _bindAssignedSkinPort(Handler handler, int port) async {
+    for (var attempt = 0; attempt < _skinPortBindAttempts; attempt++) {
+      final server = await _bindSkinPort(handler, port);
+      if (server != null) return server;
+      if (attempt < _skinPortBindAttempts - 1) {
+        await Future<void>.delayed(_skinPortBindRetryDelay);
+      }
+    }
+    return null;
+  }
+
+  Future<HttpServer> _serveStable(Handler handler, String identity) async {
+    final assignments = await _loadedSkinPortAssignments();
+    final assigned = assignments[identity];
+    if (assigned != null) {
+      final server = await _bindAssignedSkinPort(handler, assigned);
+      if (server != null) return server;
+      _log.severe(
+        'Skin port $assigned for $identity is in use; '
+        'serving this session on a temporary port',
+      );
+      return shelf_io.serve(handler, '0.0.0.0', 0);
+    }
+
+    final taken = assignments.values.toSet();
+    final seed = _fnv1a(identity) % skinPortRangeSize;
+    for (var offset = 0; offset < skinPortRangeSize; offset++) {
+      final candidate =
+          skinPortRangeStart + (seed + offset) % skinPortRangeSize;
+      if (taken.contains(candidate) || _reservedSkinPorts.contains(candidate)) {
+        continue;
+      }
+      final server = await _bindSkinPort(handler, candidate);
+      if (server == null) continue;
+      assignments[identity] = candidate;
+      await _persistSkinPortAssignments(assignments);
+      return server;
+    }
+
+    _log.severe('No free skin port for $identity; serving on a temporary port');
+    return shelf_io.serve(handler, '0.0.0.0', 0);
+  }
+
+  Future<void> _persistSkinPortAssignments(Map<String, int> assignments) async {
+    final saver = _saveSkinPortAssignments;
+    if (saver == null) return;
+    try {
+      await saver(Map<String, int>.from(assignments));
+    } catch (e) {
+      _log.warning('Failed to persist skin port assignments', e);
     }
   }
 

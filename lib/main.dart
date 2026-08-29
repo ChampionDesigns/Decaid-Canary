@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' show AppExitResponse, AppExitType;
 
@@ -75,6 +76,7 @@ import 'package:reaprime/src/services/update_check_service.dart';
 import 'package:reaprime/src/webui_support/webui_service.dart';
 import 'package:reaprime/src/cli/cli_args.dart';
 import 'package:reaprime/src/webui_support/webui_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -155,6 +157,33 @@ Future<void> _printStoragePaths() async {
   stdout.writeln('temp: ${await AppDirectories.temp}');
   await stdout.flush();
   exit(0);
+}
+
+const skinPortAssignmentsPreferenceKey = 'webUISkinPorts';
+
+Future<Map<String, int>> loadPersistedSkinPortAssignments() async {
+  final raw = await SharedPreferencesAsync().getString(
+    skinPortAssignmentsPreferenceKey,
+  );
+  if (raw == null || raw.isEmpty) return {};
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) return {};
+    return {
+      for (final entry in decoded.entries)
+        if (entry.key is String && entry.value is int)
+          entry.key as String: entry.value as int,
+    };
+  } catch (_) {
+    return {};
+  }
+}
+
+Future<void> persistSkinPortAssignments(Map<String, int> assignments) async {
+  await SharedPreferencesAsync().setString(
+    skinPortAssignmentsPreferenceKey,
+    jsonEncode(assignments),
+  );
 }
 
 ActiveSkinConsent? _activeSkinConsent(String path, WebUIStorage storage) {
@@ -397,7 +426,10 @@ void main(List<String> args) async {
     scaleController: scaleController,
     settingsController: settingsController,
   );
-  final WebUIService webUIService = WebUIService();
+  final WebUIService webUIService = WebUIService(
+    loadSkinPortAssignments: loadPersistedSkinPortAssignments,
+    saveSkinPortAssignments: persistSkinPortAssignments,
+  );
   final WebUIStorage webUIStorage = WebUIStorage(settingsController);
 
   DecentAccountService? decentAccountService;
@@ -459,6 +491,8 @@ void main(List<String> args) async {
     );
   };
   webUIService.skinProxyTokenRevoker = proxyTokenService.revokeSkinToken;
+  webUIService.skinIdentityProvider = (path) =>
+      _activeSkinConsent(path, webUIStorage)?.key;
 
   final PluginLoaderService pluginService = PluginLoaderService(
     kvStore: HiveStoreService(defaultNamespace: "plugins")..initialize(),
