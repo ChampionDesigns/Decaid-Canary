@@ -1488,8 +1488,14 @@ class ConnectionManager {
     return connectMachine(resolved);
   }
 
-  Future<ConnectionResult> connectMachine(De1Interface machine) async {
-    if (_usbAttachLatched && _activeAutomaticMachineAttempt) {
+  Future<ConnectionResult> connectMachine(
+    De1Interface machine, {
+    bool automatic = false,
+  }) async {
+    // Only the passive automatic attempt may be superseded by USB attach
+    // intent. Explicit direct connects (REST/WS) are never superseded, even
+    // when they overlap an in-flight automatic scan.
+    if (automatic && _usbAttachLatched && _activeAutomaticMachineAttempt) {
       _log.fine(
         'connectMachine: superseded by USB attach intent, skipping '
         '${machine.deviceId}',
@@ -1524,7 +1530,7 @@ class ConnectionManager {
 
     try {
       await de1Controller.connectToDe1(machine).timeout(_connectTimeout);
-      if (_automaticMachineAttemptSuperseded) {
+      if (automatic && _automaticMachineAttemptSuperseded) {
         // This connect was in flight when USB intent latched; it may still
         // have completed its transport connect, but it must not persist its
         // own preference. The release path disconnects it afterwards. Flush
@@ -1748,7 +1754,7 @@ class ConnectionManager {
     ScanReportBuilder scanReport,
   ) async {
     scanReport.markAttempted(machine.deviceId);
-    final result = await connectMachine(machine);
+    final result = await connectMachine(machine, automatic: true);
     scanReport.recordResult(machine.deviceId, result);
     return _releaseSupersededAutomaticMachine();
   }

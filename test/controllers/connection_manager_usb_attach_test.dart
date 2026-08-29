@@ -944,6 +944,46 @@ void main() {
       },
     );
 
+    test('an explicit connect overlapping a latched automatic scan is not '
+        'superseded', () async {
+      probeScanner.probeResult = const AttachProbeUnsupported();
+      probeScanner.scanCompleter = Completer<void>();
+      final bleMachine = _FakeDe1(deviceId: 'ble-machine-id')
+        ..connectGate = Completer<void>();
+
+      // An automatic no-preference scan is in flight...
+      final connecting = manager.connect();
+      await probeScanner.scanningStream.firstWhere((scanning) => scanning);
+
+      // ...and a direct REST/WS connect for a BLE machine starts.
+      final direct = manager.connectMachine(bleMachine);
+      await Future<void>.delayed(Duration.zero);
+
+      // USB intent latches while the explicit connect is in flight; the
+      // ambient automatic state is still active, so the latch marks the
+      // automatic attempt superseded. The explicit connect must not be
+      // caught by that marker.
+      probeScanner.attach();
+      await Future<void>.delayed(Duration.zero);
+
+      bleMachine.connectGate!.complete();
+      final directResult = await direct;
+
+      probeScanner.completeScan();
+      await connecting;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(directResult.success, isTrue);
+      expect(
+        (await realDe1Controller.de1.firstWhere(
+          (machine) => machine?.deviceId == 'ble-machine-id',
+        )),
+        isNotNull,
+      );
+      expect(settingsService.preferredMachineIdWrites, ['ble-machine-id']);
+      expect(settings.preferredMachineId, 'ble-machine-id');
+    });
+
     test('unsupported attach replays an interrupted no-preference '
         'automatic scan', () async {
       probeScanner.probeResult = const AttachProbeUnsupported();
