@@ -31,27 +31,18 @@ class _FakePluginLoaderService extends Fake implements PluginLoaderService {
 class _FakeConnectionManager extends Fake implements ConnectionManager {
   _FakeConnectionManager({
     required this.calls,
-    Future<void> Function()? disconnectMachine,
-    Future<void> Function()? disconnectScale,
-  }) : _disconnectMachine = disconnectMachine ?? _complete,
-       _disconnectScale = disconnectScale ?? _complete;
+    Future<void> Function()? shutdown,
+  }) : _shutdown = shutdown ?? _complete;
 
   final List<String> calls;
-  final Future<void> Function() _disconnectMachine;
-  final Future<void> Function() _disconnectScale;
+  final Future<void> Function() _shutdown;
 
   static Future<void> _complete() async {}
 
   @override
-  Future<void> disconnectMachine() async {
-    calls.add('machine');
-    await _disconnectMachine();
-  }
-
-  @override
-  Future<void> disconnectScale() async {
-    calls.add('scale');
-    await _disconnectScale();
+  Future<void> shutdown() async {
+    calls.add('connections');
+    await _shutdown();
   }
 }
 
@@ -85,17 +76,15 @@ class _SlowCancelDe1 extends TestDe1 {
 }
 
 void main() {
-  testWidgets('desktop exit waits for ordered terminal cleanup', (
+  testWidgets('desktop exit waits for connections before plugin disposal', (
     tester,
   ) async {
     final calls = <String>[];
-    final machineDisconnected = Completer<void>();
-    final scaleDisconnected = Completer<void>();
+    final connectionsShutdown = Completer<void>();
     final loader = _FakePluginLoaderService(calls: calls);
     final connectionManager = _FakeConnectionManager(
       calls: calls,
-      disconnectMachine: () => machineDisconnected.future,
-      disconnectScale: () => scaleDisconnected.future,
+      shutdown: () => connectionsShutdown.future,
     );
     final observer = app.AppLifecycleObserver(
       connectionManager: connectionManager,
@@ -107,19 +96,13 @@ void main() {
     unawaited(exit.then((_) => exitCompleted = true));
     await tester.pump();
 
-    expect(calls, ['machine']);
+    expect(calls, ['connections']);
     expect(loader.disposeCalls, 0);
     expect(exitCompleted, isFalse);
 
-    machineDisconnected.complete();
+    connectionsShutdown.complete();
     await tester.pump();
-    expect(calls, ['machine', 'scale']);
-    expect(loader.disposeCalls, 0);
-    expect(exitCompleted, isFalse);
-
-    scaleDisconnected.complete();
-    await tester.pump();
-    expect(calls, ['machine', 'scale', 'plugins']);
+    expect(calls, ['connections', 'plugins']);
     expect(loader.disposeCalls, 1);
     expect(exitCompleted, isFalse);
 
@@ -128,7 +111,7 @@ void main() {
 
     observer.didChangeAppLifecycleState(AppLifecycleState.detached);
     await tester.pump();
-    expect(calls, ['machine', 'scale', 'plugins']);
+    expect(calls, ['connections', 'plugins']);
     expect(loader.disposeCalls, 1);
   });
 
@@ -139,7 +122,7 @@ void main() {
     final loader = _FakePluginLoaderService(calls: calls);
     final connectionManager = _FakeConnectionManager(
       calls: calls,
-      disconnectMachine: () => Future.error(StateError('disconnect failed')),
+      shutdown: () => Future.error(StateError('shutdown failed')),
     );
     final observer = app.AppLifecycleObserver(
       connectionManager: connectionManager,
@@ -154,7 +137,7 @@ void main() {
 
     final exit = observer.didRequestAppExit();
     await tester.pump();
-    expect(calls, ['machine', 'scale', 'plugins']);
+    expect(calls, ['connections', 'plugins']);
     expect(loader.disposeCalls, 1);
 
     loader.disposed.complete();
@@ -162,7 +145,7 @@ void main() {
 
     observer.didChangeAppLifecycleState(AppLifecycleState.detached);
     await tester.pump();
-    expect(calls, ['machine', 'scale', 'plugins']);
+    expect(calls, ['connections', 'plugins']);
   });
 
   testWidgets('detached cannot install a replacement state subscription', (

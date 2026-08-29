@@ -789,14 +789,9 @@ class AppLifecycleObserver with WidgetsBindingObserver {
       _log.warning('State subscription detach failed', error, stackTrace);
     }
     try {
-      await connectionManager?.disconnectMachine();
+      await connectionManager?.shutdown();
     } catch (error, stackTrace) {
-      _log.warning('Machine disconnect failed', error, stackTrace);
-    }
-    try {
-      await connectionManager?.disconnectScale();
-    } catch (error, stackTrace) {
-      _log.warning('Scale disconnect failed', error, stackTrace);
+      _log.warning('Connection shutdown failed', error, stackTrace);
     }
     try {
       await pluginLoaderService?.dispose();
