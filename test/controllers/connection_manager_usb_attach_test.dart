@@ -49,6 +49,7 @@ class _ProbeScanner extends _AttachScanner implements UsbAttachProbe {
   Completer<void>? probeGate;
   final Completer<void> probeStarted = Completer<void>();
 
+  Object? probeError;
   Completer<void>? quickConnectGate;
 
   @override
@@ -60,6 +61,8 @@ class _ProbeScanner extends _AttachScanner implements UsbAttachProbe {
     if (!probeStarted.isCompleted) probeStarted.complete();
     final gate = probeGate;
     if (gate != null) await gate.future;
+    final error = probeError;
+    if (error != null) throw error;
     return probeResult;
   }
 
@@ -628,6 +631,84 @@ void main() {
       expect(probeScanner.scanCallCount, 0);
       expect(settings.preferredMachineId, isNull);
       expect(manager.currentStatus.pendingAmbiguity, isNull);
+    });
+
+    test('a throwing attach probe completes the latch lifecycle and leaves '
+        'recovery armed', () async {
+      await settings.setPreferredMachineId('ble-machine-id');
+      probeScanner.probeError = Exception('usb transport failure');
+
+      await attachAndSettle();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(probeScanner.probeCallCount, 1);
+      // The probe exception falls back to the preferred-machine attempt;
+      // the latch must not gate recovery scheduling afterwards.
+      expect(manager.machineRecoveryActive, isTrue);
+      expect(manager.machineReconnectFailures, 1);
+    });
+
+    test('a USB latch during quick-connect defers the fallback scan until '
+        'the probe runs', () async {
+      await manager.dispose();
+      await settings.setPreferredMachineId('pref-de1');
+      settingsService.setRememberedDevices(
+        RememberedDevice.encodeList([
+          const RememberedDevice(
+            id: 'pref-de1',
+            name: 'DE1',
+            type: DeviceType.machine,
+            implementation: DeviceImplementation.unifiedDe1,
+            transportType: TransportType.serial,
+          ),
+        ]),
+      );
+      final remembered = RememberedDevicesController(
+        machineConnections: const Stream.empty(),
+        scaleConnections: const Stream.empty(),
+        settings: settingsService,
+      );
+      await remembered.initialize();
+      final actualDe1Controller = De1Controller(
+        controller: DeviceController([discovery]),
+      );
+      probeScanner.probeResult = AttachProbeConnected(
+        _FakeDe1(deviceId: 'usb-machine-id'),
+      );
+      probeScanner.quickConnectResult = null;
+      probeScanner.quickConnectGate = Completer<void>();
+      manager = ConnectionManager(
+        deviceScanner: probeScanner,
+        de1Controller: actualDe1Controller,
+        scaleController: scaleController,
+        settingsController: settings,
+        rememberedDevices: remembered,
+        deviceAttachSettleDelay: Duration.zero,
+      );
+      manager.machineReconnectBaseDelay = const Duration(days: 1);
+
+      // Remembered quick-connect is in flight...
+      final connecting = manager.connect();
+      await Future<void>.delayed(Duration.zero);
+      expect(probeScanner.quickConnectCallCount, 1);
+      expect(probeScanner.scanCallCount, 0);
+
+      // ...when USB intent latches and settles while it is still
+      // pending; the queued attach stops a scan that does not exist yet.
+      probeScanner.attach();
+      await Future<void>.delayed(Duration.zero);
+
+      // Quick-connect misses; the fallback automatic scan must not
+      // start while the latch is active.
+      probeScanner.quickConnectGate!.complete();
+      await connecting;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(probeScanner.scanCallCount, 0);
+      expect(probeScanner.probeCallCount, 1);
+      expect(settings.preferredMachineId, 'usb-machine-id');
+      expect(manager.currentStatus.phase, ConnectionPhase.ready);
+      remembered.dispose();
     });
 
     test(

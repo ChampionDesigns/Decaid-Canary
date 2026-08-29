@@ -422,7 +422,16 @@ class ConnectionManager {
     try {
       final probe = _attachProbe;
       if (probe == null) return false;
-      final result = await probe.connectAttachedMachine(event);
+      final AttachProbeResult result;
+      try {
+        result = await probe.connectAttachedMachine(event);
+      } catch (e, st) {
+        // An exceptional probe must not leave the latch set forever: treat
+        // it as unavailable so the fallback path completes the lifecycle
+        // and recovery/replay scheduling stays ungated.
+        _log.warning('Attach probe raised an exception', e, st);
+        return false;
+      }
       switch (result) {
         case AttachProbeConnected(machine: final machine):
           _log.info(
@@ -944,6 +953,18 @@ class ConnectionManager {
           }
         }
         _publishStatus(currentStatus.copyWith(phase: ConnectionPhase.ready));
+        return;
+      }
+      // Quick-connect missed. If USB intent latched while it was pending,
+      // defer the automatic scan to the latch lifecycle instead of
+      // starting a fresh scan that the queued attach probe would wait
+      // behind (the latch's stopScan already ran before this scan existed).
+      if (_usbAttachLatched) {
+        _resumeAutomaticAfterUsbAttach = true;
+        _log.fine(
+          'USB attach latched during quick-connect; deferring automatic '
+          'scan',
+        );
         return;
       }
     }
