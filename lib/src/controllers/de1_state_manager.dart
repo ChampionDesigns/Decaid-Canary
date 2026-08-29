@@ -399,7 +399,9 @@ class De1StateManager with WidgetsBindingObserver {
     if (navigator == null) return;
     await navigator.pushNamed(AccountPage.routeName);
     if (!_stillCurrent(machine)) return;
-    await _resolveLegacyIdentity(machine, allowPrompts: false);
+    _identityPromptedMachines.remove(machine);
+    _identityResolving.remove(machine);
+    await _resolveLegacyIdentity(machine);
   }
 
   Future<void> _checkSerialOwnership(String serial) async {

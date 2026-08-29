@@ -26,6 +26,29 @@ class FakeCredentialStore implements CredentialStore {
       _store.containsKey('email') && _store.containsKey('password');
 }
 
+class _GateFirstMachinesWriteStore implements CredentialStore {
+  final CredentialStore _inner;
+  final Completer<void> gate = Completer<void>();
+  bool _gated = false;
+
+  _GateFirstMachinesWriteStore(this._inner);
+
+  @override
+  Future<String?> read({required String key}) => _inner.read(key: key);
+
+  @override
+  Future<void> write({required String key, required String value}) async {
+    if (!_gated && key == 'registered_machines') {
+      _gated = true;
+      await gate.future;
+    }
+    await _inner.write(key: key, value: value);
+  }
+
+  @override
+  Future<void> delete({required String key}) => _inner.delete(key: key);
+}
+
 const _baseUrl = 'https://decentespresso.com';
 
 http_testing.MockClient _mockClient({
@@ -1296,6 +1319,43 @@ void main() {
         },
       );
 
+      test(
+        'a transient sn failure is retried on a later accountReady await',
+        () async {
+          var snCalls = 0;
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/login_test') {
+              return http.Response('cryptpw_abc123\n', 200);
+            }
+            if (request.url.path == '/support/api/sn') {
+              snCalls++;
+              if (snCalls == 1) throw Exception('timeout');
+              return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+            }
+            return http.Response('0\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+          await service.initialize();
+          await pumpEventQueue();
+
+          expect(snCalls, 1);
+          expect(service.usableRegisteredMachines, isEmpty);
+
+          await service.accountReady;
+          await pumpEventQueue();
+
+          expect(snCalls, 2);
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1338',
+          ]);
+        },
+      );
+
       test('an in-flight refresh from the old account cannot overwrite a '
           'replacement login', () async {
         final oldSnGate = Completer<void>();
@@ -1339,6 +1399,54 @@ void main() {
         expect(
           (persisted['machines'] as List).map((m) => (m as Map)['serial']),
           ['2222'],
+        );
+      });
+
+      test('an old-account refresh that validates before a replacement login '
+          'persists under its captured account, not the new one', () async {
+        final gatedStore = _GateFirstMachinesWriteStore(store);
+        var snCalls = 0;
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/login_test') {
+            return http.Response('cryptpw_abc123\n', 200);
+          }
+          if (request.url.path == '/support/api/sn') {
+            snCalls++;
+            if (snCalls == 1) {
+              return http.Response('1111 DE-DE1220V-00001\n', 200);
+            }
+            return http.Response('2222 DE-DE1PRO220V7-00533\n', 200);
+          }
+          return http.Response('0\n', 200);
+        });
+        await gatedStore.write(key: 'email', value: 'old@example.com');
+        await gatedStore.write(key: 'password', value: 'cryptpw_abc123');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: gatedStore,
+          baseUrl: _baseUrl,
+        );
+        await service.initialize();
+        await pumpEventQueue();
+
+        expect(snCalls, 1);
+        expect(service.usableRegisteredMachines.map((m) => m.serial), ['1111']);
+
+        // The old refresh validated and is now blocked writing its cache.
+        // A replacement login lands in that window.
+        expect(await service.login('new@example.com', 'hunter2'), isTrue);
+        await pumpEventQueue();
+
+        gatedStore.gate.complete();
+        await pumpEventQueue();
+
+        final persisted =
+            jsonDecode((await store.read(key: 'registered_machines'))!)
+                as Map<String, dynamic>;
+        expect(persisted['account'], 'old@example.com');
+        expect(
+          (persisted['machines'] as List).map((m) => (m as Map)['serial']),
+          ['1111'],
         );
       });
 

@@ -83,7 +83,15 @@ class DecentAccountService {
     unawaited(_ensureMachinesFresh());
   }
 
-  Future<void> get accountReady => _refreshFuture ?? Future.value();
+  Future<void> get accountReady async {
+    final inFlight = _refreshFuture;
+    if (inFlight != null) {
+      await inFlight;
+      return;
+    }
+    if (_machinesRefreshed || !_cacheLoaded || !_hasLinkedAccount) return;
+    await _ensureMachinesFresh();
+  }
 
   Future<void> _ensureMachinesFresh() {
     final inFlight = _refreshFuture;
@@ -137,13 +145,13 @@ class DecentAccountService {
   }
 
   Future<void> _persistRegisteredMachines(
-    List<RegisteredDecentMachine> machines,
-  ) async {
-    final email = await _store.read(key: 'email');
+    List<RegisteredDecentMachine> machines, {
+    required String account,
+  }) async {
     await _store.write(
       key: _registeredMachinesKey,
       value: jsonEncode({
-        'account': email,
+        'account': account,
         'machines': [for (final m in machines) m.toJson()],
       }),
     );
@@ -156,13 +164,11 @@ class DecentAccountService {
     return _normalizeEmail(storedAccount) == _normalizeEmail(currentEmail);
   }
 
-  Future<void> _persistMappings() async {
-    final email = await _store.read(key: 'email');
-    if (email == null) return;
+  Future<void> _persistMappings(String account) async {
     await _store.write(
       key: _identityMappingsKey,
       value: jsonEncode({
-        'account': email,
+        'account': account,
         'mappings': [for (final m in _mappings) m.toJson()],
       }),
     );
@@ -265,11 +271,12 @@ class DecentAccountService {
     if (currentEmail == null || _normalizeEmail(currentEmail) != account) {
       return;
     }
+    if (generation != _authGeneration) return;
     _machines = machines;
     _cacheLoaded = true;
     _machinesRefreshed = true;
-    await _persistRegisteredMachines(machines);
-    await _pruneMappings(machines);
+    await _persistRegisteredMachines(machines, account: account);
+    await _pruneMappings(machines, account);
   }
 
   Future<void> saveMapping({
@@ -277,9 +284,11 @@ class DecentAccountService {
     required String deviceId,
     required String serial,
   }) async {
-    if (!await hasLinkedAccount()) {
+    final email = await _store.read(key: 'email');
+    if (email == null) {
       throw StateError('not logged in');
     }
+    final account = _normalizeEmail(email);
     _mappings = [
       ..._mappings.where(
         (m) => !(m.transportType == transportType && m.deviceId == deviceId),
@@ -290,7 +299,7 @@ class DecentAccountService {
         serial: serial,
       ),
     ];
-    await _persistMappings();
+    await _persistMappings(account);
   }
 
   Future<RegisteredDecentMachine?> lookupMapping({
@@ -308,12 +317,15 @@ class DecentAccountService {
     return _machines.where((m) => m.serial == serial).firstOrNull;
   }
 
-  Future<void> _pruneMappings(List<RegisteredDecentMachine> machines) async {
+  Future<void> _pruneMappings(
+    List<RegisteredDecentMachine> machines,
+    String account,
+  ) async {
     final serials = machines.map((m) => m.serial).toSet();
     final pruned = _mappings.where((m) => serials.contains(m.serial)).toList();
     if (pruned.length == _mappings.length) return;
     _mappings = pruned;
-    await _persistMappings();
+    await _persistMappings(account);
   }
 
   Future<bool> isLoggedIn() async {

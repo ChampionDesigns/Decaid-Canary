@@ -515,6 +515,52 @@ void main() {
   });
 
   testWidgets(
+    'after linking, an account with two candidates shows the selection dialog',
+    (tester) async {
+      final machines = <Map<String, dynamic>>[];
+      final accountService = await seededService(
+        machines,
+        withCredentials: false,
+      );
+      await createManager(tester, accountService: accountService);
+
+      final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+      await pumpUntil(tester, () async {});
+
+      await tester.tap(find.text('Link account'));
+      await pumpUntil(tester, () async {});
+
+      await store.write(key: 'email', value: 'user@example.com');
+      await store.write(key: 'password', value: 'cryptpw_abc123');
+      machines.add({
+        'serial': '1337',
+        'sku': 'DE-DE1220V-00001',
+        'model': 'DE1',
+      });
+      machines.add({
+        'serial': '1338',
+        'sku': 'DE-DE1PRO220V7-00533',
+        'model': 'DE1Pro',
+      });
+      await accountService.initialize();
+
+      navigatorKey.currentState!.pop();
+      await pumpUntil(tester, () async {});
+
+      expect(find.text('Select your machine'), findsOneWidget);
+      expect(find.textContaining('1337'), findsOneWidget);
+      expect(find.textContaining('1338'), findsOneWidget);
+
+      await tester.tap(find.textContaining('1338'));
+      await pumpUntil(tester, () async {});
+
+      expect(de1.machineInfo.serialNumber, '1338');
+      expect(de1.machineInfo.model, 'DE1Pro');
+      await disconnectAndSettle(tester);
+    },
+  );
+
+  testWidgets(
     'a real nonzero serial not on the account still reports the mismatch',
     (tester) async {
       final emailRequests = <String>[];
