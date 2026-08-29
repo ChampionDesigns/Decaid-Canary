@@ -1,0 +1,110 @@
+{
+  "id": "weather.reaplugin",
+  "author": "Ben Champion",
+  "name": "Weather",
+  "description": "Local weather for the live screen: temperature now, and rain by part of day. Set a location below; the skin draws it in the bottom-right corner.",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "permissions": [
+    "log",
+    "emit",
+    "pluginStorage"
+  ],
+  "settings": {
+    "Location": {
+      "type": "string",
+      "label": "Location",
+      "description": "A town or suburb, e.g. \"Brunswick, AU\". Looked up once and remembered as coordinates."
+    },
+    "RefreshMinutes": {
+      "type": "number",
+      "label": "Refresh every (minutes)",
+      "description": "How often to ask for a new reading. 30 is plenty; below 10 is ignored.",
+      "default": 30
+    },
+    "Units": {
+      "type": "string",
+      "label": "Units",
+      "description": "\"metric\" for °C and mm, \"imperial\" for °F and inches. Leave blank to follow the skin.",
+      "default": "metric"
+    }
+  },
+  "api": [
+    {
+      "id": "weather",
+      "type": "websocket",
+      "data": {
+        "ok": {
+          "type": "boolean",
+          "description": "false when there is no usable reading — no location set, or the fetch failed and the cache is stale."
+        },
+        "reason": {
+          "type": "enum",
+          "values": ["no_location", "unknown_place", "offline", "stale"],
+          "description": "why ok is false; absent when ok is true."
+        },
+        "place": {
+          "type": "string",
+          "description": "The resolved place name, as the skin should display it."
+        },
+        "observedAt": {
+          "type": "string",
+          "description": "ISO timestamp of the reading, in the location's own timezone."
+        },
+        "ageMinutes": {
+          "type": "number",
+          "description": "How long ago the reading was fetched. The skin hides the widget past two hours."
+        },
+        "isDay": {
+          "type": "boolean",
+          "description": "Whether it is daylight at the location — the skin picks a sun or moon mark."
+        },
+        "code": {
+          "type": "number",
+          "description": "WMO weather code, which the skin maps to one of its marks."
+        },
+        "temperature": {
+          "type": "number",
+          "description": "Air temperature now, in the unit named by `units`."
+        },
+        "apparent": {
+          "type": "number",
+          "description": "Apparent (feels-like) temperature, same unit."
+        },
+        "humidity": {
+          "type": "number",
+          "description": "Relative humidity, per cent."
+        },
+        "dewPoint": {
+          "type": "number",
+          "description": "Dew point, same unit as temperature. Computed from temperature and humidity."
+        },
+        "wind": {
+          "type": "number",
+          "description": "Wind speed, km/h for metric or mph for imperial."
+        },
+        "windFrom": {
+          "type": "string",
+          "description": "Compass point the wind is coming from, e.g. NW."
+        },
+        "pressure": {
+          "type": "number",
+          "description": "Surface pressure in hPa."
+        },
+        "units": {
+          "type": "enum",
+          "values": ["metric", "imperial"],
+          "description": "Which unit set every value above is in."
+        },
+        "periods": {
+          "type": "array",
+          "description": "The next THREE parts of the day, FORWARD ONLY — the one running now first. Each carries {id, label, fromHour, toHour, tomorrow, probability, amount}. The corner draws the first two; the modal draws all three."
+        }
+      },
+      "message": {
+        "type": "string",
+        "description": "The reading in one line, for a client with nowhere to put the detail."
+      }
+    }
+  ]
+}
