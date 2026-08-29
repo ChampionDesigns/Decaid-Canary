@@ -1402,8 +1402,8 @@ void main() {
         );
       });
 
-      test('an old-account refresh that validates before a replacement login '
-          'persists under its captured account, not the new one', () async {
+      test('a stale old-account refresh write cannot clobber the replacement '
+          'account cache', () async {
         final gatedStore = _GateFirstMachinesWriteStore(store);
         var snCalls = 0;
         httpClient = http_testing.MockClient((request) async {
@@ -1433,20 +1433,22 @@ void main() {
         expect(service.usableRegisteredMachines.map((m) => m.serial), ['1111']);
 
         // The old refresh validated and is now blocked writing its cache.
-        // A replacement login lands in that window.
-        expect(await service.login('new@example.com', 'hunter2'), isTrue);
+        // A replacement login lands in that window and waits on the lock.
+        final loginFuture = service.login('new@example.com', 'hunter2');
         await pumpEventQueue();
 
         gatedStore.gate.complete();
+        expect(await loginFuture, isTrue);
         await pumpEventQueue();
 
+        expect(service.usableRegisteredMachines.map((m) => m.serial), ['2222']);
         final persisted =
             jsonDecode((await store.read(key: 'registered_machines'))!)
                 as Map<String, dynamic>;
-        expect(persisted['account'], 'old@example.com');
+        expect(persisted['account'], 'new@example.com');
         expect(
           (persisted['machines'] as List).map((m) => (m as Map)['serial']),
-          ['1111'],
+          ['2222'],
         );
       });
 

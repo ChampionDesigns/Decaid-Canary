@@ -59,6 +59,7 @@ class DecentAccountService {
   Future<bool>? _validationFuture;
   DateTime? _cooldownUntil;
   int _authGeneration = 0;
+  Future<void> _accountWriteLock = Future.value();
 
   List<RegisteredDecentMachine> _machines = const [];
   List<_IdentityMapping> _mappings = const [];
@@ -157,6 +158,12 @@ class DecentAccountService {
     );
   }
 
+  Future<T> _withAccountWriteLock<T>(Future<T> Function() action) {
+    final run = _accountWriteLock.then((_) => action());
+    _accountWriteLock = run.then((_) {}, onError: (_) {});
+    return run;
+  }
+
   Future<bool> _cacheMatchesCurrentAccount(Map<String, dynamic> decoded) async {
     final storedAccount = decoded['account'] as String?;
     final currentEmail = await _store.read(key: 'email');
@@ -174,12 +181,14 @@ class DecentAccountService {
     );
   }
 
-  Future<void> _clearAccountScopedState() async {
-    _machines = const [];
-    _mappings = const [];
-    _machinesRefreshed = false;
-    await _store.delete(key: _registeredMachinesKey);
-    await _store.delete(key: _identityMappingsKey);
+  Future<void> _clearAccountScopedState() {
+    return _withAccountWriteLock(() async {
+      _machines = const [];
+      _mappings = const [];
+      _machinesRefreshed = false;
+      await _store.delete(key: _registeredMachinesKey);
+      await _store.delete(key: _identityMappingsKey);
+    });
   }
 
   static String _normalizeEmail(String email) => email.trim().toLowerCase();
@@ -266,17 +275,19 @@ class DecentAccountService {
     }
     final account = _normalizeEmail(email);
     final machines = await fetchRegisteredMachines();
-    if (generation != _authGeneration) return;
-    final currentEmail = await _store.read(key: 'email');
-    if (currentEmail == null || _normalizeEmail(currentEmail) != account) {
-      return;
-    }
-    if (generation != _authGeneration) return;
-    _machines = machines;
-    _cacheLoaded = true;
-    _machinesRefreshed = true;
-    await _persistRegisteredMachines(machines, account: account);
-    await _pruneMappings(machines, account);
+    await _withAccountWriteLock(() async {
+      if (generation != _authGeneration) return;
+      final currentEmail = await _store.read(key: 'email');
+      if (currentEmail == null || _normalizeEmail(currentEmail) != account) {
+        return;
+      }
+      if (generation != _authGeneration) return;
+      _machines = machines;
+      _cacheLoaded = true;
+      _machinesRefreshed = true;
+      await _persistRegisteredMachines(machines, account: account);
+      await _pruneMappings(machines, account);
+    });
   }
 
   Future<void> saveMapping({
@@ -284,22 +295,26 @@ class DecentAccountService {
     required String deviceId,
     required String serial,
   }) async {
+    final generation = _authGeneration;
     final email = await _store.read(key: 'email');
     if (email == null) {
       throw StateError('not logged in');
     }
     final account = _normalizeEmail(email);
-    _mappings = [
-      ..._mappings.where(
-        (m) => !(m.transportType == transportType && m.deviceId == deviceId),
-      ),
-      _IdentityMapping(
-        transportType: transportType,
-        deviceId: deviceId,
-        serial: serial,
-      ),
-    ];
-    await _persistMappings(account);
+    await _withAccountWriteLock(() async {
+      if (generation != _authGeneration) return;
+      _mappings = [
+        ..._mappings.where(
+          (m) => !(m.transportType == transportType && m.deviceId == deviceId),
+        ),
+        _IdentityMapping(
+          transportType: transportType,
+          deviceId: deviceId,
+          serial: serial,
+        ),
+      ];
+      await _persistMappings(account);
+    });
   }
 
   Future<RegisteredDecentMachine?> lookupMapping({
