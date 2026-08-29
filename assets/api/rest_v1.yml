@@ -571,6 +571,9 @@ paths:
         firmware palette registers and persisted there immediately;
         `frontSwitch` is ignored on write (derived hardware behavior, not
         an independent control). There is no separate commit latch.
+        Channels are quantized to the 8 significant bits the firmware
+        stores, and the 200 body is the resulting stored state, so a
+        client can adopt the canonical spelling without a follow-up GET.
         Returns 404 when the connected machine is not a Bengle.
       tags: [Machine]
       requestBody:
@@ -581,7 +584,13 @@ paths:
               $ref: "#/components/schemas/LedStripState"
       responses:
         "200":
-          description: Configuration accepted and persisted
+          description: |
+            Configuration accepted and persisted; body is the stored
+            canonical state (quantized; `frontSwitch` derived).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedStripState"
         "400":
           description: Invalid request body or malformed JSON
         "404":
@@ -5770,6 +5779,16 @@ components:
         Format: `RRRRGGGGBBBB` (4 hex digits per channel, upper-case
         preferred, case-insensitive). Missing / non-hex / wrong length
         → treated as black (`000000000000`).
+
+        The machine stores 8 significant bits per channel. Any 16-bit
+        value is accepted on write and truncated to its high byte, so
+        the stored and echoed canonical spelling always has `00` as the
+        low byte of each channel: `FFFF22220000` is stored and echoed as
+        `FF0022000000`. Every 16-bit spelling sharing a high byte writes
+        identical firmware bytes. Clients that byte-compare a written
+        colour against a read-back one (dirty flags, change detection)
+        must adopt the echoed canonical form rather than the value they
+        sent.
       example: FFFF80000000
 
     ScaleCalibrationState:
