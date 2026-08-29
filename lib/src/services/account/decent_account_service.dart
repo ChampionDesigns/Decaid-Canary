@@ -224,13 +224,19 @@ class DecentAccountService {
     return false;
   }
 
-  Future<void> logout() async {
-    await _clearAccountScopedState();
-    await _store.delete(key: 'email');
-    await _store.delete(key: 'password');
+  Future<void> logout() {
     _authGeneration++;
     _authenticated = false;
     _hasLinkedAccount = false;
+    return _withAccountWriteLock(() async {
+      _machines = const [];
+      _mappings = const [];
+      _machinesRefreshed = false;
+      await _store.delete(key: _registeredMachinesKey);
+      await _store.delete(key: _identityMappingsKey);
+      await _store.delete(key: 'email');
+      await _store.delete(key: 'password');
+    });
   }
 
   Future<bool> hasLinkedAccount() async =>

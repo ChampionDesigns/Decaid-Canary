@@ -560,6 +560,35 @@ void main() {
     },
   );
 
+  testWidgets('cancelling the account page does not re-prompt to link', (
+    tester,
+  ) async {
+    final accountService = await seededService(
+      const [],
+      withCredentials: false,
+    );
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Link your Decent account'), findsOneWidget);
+
+    await tester.tap(find.text('Link account'));
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('AccountPage stub'), findsOneWidget);
+
+    // Back out of the account flow without linking anything.
+    navigatorKey.currentState!.pop();
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Link your Decent account'), findsNothing);
+    expect(de1.machineInfo.serialNumber, '0');
+    expect(de1.machineInfo.model, 'Unknown');
+    await disconnectAndSettle(tester);
+  });
+
   testWidgets(
     'a real nonzero serial not on the account still reports the mismatch',
     (tester) async {

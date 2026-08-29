@@ -49,6 +49,30 @@ class _GateFirstMachinesWriteStore implements CredentialStore {
   Future<void> delete({required String key}) => _inner.delete(key: key);
 }
 
+class _GateEmailDeleteStore implements CredentialStore {
+  final CredentialStore _inner;
+  final Completer<void> gate = Completer<void>();
+  bool _gated = false;
+
+  _GateEmailDeleteStore(this._inner);
+
+  @override
+  Future<String?> read({required String key}) => _inner.read(key: key);
+
+  @override
+  Future<void> write({required String key, required String value}) =>
+      _inner.write(key: key, value: value);
+
+  @override
+  Future<void> delete({required String key}) async {
+    if (!_gated && key == 'email') {
+      _gated = true;
+      await gate.future;
+    }
+    await _inner.delete(key: key);
+  }
+}
+
 const _baseUrl = 'https://decentespresso.com';
 
 http_testing.MockClient _mockClient({
@@ -1483,6 +1507,53 @@ void main() {
 
           expect(service.usableRegisteredMachines, isEmpty);
           expect(await store.read(key: 'registered_machines'), isNull);
+        },
+      );
+
+      test(
+        'a refresh queued behind logout cannot repersist scoped data',
+        () async {
+          final gatedStore = _GateEmailDeleteStore(store);
+          final snGate = Completer<void>();
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/login_test') {
+              return http.Response('cryptpw_abc123\n', 200);
+            }
+            if (request.url.path == '/support/api/sn') {
+              await snGate.future;
+              return http.Response('1111 DE-DE1220V-00001\n', 200);
+            }
+            return http.Response('0\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: gatedStore,
+            baseUrl: _baseUrl,
+          );
+          await service.initialize();
+          await pumpEventQueue();
+
+          // The startup refresh is in flight (blocked on /sn) when logout
+          // starts; logout clears and blocks on the gated email delete.
+          final logoutFuture = service.logout();
+          await pumpEventQueue();
+
+          // The stale refresh now resolves /sn and queues behind logout's
+          // scoped-state clear on the account write lock.
+          snGate.complete();
+          await pumpEventQueue();
+
+          // Logout finishes; the queued refresh must see the bumped
+          // generation and bail before persisting.
+          gatedStore.gate.complete();
+          await logoutFuture;
+          await pumpEventQueue();
+
+          expect(service.usableRegisteredMachines, isEmpty);
+          expect(await store.read(key: 'registered_machines'), isNull);
+          expect(await store.read(key: 'identity_mappings'), isNull);
+          expect(store.hasCredentials, isFalse);
         },
       );
     });

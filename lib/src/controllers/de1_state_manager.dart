@@ -399,6 +399,9 @@ class De1StateManager with WidgetsBindingObserver {
     if (navigator == null) return;
     await navigator.pushNamed(AccountPage.routeName);
     if (!_stillCurrent(machine)) return;
+    final nowLinked = await account.hasLinkedAccount();
+    final nowInvalid = await account.isAuthKnownInvalid();
+    if (!nowLinked || nowInvalid) return;
     _identityPromptedMachines.remove(machine);
     _identityResolving.remove(machine);
     await _resolveLegacyIdentity(machine);
