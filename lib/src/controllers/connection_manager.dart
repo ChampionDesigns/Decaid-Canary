@@ -312,8 +312,15 @@ class ConnectionManager {
         _machineRecoveryActive ||
         _machineReconnect != null ||
         _activeAutomaticMachineAttempt;
-    _machineReconnect?.cancel();
-    _machineReconnect = null;
+    if (_machineReconnect != null) {
+      _machineReconnect?.cancel();
+      _machineReconnect = null;
+      if (_machineReconnectFailures > 0) {
+        // A pending timer already counted its backoff tier; no attempt ran,
+        // so undo the tier so the rescheduled attempt keeps the same delay.
+        _machineReconnectFailures--;
+      }
+    }
     if (_activeAutomaticMachineAttempt) {
       _automaticMachineAttemptSuperseded = true;
       _explicitScanGeneration++;
@@ -332,20 +339,22 @@ class ConnectionManager {
       _resumeAutomaticAfterUsbAttach = false;
       return;
     }
-    if (!_resumeAutomaticAfterUsbAttach) return;
-    _resumeAutomaticAfterUsbAttach = false;
     if (_machineRecoveryActive) {
+      // Recovery may have been armed during the probe (e.g. a failed attach
+      // machine) while scheduling was gated by the latch, or suspended at
+      // latch time; either way the timer must be (re)armed now that the
+      // latch gate is gone.
+      _resumeAutomaticAfterUsbAttach = false;
       _maybeScheduleMachineReconnect();
       return;
     }
-    if (settingsController.preferredMachineId != null &&
-        settingsController.preferredMachineId!.isNotEmpty) {
-      _log.info(
-        'USB attach resolved without adoption; resuming automatic '
-        'machine selection',
-      );
-      await _attemptAutomaticConnect();
-    }
+    if (!_resumeAutomaticAfterUsbAttach) return;
+    _resumeAutomaticAfterUsbAttach = false;
+    _log.info(
+      'USB attach resolved without adoption; resuming automatic '
+      'machine selection',
+    );
+    await _attemptAutomaticConnect();
   }
 
   Future<bool> _releaseSupersededAutomaticMachine() async {
@@ -384,10 +393,13 @@ class ConnectionManager {
     );
     if (!handled && settingsController.preferredMachineId != null) {
       _resumeAutomaticAfterUsbAttach = false;
-      await _completeUsbAttachLifecycle();
+      unawaited(_completeUsbAttachLifecycle());
       return _attemptAutomaticConnect();
     }
-    await _completeUsbAttachLifecycle();
+    // Do not await the resume replay here: the coordinator releases its
+    // in-flight guard when this attempt returns, so a second USB attach
+    // during the resumed scan must be able to latch again.
+    unawaited(_completeUsbAttachLifecycle());
     return true;
   }
 
@@ -1260,6 +1272,9 @@ class ConnectionManager {
   @visibleForTesting
   bool get machineRecoveryActive => _machineRecoveryActive;
 
+  @visibleForTesting
+  int get machineReconnectFailures => _machineReconnectFailures;
+
   bool _shouldRetryMachine() {
     return _machineRecoveryActive &&
         !_machineConnected &&
@@ -1509,6 +1524,22 @@ class ConnectionManager {
 
     try {
       await de1Controller.connectToDe1(machine).timeout(_connectTimeout);
+      if (_automaticMachineAttemptSuperseded) {
+        // This connect was in flight when USB intent latched; it may still
+        // have completed its transport connect, but it must not persist its
+        // own preference. The release path disconnects it afterwards. Flush
+        // the registration so the release sees the machine as connected
+        // (the de1 subject delivers asynchronously).
+        _log.fine(
+          'connectMachine: connected but superseded by USB attach intent, '
+          'not persisting preference for ${machine.deviceId}',
+        );
+        await de1Controller.de1.firstWhere(
+          (connected) => connected == machine,
+          orElse: () => machine,
+        );
+        return const ConnectionResult.conflict();
+      }
       await settingsController.setPreferredMachineId(machine.deviceId);
       selectionSession?.scanReport.recordResult(
         machine.deviceId,
