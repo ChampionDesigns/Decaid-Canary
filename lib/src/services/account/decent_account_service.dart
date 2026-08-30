@@ -205,12 +205,15 @@ class DecentAccountService {
     return _normalizeEmail(storedAccount) == _normalizeEmail(currentEmail);
   }
 
-  Future<void> _persistMappings(String account) async {
+  Future<void> _persistMappings(
+    String account,
+    List<_IdentityMapping> mappings,
+  ) async {
     await _store.write(
       key: _identityMappingsKey,
       value: jsonEncode({
         'account': account,
-        'mappings': [for (final m in _mappings) m.toJson()],
+        'mappings': [for (final m in mappings) m.toJson()],
       }),
     );
   }
@@ -372,7 +375,7 @@ class DecentAccountService {
       }
       if (generation != _authGeneration) return;
       if (!_machines.any((machine) => machine.serial == serial)) return;
-      _mappings = [
+      final mappings = [
         ..._mappings.where(
           (m) => !(m.transportType == transportType && m.deviceId == deviceId),
         ),
@@ -382,7 +385,8 @@ class DecentAccountService {
           serial: serial,
         ),
       ];
-      await _persistMappings(account);
+      await _persistMappings(account, mappings);
+      _mappings = mappings;
     });
   }
 
@@ -411,8 +415,8 @@ class DecentAccountService {
     final serials = machines.map((m) => m.serial).toSet();
     final pruned = _mappings.where((m) => serials.contains(m.serial)).toList();
     if (pruned.length == _mappings.length) return;
+    await _persistMappings(account, pruned);
     _mappings = pruned;
-    await _persistMappings(account);
   }
 
   Future<bool> isLoggedIn() async {

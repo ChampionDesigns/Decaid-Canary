@@ -1607,6 +1607,40 @@ void main() {
         );
       });
 
+      test('failed mapping persistence does not publish the mapping', () async {
+        httpClient = clientWithSn(snBody: '1338 DE-DE1PRO220V7-00533\n');
+        await seedAccount('user@example.com', 'cryptpw_abc123');
+        await seedMachinesCache([
+          {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+        ]);
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+        await service.initialize();
+        await service.accountReady;
+        store.failingWriteKey = 'identity_mappings';
+        store.remainingWriteFailures = 1;
+
+        await expectLater(
+          service.saveMapping(
+            transportType: 'ble',
+            deviceId: 'AA:BB:CC',
+            serial: '1338',
+          ),
+          throwsStateError,
+        );
+
+        expect(
+          await service.lookupMapping(
+            transportType: 'ble',
+            deviceId: 'AA:BB:CC',
+          ),
+          isNull,
+        );
+      });
+
       test(
         'mappings are pruned when their serial leaves the account list',
         () async {
@@ -1654,6 +1688,61 @@ void main() {
           );
         },
       );
+
+      test('a failed mapping prune is persisted on the next refresh', () async {
+        var snCalls = 0;
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/sn') {
+            snCalls++;
+            return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+          }
+          return http.Response('cryptpw_abc123\n', 200);
+        });
+        await seedAccount('user@example.com', 'cryptpw_abc123');
+        await seedMachinesCache([
+          {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+        ]);
+        await store.write(
+          key: 'identity_mappings',
+          value: jsonEncode({
+            'account': 'user@example.com',
+            'mappings': [
+              {
+                'transportType': 'ble',
+                'deviceId': 'AA:BB:CC',
+                'serial': '1337',
+              },
+            ],
+          }),
+        );
+        store.failingWriteKey = 'identity_mappings';
+        store.remainingWriteFailures = 1;
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        await service.initialize();
+        await service.accountReady;
+
+        expect(snCalls, 1);
+        expect(
+          (jsonDecode((await store.read(key: 'identity_mappings'))!)['mappings']
+              as List),
+          hasLength(1),
+        );
+
+        await service.accountReady;
+
+        expect(snCalls, 2);
+        expect(
+          (jsonDecode((await store.read(key: 'identity_mappings'))!)['mappings']
+              as List),
+          isEmpty,
+        );
+      });
 
       test('hasUsableAccountCache stays false without linked credentials even '
           'with a cached machine list', () async {
