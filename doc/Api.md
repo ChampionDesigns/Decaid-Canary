@@ -90,6 +90,19 @@ For browser clients on a different origin, `ETag` is exposed via `Access-Control
 | POST | `/api/v1/machine/ledStrip/reset` | Re-read palette from FW and return refreshed state (truthful reload, not a rollback) — Bengle only | |
 | GET | `/api/v1/machine/scaleCalibration` | Read decoded scale-calibration state (step, cell, sub-state, seconds remaining, status) — Bengle only, 404 elsewhere | |
 | PUT | `/api/v1/machine/scaleCalibration` | Start `zero`/`latch`/`abort` calibration step (`weightGrams` 1–10000 required for `latch`); 202 accepted / 409 rejected (busy or shot in progress) — Bengle only | |
+| GET | `/api/v1/machine/stopAtWeight` | Read back the End Of Shot Weight held in firmware (`{"grams": 50.0}`, `0` = disabled). Read-only; the target is set through `context.targetYield` on `/api/v1/workflow` — Bengle only, 404 elsewhere | |
+
+#### Stop-at-weight target
+
+`WorkflowContext.targetYield` is reflected into the firmware End Of Shot Weight register by the SAW
+bridge, debounced 250 ms, and re-pushed on every machine reconnect. `GET
+/api/v1/machine/stopAtWeight` reads the register back, which is the only way to confirm the workflow
+and the machine agree.
+
+An **absent** `targetYield` means unknown, not off: the bridge writes nothing and the firmware keeps
+whatever target it already had. An **explicit** `targetYield` of `0` is a real value and is written,
+disabling stop-at-weight. So the read-back can legitimately report a target the current workflow
+document does not mention.
 
 #### Machine settings write verification
 
