@@ -79,6 +79,7 @@ class De1StateManager with WidgetsBindingObserver {
 
   bool _appIsInForeground = true;
   bool _navigationContextReady = false;
+  bool _identityDialogOpen = false;
 
   De1StateManager({
     required De1Controller de1Controller,
@@ -130,7 +131,11 @@ class De1StateManager with WidgetsBindingObserver {
 
   void _checkNavigationContext() {
     final context = _navigatorKey.currentContext;
-    _navigationContextReady = context != null && context.mounted;
+    final ready = context != null && context.mounted;
+    if (ready && !_navigationContextReady) {
+      unawaited(_retryPendingIdentityResolution());
+    }
+    _navigationContextReady = ready;
     _logger.fine('Navigation context ready: $_navigationContextReady');
   }
 
@@ -198,8 +203,15 @@ class De1StateManager with WidgetsBindingObserver {
       }
     } else {
       _logger.info('DE1 disconnected');
+      _dismissIdentityDialog();
       _cleanupShotSequencer();
     }
+  }
+
+  void _dismissIdentityDialog() {
+    if (!_identityDialogOpen) return;
+    _identityDialogOpen = false;
+    _navigatorKey.currentState?.pop();
   }
 
   void _maybeCheckSerialOwnership(String serial) {
@@ -332,7 +344,8 @@ class De1StateManager with WidgetsBindingObserver {
     final context = _navigatorKey.currentContext;
     if (context == null || !context.mounted) return null;
     _identityPromptedMachines.add(machine);
-    return showDialog<RegisteredDecentMachine>(
+    _identityDialogOpen = true;
+    final selected = await showDialog<RegisteredDecentMachine>(
       context: context,
       builder: (dialogContext) {
         return SimpleDialog(
@@ -358,6 +371,8 @@ class De1StateManager with WidgetsBindingObserver {
         );
       },
     );
+    _identityDialogOpen = false;
+    return selected;
   }
 
   Future<void> _maybePromptLinkAccount(UnifiedDe1 machine) async {
@@ -371,6 +386,7 @@ class De1StateManager with WidgetsBindingObserver {
     final context = _navigatorKey.currentContext;
     if (context == null || !context.mounted) return;
     _identityPromptedMachines.add(machine);
+    _identityDialogOpen = true;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
@@ -393,6 +409,7 @@ class De1StateManager with WidgetsBindingObserver {
         );
       },
     );
+    _identityDialogOpen = false;
     if (accepted != true) return;
     if (!_stillCurrent(machine)) return;
     final navigator = _navigatorKey.currentState;

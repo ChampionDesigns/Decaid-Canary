@@ -207,11 +207,13 @@ class DecentAccountService {
       await _store.write(key: 'email', value: email);
       await _store.write(key: 'password', value: response.body.trim());
       _authGeneration++;
-      _authenticated = true;
-      _hasLinkedAccount = true;
+      _authenticated = false;
+      _hasLinkedAccount = false;
       if (emailChanged) {
         await _clearAccountScopedState();
       }
+      _authenticated = true;
+      _hasLinkedAccount = true;
       _log.info('login -> accepted');
       try {
         await refreshRegisteredMachines();

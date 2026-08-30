@@ -589,6 +589,51 @@ void main() {
     await disconnectAndSettle(tester);
   });
 
+  testWidgets('a machine connected before the navigator mounts still prompts '
+      'once navigation is ready', (tester) async {
+    final accountService = await seededService(
+      const [],
+      withCredentials: false,
+    );
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+
+    // The manager subscribes to the replaying DE1 stream before the widget
+    // tree (and thus the navigator context) exists.
+    await createManager(tester, accountService: accountService);
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Link your Decent account'), findsOneWidget);
+
+    await tester.tap(find.text('Not now'));
+    await pumpUntil(tester, () async {});
+
+    expect(de1.machineInfo.serialNumber, '0');
+    expect(de1.machineInfo.model, 'Unknown');
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets('disconnecting dismisses an open selection dialog', (
+    tester,
+  ) async {
+    final accountService = await seededService(const [
+      {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await createManager(tester, accountService: accountService);
+
+    await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Select your machine'), findsOneWidget);
+
+    de1Controller.disconnect();
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Select your machine'), findsNothing);
+    expect(find.text('Link your Decent account'), findsNothing);
+    await tester.pumpWidget(Container());
+  });
+
   testWidgets(
     'a real nonzero serial not on the account still reports the mismatch',
     (tester) async {

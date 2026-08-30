@@ -73,6 +73,30 @@ class _GateEmailDeleteStore implements CredentialStore {
   }
 }
 
+class _GateFirstMachinesDeleteStore implements CredentialStore {
+  final CredentialStore _inner;
+  final Completer<void> gate = Completer<void>();
+  bool _gated = false;
+
+  _GateFirstMachinesDeleteStore(this._inner);
+
+  @override
+  Future<String?> read({required String key}) => _inner.read(key: key);
+
+  @override
+  Future<void> write({required String key, required String value}) =>
+      _inner.write(key: key, value: value);
+
+  @override
+  Future<void> delete({required String key}) async {
+    if (!_gated && key == 'registered_machines') {
+      _gated = true;
+      await gate.future;
+    }
+    await _inner.delete(key: key);
+  }
+}
+
 const _baseUrl = 'https://decentespresso.com';
 
 http_testing.MockClient _mockClient({
@@ -1507,6 +1531,61 @@ void main() {
 
           expect(service.usableRegisteredMachines, isEmpty);
           expect(await store.read(key: 'registered_machines'), isNull);
+        },
+      );
+
+      test(
+        'a replacement login hides the previous account cache until cleared',
+        () async {
+          final gatedStore = _GateFirstMachinesDeleteStore(store);
+          var snCalls = 0;
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/login_test') {
+              return http.Response('cryptpw_abc123\n', 200);
+            }
+            if (request.url.path == '/support/api/sn') {
+              snCalls++;
+              if (snCalls == 1) {
+                return http.Response('1111 DE-DE1220V-00001\n', 200);
+              }
+              return http.Response('2222 DE-DE1PRO220V7-00533\n', 200);
+            }
+            return http.Response('0\n', 200);
+          });
+          await gatedStore.write(key: 'email', value: 'old@example.com');
+          await gatedStore.write(key: 'password', value: 'cryptpw_abc123');
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: gatedStore,
+            baseUrl: _baseUrl,
+          );
+          await service.initialize();
+          await pumpEventQueue();
+
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1111',
+          ]);
+
+          service.reportAuthenticationFailure();
+
+          final loginFuture = service.login('new@example.com', 'hunter2');
+          await pumpEventQueue();
+
+          // The scoped-state clear is blocked on the gated delete; the old
+          // account's in-memory cache must not resurface meanwhile.
+          expect(service.usableRegisteredMachines, isEmpty);
+
+          gatedStore.gate.complete();
+          await loginFuture;
+          await pumpEventQueue();
+
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '2222',
+          ]);
+          final persisted =
+              jsonDecode((await store.read(key: 'registered_machines'))!)
+                  as Map<String, dynamic>;
+          expect(persisted['account'], 'new@example.com');
         },
       );
 
