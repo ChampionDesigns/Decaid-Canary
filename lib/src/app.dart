@@ -65,6 +65,7 @@ import 'settings/gateway_mode.dart';
 import 'settings/settings_controller.dart';
 import 'settings/settings_view.dart';
 import 'package:reaprime/src/services/account/decent_account_service.dart';
+import 'package:reaprime/src/services/app_log_upload_service.dart';
 
 class NavigationService {
   static final GlobalKey<NavigatorState> navigatorKey =
@@ -100,6 +101,7 @@ class MyApp extends StatefulWidget {
     this.profileStorageService,
     this.decentAccountService,
     this.accountTokensController,
+    this.appLogUploadService,
     this.batteryController,
   });
 
@@ -128,6 +130,7 @@ class MyApp extends StatefulWidget {
   final ProfileStorageService? profileStorageService;
   final DecentAccountService? decentAccountService;
   final AccountTokensController? accountTokensController;
+  final AppLogUploadService? appLogUploadService;
   final BatteryController? batteryController;
 
   @override
@@ -491,6 +494,7 @@ class _MyAppState extends State<MyApp> {
                       return AccountPage(
                         accountService: widget.decentAccountService!,
                         tokensController: widget.accountTokensController,
+                        appLogUploadService: widget.appLogUploadService,
                       );
                     case LauncherScanPage.routeName:
                       return LauncherScanPage(

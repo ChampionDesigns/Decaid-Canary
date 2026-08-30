@@ -13,6 +13,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:logging/logging.dart';
 import 'package:logging_appenders/logging_appenders.dart';
 import 'package:reaprime/build_info.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:reaprime/src/account/account_consent_prompter.dart';
 import 'package:reaprime/src/controllers/battery_controller.dart';
 import 'package:reaprime/src/controllers/bengle_probe_bridge.dart';
@@ -37,6 +38,7 @@ import 'package:reaprime/src/controllers/workflow_controller.dart';
 import 'package:reaprime/src/controllers/workflow_device_sync.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/device/device.dart';
+import 'package:reaprime/src/models/device/simulated_device.dart';
 import 'package:reaprime/src/plugins/plugin_loader_service.dart';
 import 'package:reaprime/src/plugins/plugin_source_service.dart';
 import 'package:reaprime/src/services/android_updater.dart';
@@ -62,7 +64,9 @@ import 'package:reaprime/src/services/account/proxy_token_service.dart';
 import 'package:reaprime/src/services/account/proxy_token_store.dart';
 import 'package:reaprime/src/controllers/account_tokens_controller.dart';
 import 'package:reaprime/src/services/account/credential_store_factory.dart';
+import 'package:reaprime/src/services/app_log_upload_service.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:reaprime/src/services/storage/hive_store_service.dart';
 import 'package:reaprime/src/services/universal_ble_discovery_service.dart';
 import 'package:reaprime/src/services/simulated_device_service.dart';
@@ -402,6 +406,7 @@ void main(List<String> args) async {
 
   DecentAccountService? decentAccountService;
   DecentProxyService? decentProxyService;
+  AppLogUploadService? appLogUploadService;
   AccountTokensController? accountTokensController;
   CredentialStore? credentialStore;
   AccountConsentGate? consentGate;
@@ -415,8 +420,9 @@ void main(List<String> args) async {
     final consentPrompter = AccountConsentPrompter(
       navigatorKey: NavigationService.navigatorKey,
     );
+    final consentStore = AccountConsentStore(credentialStore: credentialStore);
     final gate = AccountConsentGate(
-      store: AccountConsentStore(credentialStore: credentialStore),
+      store: consentStore,
       prompt: consentPrompter.prompt,
       trustedConsentKeys: cliArgs.trustedConsentKeys,
       trustAllConsent: cliArgs.trustAllConsent,
@@ -427,7 +433,9 @@ void main(List<String> args) async {
       defaultValue: 'https://decentespresso.com',
     );
     decentAccountService = DecentAccountService(
-      httpClient: http.Client(),
+      httpClient: IOClient(
+        HttpClient()..connectionTimeout = const Duration(seconds: 30),
+      ),
       credentialStore: credentialStore,
       baseUrl: decentBaseUrl,
     );
@@ -445,6 +453,27 @@ void main(List<String> args) async {
       callerLabelRegistrar: gate.registerCallerLabel,
     );
     await accountTokensController.initialize();
+
+    appLogUploadService = AppLogUploadService(
+      accountService: decentAccountService,
+      consentStore: consentStore,
+      preferences: await SharedPreferences.getInstance(),
+      logFilePath: '$logDir/log.txt',
+      machineIdentity: () {
+        final machine = de1Controller.connectedDe1OrNull;
+        if (machine == null || machine is SimulatedDevice) return null;
+        try {
+          final info = machine.machineInfo;
+          return AppLogMachineIdentity(
+            serialNumber: info.serialNumber,
+            firmwareVersion: info.version,
+          );
+        } catch (_) {
+          return null;
+        }
+      },
+    );
+    await appLogUploadService.initialize();
   }
   webUIService.skinProxyTokenProvider = (path) {
     final skin = _activeSkinConsent(path, webUIStorage);
@@ -635,6 +664,7 @@ void main(List<String> args) async {
       de1Controller: de1Controller,
       displayController: displayController,
       pluginLoaderService: pluginService,
+      appLogUploadService: appLogUploadService,
     ),
   );
 
@@ -668,6 +698,7 @@ void main(List<String> args) async {
         sensorController: sensorController,
         decentAccountService: decentAccountService,
         accountTokensController: accountTokensController,
+        appLogUploadService: appLogUploadService,
         batteryController: batteryController,
         displayController: displayController,
       ),
@@ -681,6 +712,7 @@ class AppLifecycleObserver with WidgetsBindingObserver {
   final De1Controller? de1Controller;
   final DisplayController? displayController;
   final PluginLoaderService? pluginLoaderService;
+  final AppLogUploadService? appLogUploadService;
 
   late Timer _memTimer;
   bool _wasBackgrounded = false;
@@ -694,6 +726,7 @@ class AppLifecycleObserver with WidgetsBindingObserver {
     this.de1Controller,
     this.displayController,
     this.pluginLoaderService,
+    this.appLogUploadService,
   }) {
     _memTimer = Timer.periodic(Duration(minutes: 5), (t) {
       final rss = ProcessInfo.currentRss / (1024 * 1024);
@@ -788,6 +821,7 @@ class AppLifecycleObserver with WidgetsBindingObserver {
     } catch (error, stackTrace) {
       _log.severe('Plugin loader disposal failed', error, stackTrace);
     }
+    appLogUploadService?.dispose();
   }
 
   void _showUpdateNotification() {
@@ -888,6 +922,7 @@ class AppRoot extends StatefulWidget {
   final SensorController? sensorController;
   final DecentAccountService? decentAccountService;
   final AccountTokensController? accountTokensController;
+  final AppLogUploadService? appLogUploadService;
   final BatteryController? batteryController;
   final DisplayController displayController;
 
@@ -915,6 +950,7 @@ class AppRoot extends StatefulWidget {
     this.profileStorageService,
     this.decentAccountService,
     this.accountTokensController,
+    this.appLogUploadService,
     this.batteryController,
     required this.displayController,
   });
@@ -1006,6 +1042,7 @@ class _AppRootState extends State<AppRoot> {
         sensorController: widget.sensorController,
         decentAccountService: widget.decentAccountService,
         accountTokensController: widget.accountTokensController,
+        appLogUploadService: widget.appLogUploadService,
         batteryController: widget.batteryController,
         displayController: widget.displayController,
       ),
