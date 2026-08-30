@@ -236,10 +236,12 @@ class DecentAccountService {
       _machines = const [];
       _mappings = const [];
       _machinesRefreshed = false;
-      await _store.delete(key: _registeredMachinesKey);
-      await _store.delete(key: _identityMappingsKey);
-      await _store.delete(key: 'email');
-      await _store.delete(key: 'password');
+      await Future.wait([
+        _store.delete(key: _registeredMachinesKey),
+        _store.delete(key: _identityMappingsKey),
+        _store.delete(key: 'email'),
+        _store.delete(key: 'password'),
+      ]);
     });
   }
 

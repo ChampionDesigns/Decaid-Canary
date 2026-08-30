@@ -8,6 +8,7 @@ import 'package:reaprime/src/services/account/decent_account_service.dart';
 
 class FakeCredentialStore implements CredentialStore {
   final Map<String, String> _store = {};
+  String? failingDeleteKey;
 
   @override
   Future<String?> read({required String key}) async => _store[key];
@@ -19,6 +20,7 @@ class FakeCredentialStore implements CredentialStore {
 
   @override
   Future<void> delete({required String key}) async {
+    if (key == failingDeleteKey) throw StateError('delete failed: $key');
     _store.remove(key);
   }
 
@@ -1063,6 +1065,22 @@ void main() {
         expect(await store.read(key: 'registered_machines'), isNull);
         expect(await store.read(key: 'identity_mappings'), isNull);
       });
+
+      test(
+        'logout removes credentials when scoped cache deletion fails',
+        () async {
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          ]);
+          store.failingDeleteKey = 'registered_machines';
+
+          await expectLater(service.logout(), throwsStateError);
+
+          expect(await store.read(key: 'email'), isNull);
+          expect(await store.read(key: 'password'), isNull);
+        },
+      );
 
       test(
         'successful account replacement clears the previous scoped state',
