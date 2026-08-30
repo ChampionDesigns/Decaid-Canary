@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:reaprime/src/account/decent_login_form.dart';
 import 'package:reaprime/src/onboarding_feature/onboarding_controller.dart';
 import 'package:reaprime/src/onboarding_feature/widgets/onboarding_scaffold.dart';
@@ -41,26 +40,13 @@ class LoginStepWidget extends StatefulWidget {
   State<LoginStepWidget> createState() => _LoginStepWidgetState();
 }
 
-class _LoginStepWidgetState extends State<LoginStepWidget>
-    with WidgetsBindingObserver {
+class _LoginStepWidgetState extends State<LoginStepWidget> {
   late Future<bool> _reachability;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _reachability = widget.accountService.isBackendReachable();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _checkAgain();
   }
 
   @override
@@ -132,12 +118,12 @@ class _LoginStepWidgetState extends State<LoginStepWidget>
         ),
       ],
       primaryAction: AccessibleButton(
-        label: 'Open Settings',
-        onTap: _openSettings,
+        label: 'Check again',
+        onTap: _checkAgain,
         child: ShadButton(
-          onPressed: _openSettings,
-          leading: const Icon(LucideIcons.settings, size: 16),
-          child: const Text('Open Settings'),
+          onPressed: _checkAgain,
+          leading: const Icon(LucideIcons.refreshCw, size: 16),
+          child: const Text('Check again'),
         ),
       ),
       secondaryAction: AccessibleButton(
@@ -149,11 +135,6 @@ class _LoginStepWidgetState extends State<LoginStepWidget>
         ),
       ),
     );
-  }
-
-  Future<void> _openSettings() async {
-    await openAppSettings();
-    if (mounted) _checkAgain();
   }
 
   void _checkAgain() {

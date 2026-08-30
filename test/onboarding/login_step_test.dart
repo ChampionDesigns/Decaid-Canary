@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -90,7 +91,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Open Settings'), findsOneWidget);
+    expect(find.text('Check again'), findsOneWidget);
     expect(find.text('Continue offline'), findsOneWidget);
 
     await tester.tap(find.text('Continue offline'));
@@ -117,5 +118,64 @@ void main() {
     expect(find.text('Link Your Decent Account'), findsOneWidget);
     expect(find.text('Email'), findsOneWidget);
     expect(find.text('Login'), findsOneWidget);
+  });
+
+  testWidgets('check again shows login after connectivity returns', (
+    tester,
+  ) async {
+    var requests = 0;
+    final accountService = _accountService(
+      MockClient((_) async {
+        requests++;
+        if (requests == 1) throw http.ClientException('offline');
+        return http.Response('', 401);
+      }),
+    );
+
+    await tester.pumpWidget(
+      ShadApp(
+        home: LoginStepWidget(
+          accountService: accountService,
+          onComplete: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Check again'));
+    await tester.pumpAndSettle();
+
+    expect(requests, 2);
+    expect(find.text('Link Your Decent Account'), findsOneWidget);
+  });
+
+  testWidgets('resuming the app preserves entered login details', (
+    tester,
+  ) async {
+    var requests = 0;
+    final accountService = _accountService(
+      MockClient((_) async {
+        requests++;
+        return http.Response('', 401);
+      }),
+    );
+
+    await tester.pumpWidget(
+      ShadApp(
+        home: LoginStepWidget(
+          accountService: accountService,
+          onComplete: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(ShadInput).first, 'user@example.com');
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+
+    expect(requests, 1);
+    expect(find.text('user@example.com'), findsOneWidget);
   });
 }
