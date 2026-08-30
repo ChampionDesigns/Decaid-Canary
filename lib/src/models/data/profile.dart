@@ -167,10 +167,15 @@ class StepLimiter extends Equatable {
   const StepLimiter({required this.value, required this.range});
 
   factory StepLimiter.fromJson(Map<String, dynamic> json) {
-    return StepLimiter(
-      value: parseDouble(json["value"]),
-      range: parseDouble(json["range"]),
-    );
+    final value = parseOptionalDouble(json['value']);
+    if (value == null) {
+      throw const FormatException('limiter "value" must be a number');
+    }
+    final range = parseOptionalDouble(json['range']);
+    if (range == null) {
+      throw const FormatException('limiter "range" must be a number');
+    }
+    return StepLimiter(value: value, range: range);
   }
 
   Map<String, dynamic> toJson() {

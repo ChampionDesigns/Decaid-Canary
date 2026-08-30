@@ -3796,7 +3796,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProfileRecord'
         "400":
-          description: Bad Request (missing required fields or invalid parent ID)
+          description: >-
+            Bad Request (missing required fields, an invalid step limiter, or
+            invalid parent ID). A step limiter without a numeric `value` or
+            `range` is refused with the message
+            `FormatException: limiter "value" must be a number` or
+            `FormatException: limiter "range" must be a number`, the same text
+            that PUT /api/v1/profiles/{id} returns.
         "500":
           description: Internal Server Error
 
@@ -3863,7 +3869,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProfileRecord'
         "400":
-          description: Bad Request (profile not found, target ID already exists, or cannot modify default profile)
+          description: >-
+            Bad Request (profile not found, target ID already exists, cannot
+            modify default profile, or an invalid step limiter). A step limiter
+            without a numeric `value` or `range` is refused with the same
+            message that POST /api/v1/profiles returns.
         "500":
           description: Internal Server Error
     
@@ -6871,7 +6881,11 @@ components:
 
     StepLimiter:
       type: object
-      description: Safety limiter for a step (caps the non-controlled variable)
+      description: >-
+        Safety limiter for a step (caps the non-controlled variable). Both
+        fields are required numbers: a profile upload whose limiter has a
+        missing, null or non-numeric `value` or `range` is refused with a 400
+        that names the field.
       required:
         - value
         - range
