@@ -998,6 +998,47 @@ De1StateManager({
 - `_handleScalePowerManagement(MachineState)`: Manages scale sleep/wake/scan
 - `_triggerScaleScan()`: Initiates device scan with 30s timeout
 
+### Legacy DE1 identity resolution (post-connect)
+
+Early DE1-family machines (notably v1.3 and earlier) can report `0` for
+`SerialN` and/or `v13Model`. When a legacy `DeviceImplementation.unifiedDe1`
+machine connects, `De1StateManager` resolves its effective serial/model from
+the linked Decent account's registered machines (`/support/api/sn` with
+`onlyespressomachines=1&withskus=1`) before any serial-ownership check runs.
+
+Resolution order:
+
+1. A nonzero raw serial resolves only on an exact match against a non-Bengle
+   registered record. A recognized API SKU model overrides a conflicting raw
+   `v13Model`; an unrecognized SKU retains the raw machine model.
+2. For raw serial `0`, a persisted mapping keyed by normalized account email +
+   `transportType.name` + opaque `deviceId` is used when its serial is still in
+   the current account list.
+3. Otherwise a single known legacy DE1-family candidate resolves automatically;
+   a nonzero raw `v13Model` may narrow multiple candidates to one.
+4. Still ambiguous candidates show a native dialog (serial + friendly model +
+   raw SKU). A manual choice is persisted as the mapping above.
+
+When the machine reports serial `0` (or raw model `0`) and no linked account /
+usable cache exists, a non-blocking dialog offers to open the account page;
+dismissing it leaves the machine fully usable with its raw identity.
+
+Constraints:
+
+- Resolved serial/model are applied only as an in-memory effective
+  `MachineInfo` override (`UnifiedDe1.applyEffectiveIdentity`). `SerialN`,
+  `v13Model`, and legacy `Model` are never written to the machine; raw MMR
+  identity stays available via `rawMachineInfo` for diagnostics.
+- Bengle (`>= 128`) and unknown-SKU records are never candidates for serial-0
+  auto/manual selection; Bengle records are not selected by the legacy DE1
+  resolver at all.
+- Existing serial-mismatch email reporting still runs for a real nonzero raw
+  serial that is not on the linked account, after resolution finishes.
+- A definitively rejected account session is not used as identity authority
+  (persisted recovery data is retained but unusable until re-auth); explicit
+  logout or successful account replacement clears the account's cached machine
+  list and mappings.
+
 ### Hot water stop-at-weight
 
 **Files:** `lib/src/controllers/hot_water_sequencer.dart` (wiring),

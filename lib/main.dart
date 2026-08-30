@@ -462,6 +462,7 @@ void main(List<String> args) async {
       callerLabelRegistrar: gate.registerCallerLabel,
     );
     await accountTokensController.initialize();
+    await decentAccountService.initialize();
 
     appLogUploadService = AppLogUploadService(
       accountService: decentAccountService,
