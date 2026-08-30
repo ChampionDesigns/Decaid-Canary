@@ -161,6 +161,11 @@ class UnifiedDe1 implements De1Interface {
     );
   }
 
+  void clearEffectiveIdentity() {
+    _info = _rawInfo ?? _info;
+    _rawInfo = null;
+  }
+
   @override
   Future<void> disconnect() async {
     await cancelFirmwareUpload();
@@ -272,8 +277,7 @@ class UnifiedDe1 implements De1Interface {
     await _transport.connect();
 
     _currentProfile = null;
-    _info = _rawInfo ?? _info;
-    _rawInfo = null;
+    clearEffectiveIdentity();
 
     if (_info != null) {
       return;

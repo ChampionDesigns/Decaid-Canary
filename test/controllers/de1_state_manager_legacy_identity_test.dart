@@ -580,6 +580,38 @@ void main() {
     await disconnectAndSettle(tester);
   });
 
+  testWidgets('account replacement revokes and resolves effective identity', (
+    tester,
+  ) async {
+    final machines = <Map<String, dynamic>>[
+      {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+    ];
+    final accountService = await seededService(machines);
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+    expect(de1.machineInfo.serialNumber, '1337');
+
+    await accountService.logout();
+    await pumpUntil(tester, () async {});
+    expect(de1.machineInfo.serialNumber, '0');
+
+    machines
+      ..clear()
+      ..add({
+        'serial': '1338',
+        'sku': 'DE-DE1PRO220V7-00533',
+        'model': 'DE1Pro',
+      });
+    expect(await accountService.login('new@example.com', 'password'), isTrue);
+    await pumpUntil(tester, () async {});
+
+    expect(de1.machineInfo.serialNumber, '1338');
+    expect(de1.machineInfo.model, 'DE1Pro');
+    await disconnectAndSettle(tester);
+  });
+
   testWidgets('a changed device id falls back to normal matching', (
     tester,
   ) async {

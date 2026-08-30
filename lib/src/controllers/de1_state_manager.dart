@@ -46,11 +46,13 @@ class De1StateManager with WidgetsBindingObserver {
   final GlobalKey<NavigatorState> _navigatorKey;
 
   StreamSubscription<Machine?>? _de1Subscription;
+  StreamSubscription<void>? _accountIdentitySubscription;
   final _emailedSerials = <String>{};
   final LegacyDe1IdentityResolver _identityResolver =
       const LegacyDe1IdentityResolver();
   final Set<UnifiedDe1> _identityPromptedMachines = {};
-  final Map<UnifiedDe1, int> _identityResolving = {};
+  int _identityRevision = 0;
+  ({int connection, int identity})? _identityResolving;
   NavigatorState? _identityDialogNavigator;
   Route<dynamic>? _identityDialogRoute;
   bool _disposed = false;
@@ -123,6 +125,8 @@ class De1StateManager with WidgetsBindingObserver {
 
     _checkNavigationContext();
 
+    _accountIdentitySubscription = _accountService?.identityAuthorityChanges
+        .listen(_handleIdentityAuthorityChange);
     _de1Subscription = _de1Controller.de1.listen(_handleDe1Change);
 
     WidgetsBinding.instance.addPostFrameCallback(
@@ -194,6 +198,7 @@ class De1StateManager with WidgetsBindingObserver {
   }
 
   void _handleDe1Change(Machine? machine) {
+    _identityRevision++;
     if (machine == null) _dismissIdentityDialog();
     _snapshotSubscription?.cancel();
     _snapshotSubscription = null;
@@ -217,6 +222,21 @@ class De1StateManager with WidgetsBindingObserver {
     }
   }
 
+  void _handleIdentityAuthorityChange(void _) {
+    _identityRevision++;
+    _dismissIdentityDialog();
+    _identityPromptedMachines.clear();
+    final machine = _de1Controller.connectedDe1OrNull;
+    if (machine is! UnifiedDe1 ||
+        isBengleModelValue(machine.rawModelValue ?? 0)) {
+      return;
+    }
+    machine.clearEffectiveIdentity();
+    if (_accountService?.hasUsableAccountCache == true) {
+      unawaited(_resolveLegacyIdentity(machine));
+    }
+  }
+
   void _maybeCheckSerialOwnership(String serial) {
     if (serial != '0' &&
         serial.isNotEmpty &&
@@ -225,10 +245,14 @@ class De1StateManager with WidgetsBindingObserver {
     }
   }
 
-  bool _stillCurrent(UnifiedDe1 machine, [int? generation]) =>
+  bool _stillCurrent(
+    UnifiedDe1 machine, [
+    ({int connection, int identity})? revision,
+  ]) =>
       !_disposed &&
-      (generation == null ||
-          generation == _de1Controller.connectionGeneration) &&
+      (revision == null ||
+          (revision.connection == _de1Controller.connectionGeneration &&
+              revision.identity == _identityRevision)) &&
       identical(machine, _de1Controller.connectedDe1OrNull);
 
   Future<void> _retryPendingIdentityResolution() {
@@ -253,17 +277,20 @@ class De1StateManager with WidgetsBindingObserver {
     UnifiedDe1 machine, {
     bool allowPrompts = true,
   }) async {
-    final generation = _de1Controller.connectionGeneration;
-    if (!_stillCurrent(machine, generation)) return;
+    final revision = (
+      connection: _de1Controller.connectionGeneration,
+      identity: _identityRevision,
+    );
+    if (!_stillCurrent(machine, revision)) return;
     if (isBengleModelValue(machine.rawModelValue ?? 0)) return;
     if (allowPrompts) {
-      if (_identityResolving[machine] == generation) return;
-      _identityResolving[machine] = generation;
+      if (_identityResolving == revision) return;
+      _identityResolving = revision;
     }
     try {
       final account = _accountService!;
       await account.accountReady;
-      if (!_stillCurrent(machine, generation)) return;
+      if (!_stillCurrent(machine, revision)) return;
       final rawInfo = machine.rawMachineInfo;
       final rawSerial = rawInfo.serialNumber;
       final rawModelValue = machine.rawModelValue ?? 0;
@@ -275,7 +302,7 @@ class De1StateManager with WidgetsBindingObserver {
           deviceId: machine.deviceId,
         );
       }
-      if (!_stillCurrent(machine, generation)) return;
+      if (!_stillCurrent(machine, revision)) return;
 
       final resolution = _identityResolver.resolve(
         rawSerial: rawSerial,
@@ -291,21 +318,21 @@ class De1StateManager with WidgetsBindingObserver {
             machine,
             resolution.machine,
             persistMapping: false,
-            generation: generation,
+            revision: revision,
           );
         case AmbiguousLegacyDe1Identity():
           if (!allowPrompts) break;
           final selected = await _promptMachineSelection(
             machine,
             resolution.candidates,
-            generation,
+            revision,
           );
-          if (selected != null && _stillCurrent(machine, generation)) {
+          if (selected != null && _stillCurrent(machine, revision)) {
             await _applyResolvedIdentity(
               machine,
               selected,
               persistMapping: true,
-              generation: generation,
+              revision: revision,
             );
           }
         case UnavailableLegacyDe1Identity():
@@ -313,14 +340,14 @@ class De1StateManager with WidgetsBindingObserver {
             _maybeCheckSerialOwnership(rawSerial);
           }
           if (allowPrompts && (rawSerial == '0' || rawModelValue == 0)) {
-            await _maybePromptLinkAccount(machine, generation);
+            await _maybePromptLinkAccount(machine, revision);
           }
       }
     } catch (e, st) {
       _logger.warning('Legacy DE1 identity resolution failed', e, st);
     } finally {
-      if (allowPrompts && _identityResolving[machine] == generation) {
-        _identityResolving.remove(machine);
+      if (allowPrompts && _identityResolving == revision) {
+        _identityResolving = null;
       }
     }
   }
@@ -329,9 +356,9 @@ class De1StateManager with WidgetsBindingObserver {
     UnifiedDe1 machine,
     RegisteredDecentMachine record, {
     required bool persistMapping,
-    required int generation,
+    required ({int connection, int identity}) revision,
   }) async {
-    if (!_stillCurrent(machine, generation)) return;
+    if (!_stillCurrent(machine, revision)) return;
     final model = record.recognizedModel?.name ?? machine.rawMachineInfo.model;
     machine.applyEffectiveIdentity(serial: record.serial, model: model);
     _de1Controller.recordResolvedSerial(record.serial);
@@ -354,9 +381,9 @@ class De1StateManager with WidgetsBindingObserver {
   Future<RegisteredDecentMachine?> _promptMachineSelection(
     UnifiedDe1 machine,
     List<RegisteredDecentMachine> candidates,
-    int generation,
+    ({int connection, int identity}) revision,
   ) async {
-    if (!_stillCurrent(machine, generation)) return null;
+    if (!_stillCurrent(machine, revision)) return null;
     if (_identityPromptedMachines.contains(machine)) return null;
     if (!_appIsInForeground) return null;
     final context = _navigatorKey.currentContext;
@@ -392,13 +419,13 @@ class De1StateManager with WidgetsBindingObserver {
 
   Future<void> _maybePromptLinkAccount(
     UnifiedDe1 machine,
-    int generation,
+    ({int connection, int identity}) revision,
   ) async {
     final account = _accountService;
-    if (account == null || !_stillCurrent(machine, generation)) return;
+    if (account == null || !_stillCurrent(machine, revision)) return;
     final linked = await account.hasLinkedAccount();
     final authInvalid = await account.isAuthKnownInvalid();
-    if (!_stillCurrent(machine, generation)) return;
+    if (!_stillCurrent(machine, revision)) return;
     if (linked && !authInvalid) return;
     if (_identityPromptedMachines.contains(machine)) return;
     if (!_appIsInForeground) return;
@@ -428,17 +455,17 @@ class De1StateManager with WidgetsBindingObserver {
       },
     );
     if (accepted != true) return;
-    if (!_stillCurrent(machine, generation)) return;
+    if (!_stillCurrent(machine, revision)) return;
     final navigator = _navigatorKey.currentState;
     if (navigator == null) return;
     await navigator.pushNamed(AccountPage.routeName);
-    if (!_stillCurrent(machine, generation)) return;
+    if (!_stillCurrent(machine, revision)) return;
     final nowLinked = await account.hasLinkedAccount();
     final nowInvalid = await account.isAuthKnownInvalid();
-    if (!_stillCurrent(machine, generation)) return;
+    if (!_stillCurrent(machine, revision)) return;
     if (!nowLinked || nowInvalid) return;
     _identityPromptedMachines.remove(machine);
-    _identityResolving.remove(machine);
+    _identityResolving = null;
     await _resolveLegacyIdentity(machine);
   }
 
@@ -1012,5 +1039,8 @@ class De1StateManager with WidgetsBindingObserver {
 
     _de1Subscription?.cancel();
     _de1Subscription = null;
+
+    _accountIdentitySubscription?.cancel();
+    _accountIdentitySubscription = null;
   }
 }

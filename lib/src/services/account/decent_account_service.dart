@@ -73,6 +73,8 @@ class DecentAccountService {
   bool _machinesRefreshed = false;
   Future<void>? _refreshFuture;
   Completer<void> _refreshChanged = Completer<void>();
+  final StreamController<void> _identityAuthorityChanges =
+      StreamController<void>.broadcast(sync: true);
 
   DecentAccountService({
     required http.Client httpClient,
@@ -81,6 +83,12 @@ class DecentAccountService {
     this.retryInterval = const Duration(seconds: 30),
   }) : _httpClient = httpClient,
        _store = credentialStore;
+
+  Stream<void> get identityAuthorityChanges => _identityAuthorityChanges.stream;
+
+  void _notifyIdentityAuthorityChanged() {
+    _identityAuthorityChanges.add(null);
+  }
 
   Future<void> initialize() async {
     try {
@@ -250,6 +258,7 @@ class DecentAccountService {
       _authenticated = false;
       _hasLinkedAccount = false;
       _linkedAccountKnown = true;
+      _notifyIdentityAuthorityChanged();
       final committed = await _withAccountWriteLock(() async {
         if (committedGeneration != _authGeneration) return false;
         if (emailChanged) {
@@ -270,7 +279,10 @@ class DecentAccountService {
       _hasLinkedAccount = true;
       _log.info('login -> accepted');
       await _trackRefresh(_refreshAfterLogin());
-      return committedGeneration == _authGeneration && _authenticated == true;
+      final accepted =
+          committedGeneration == _authGeneration && _authenticated == true;
+      if (accepted) _notifyIdentityAuthorityChanged();
+      return accepted;
     }
     _log.warning('login -> rejected');
     return false;
@@ -292,6 +304,7 @@ class DecentAccountService {
     _machineCacheLoadFailed = false;
     _mappingCacheLoadFailed = false;
     _replaceRefresh(null);
+    _notifyIdentityAuthorityChanged();
     return _withAccountWriteLock(() async {
       _machines = const [];
       _mappings = const [];
@@ -365,6 +378,7 @@ class DecentAccountService {
       _machineCacheLoadFailed = false;
       await _pruneMappings(machines, account);
       _machinesRefreshed = true;
+      _notifyIdentityAuthorityChanged();
     });
   }
 
@@ -518,16 +532,20 @@ class DecentAccountService {
 
   void _setAuthenticated(int generation, bool value) {
     if (generation != _authGeneration) return;
+    final changed = _authenticated != value;
     _authenticated = value;
     if (value) {
       _hasLinkedAccount = true;
       _linkedAccountKnown = true;
     }
+    if (changed) _notifyIdentityAuthorityChanged();
   }
 
   void reportAuthenticationFailure() {
     _authGeneration++;
+    final changed = _authenticated != false;
     _authenticated = false;
+    if (changed) _notifyIdentityAuthorityChanged();
   }
 
   Future<bool> isAuthKnownInvalid() async => _authenticated == false;
