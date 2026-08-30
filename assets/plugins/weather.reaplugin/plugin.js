@@ -78,6 +78,14 @@ function createPlugin(host) {
     return isImperial() ? round(c * 9 / 5 + 32, 1) : round(c, 1);
   }
 
+  /* One value out of an Open-Meteo `daily` block, for the location's today.
+     TYPE FIRST, because Number(null) is 0 and 0 degrees is a real answer. */
+  function dayAt(daily, field) {
+    if (!daily || !Array.isArray(daily[field])) return null;
+    var v = daily[field][0];
+    return typeof v === "number" && isFinite(v) ? v : null;
+  }
+
   function rain(mm) {
     if (typeof mm !== "number" || !isFinite(mm)) return 0;
     return isImperial() ? round(mm / 25.4, 2) : round(mm, 1);
@@ -233,6 +241,10 @@ function createPlugin(host) {
       + "&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,"
       + "weather_code,surface_pressure,wind_speed_10m,wind_direction_10m"
       + "&hourly=precipitation_probability,precipitation"
+      /* TODAY'S HIGH AND LOW — Ben, 30 August 2026, on the space beside the corner's
+         temperature. `daily` is asked in the LOCATION's timezone (timezone=auto below),
+         so index 0 is that place's today and not the tablet's. */
+      + "&daily=temperature_2m_max,temperature_2m_min"
       + "&timezone=auto&forecast_days=3";
     var res = await fetch(url);
     if (!res.ok) throw new Error("forecast answered " + res.status);
@@ -291,6 +303,11 @@ function createPlugin(host) {
         wind: wind(c.wind_speed_10m),
         windFrom: compass(c.wind_direction_10m),
         pressure: typeof c.surface_pressure === "number" ? Math.round(c.surface_pressure) : null,
+        /* TODAY'S RANGE, OR NULLS. Read at index 0 because `timezone=auto` makes the
+           daily arrays the LOCATION's days. Absent is null and never a zero: a zero high
+           is a real temperature, and the corner draws a dash for null. */
+        high: temp(dayAt(body.daily, "temperature_2m_max")),
+        low: temp(dayAt(body.daily, "temperature_2m_min")),
         units: isImperial() ? "imperial" : "metric",
         periods: body.hourly ? periodsFrom(body.hourly, now) : []
       };
@@ -357,17 +374,25 @@ function createPlugin(host) {
       state.timer = null;
     }
     if (state.beat) {
-      clearInterval(state.beat);
+      clearTimeout(state.beat);
       state.beat = null;
     }
   }
 
-  /** Re-publish what we already have, so a socket that opens late is not left blank. */
+  /**
+   * Re-publish what we already have, so a socket that opens late is not left blank.
+   *
+   * A SELF-RESCHEDULING setTimeout, NOT setInterval: the runtime provides only
+   * `setTimeout` and `clearTimeout` (doc/Plugins.md, "Available in JavaScript Runtime"),
+   * so `setInterval` is undefined here and calling it throws.
+   */
   function beat() {
     if (state.beat) return;
-    state.beat = setInterval(function () {
+    state.beat = setTimeout(function () {
+      state.beat = null;
       if (state.last) publish();
       else if (!state.location) refuse("no_location");
+      beat();
     }, HEARTBEAT_MS);
   }
 
