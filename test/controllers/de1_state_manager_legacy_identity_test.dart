@@ -63,9 +63,22 @@ class _IdentityTestDe1Controller extends De1Controller {
 
 class _FakeCredentialStore implements CredentialStore {
   final Map<String, String> _store = {};
+  Completer<void>? emailReadStarted;
+  Completer<void>? emailReadRelease;
 
   @override
-  Future<String?> read({required String key}) async => _store[key];
+  Future<String?> read({required String key}) async {
+    final release = emailReadRelease;
+    if (key == 'email' && release != null) {
+      emailReadStarted?.complete();
+      await release.future;
+      if (identical(emailReadRelease, release)) {
+        emailReadStarted = null;
+        emailReadRelease = null;
+      }
+    }
+    return _store[key];
+  }
 
   @override
   Future<void> write({required String key, required String value}) async {
@@ -408,6 +421,30 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
 
     expect(find.text('Select your machine'), findsNothing);
+  });
+
+  testWidgets('disconnect during account lookup does not open a stale dialog', (
+    tester,
+  ) async {
+    final accountService = await seededService(const [
+      {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await accountService.accountReady;
+    await createManager(tester, accountService: accountService);
+    final readStarted = Completer<void>();
+    final readRelease = Completer<void>();
+    store.emailReadStarted = readStarted;
+    store.emailReadRelease = readRelease;
+
+    await connectMachine(tester, v13Model: 0, serialN: 0);
+    await readStarted.future;
+    de1Controller.disconnect();
+    readRelease.complete();
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Select your machine'), findsNothing);
+    expect(find.text('Link your Decent account'), findsNothing);
   });
 
   testWidgets('a persisted mapping is reused on reconnect without a dialog', (

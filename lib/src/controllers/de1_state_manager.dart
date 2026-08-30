@@ -341,7 +341,7 @@ class De1StateManager with WidgetsBindingObserver {
     UnifiedDe1 machine,
     List<RegisteredDecentMachine> candidates,
   ) async {
-    if (_disposed) return null;
+    if (!_stillCurrent(machine)) return null;
     if (_identityPromptedMachines.contains(machine)) return null;
     if (!_appIsInForeground) return null;
     final context = _navigatorKey.currentContext;
@@ -377,9 +377,10 @@ class De1StateManager with WidgetsBindingObserver {
 
   Future<void> _maybePromptLinkAccount(UnifiedDe1 machine) async {
     final account = _accountService;
-    if (account == null || _disposed) return;
+    if (account == null || !_stillCurrent(machine)) return;
     final linked = await account.hasLinkedAccount();
     final authInvalid = await account.isAuthKnownInvalid();
+    if (!_stillCurrent(machine)) return;
     if (linked && !authInvalid) return;
     if (_identityPromptedMachines.contains(machine)) return;
     if (!_appIsInForeground) return;
