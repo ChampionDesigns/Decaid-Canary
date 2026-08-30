@@ -63,7 +63,7 @@ For browser clients on a different origin, `ETag` is exposed via `Access-Control
 | GET | `/api/v1/machine/state` | Current machine state + substate | |
 | PUT | `/api/v1/machine/state/{newState}` | Request state change (`idle`, `sleep`, `espresso`, …) | |
 | GET | `/api/v1/machine/settings` | DE1 machine settings (temps, flows) | |
-| POST | `/api/v1/machine/settings` | Update machine settings (one grouped, serialized device write per request) | |
+| POST | `/api/v1/machine/settings` | Update machine settings (one grouped, serialized device write per request). Answers `202` with a per-field verification report — see below | |
 | POST | `/api/v1/machine/shotSettings` | Update shot settings (steam temp, hot water, target volume, group temp) | |
 | GET | `/api/v1/machine/settings/advanced` | Advanced heater/phase settings | |
 | POST | `/api/v1/machine/settings/advanced` | Update advanced settings (heater phase flows/timeouts, idle temp, `heaterVoltage`, `refillKitSetting`). `refillKitSetting` is an override (`0` force off, `1` force on, `2` auto) and is not persisted — Decaid writes auto at connect, so it lasts only for the current connection. It is not detection: `GET /api/v1/machine/info` -> `extra.refillKit` reports what the machine detected | |
@@ -90,6 +90,41 @@ For browser clients on a different origin, `ETag` is exposed via `Access-Control
 | POST | `/api/v1/machine/ledStrip/reset` | Re-read palette from FW and return refreshed state (truthful reload, not a rollback) — Bengle only | |
 | GET | `/api/v1/machine/scaleCalibration` | Read decoded scale-calibration state (step, cell, sub-state, seconds remaining, status) — Bengle only, 404 elsewhere | |
 | PUT | `/api/v1/machine/scaleCalibration` | Start `zero`/`latch`/`abort` calibration step (`weightGrams` 1–10000 required for `latch`); 202 accepted / 409 rejected (busy or shot in progress) — Bengle only | |
+
+#### Machine settings write verification
+
+`POST /api/v1/machine/settings` reads every written field back from the machine inside the same
+serialized device write and answers `202` with a per-field report:
+
+```json
+{
+  "results": {
+    "fan":            { "requested": 51, "actual": 50, "status": "adjusted" },
+    "steamPurgeMode": { "requested": 1,  "actual": 1,  "status": "applied" }
+  }
+}
+```
+
+Only fields present in the request appear; an empty request body yields `"results": {}`.
+
+| status | meaning |
+|--------|---------|
+| `applied` | the read-back matched the requested value, within one write quantization step for the scaled fields (`flushTemp`, `flushFlow`, `flushTimeout`, `hotWaterFlow` at 0.1; `steamFlow` at 0.01) |
+| `adjusted` | the write completed but the machine now holds a different value; `actual` is the read-back |
+| `unverified` | the write was sent and the read-back failed, so the server makes no claim about the stored value |
+
+The status code is unchanged and stays `202` even when every field is `adjusted` — the body carries
+the verdict. Transport-level failures still map to `409`/`500`/`503`/`504` as before.
+
+`adjusted` does not say *why*. Two causes produce it and the server cannot tell them apart: the app
+clamps a few fields to the bounds declared on `MMRItem` before they reach the wire (`fanThreshold`
+is bounded `0..50`, so `{"fan": 51}` writes 50), and the machine may ignore or modify a write of its
+own accord. There is no application-level acknowledgement for an MMR write on either transport, so
+read-back is the only honest verification available. MMR *reads* are correlated and retried, which
+is what makes the report trustworthy.
+
+A verdict is verified at write time only. The connect-time defaults pass writes its own values, so
+a field confirmed `applied` can differ later.
 
 #### Derived hydraulic channels
 

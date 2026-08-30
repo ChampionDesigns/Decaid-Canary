@@ -10,6 +10,8 @@ import 'package:reaprime/src/models/device/device_implementation.dart';
 import 'package:reaprime/src/models/device/device.dart';
 import 'package:reaprime/src/models/device/de1_rawmessage.dart';
 import 'package:reaprime/src/models/device/firmware_update_state.dart';
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart'
+    show MMRItem;
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/models/device/simulated_device.dart';
 import 'package:reaprime/src/models/errors.dart';
@@ -705,7 +707,10 @@ class MockDe1 implements De1Interface, SimulatedDevice {
 
   @override
   Future<void> setFanThreshhold(int temp) async {
-    _fanThreshhold = temp;
+    _fanThreshhold = temp.clamp(
+      MMRItem.fanThreshold.min!,
+      MMRItem.fanThreshold.max!,
+    );
   }
 
   int _fanThreshhold = 50;
