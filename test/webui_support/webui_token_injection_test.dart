@@ -474,6 +474,20 @@ const bodyExample = "</body>";
       expect(service.deviceIp(), 'localhost');
     });
 
+    test('re-resolves the WiFi address after an offline start', () async {
+      const lanIp = '10.0.0.7';
+      var online = false;
+      WebUIService.resolveWifiIP = () async => online ? lanIp : null;
+
+      await service.serveFolderAtPath(tempDir.path);
+      expect(service.deviceIp(), 'localhost');
+
+      online = true;
+      await service.serveFolderAtPath(tempDir.path);
+
+      expect(service.deviceIp(), lanIp);
+    });
+
     test(
       'falls back to localhost when getWifiIP returns empty string',
       () async {

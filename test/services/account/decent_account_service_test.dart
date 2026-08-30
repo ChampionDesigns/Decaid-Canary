@@ -148,6 +148,18 @@ class _GateFirstMachinesDeleteStore implements CredentialStore {
   }
 }
 
+class _AbortAwareClient extends http.BaseClient {
+  final aborted = Completer<void>();
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final abortable = request as http.AbortableRequest;
+    await abortable.abortTrigger;
+    aborted.complete();
+    throw http.RequestAbortedException(request.url);
+  }
+}
+
 const _baseUrl = 'https://decentespresso.com';
 
 http_testing.MockClient _mockClient({
@@ -223,6 +235,23 @@ void main() {
           ),
           isFalse,
         );
+      });
+
+      test('aborts the request when the check times out', () async {
+        final client = _AbortAwareClient();
+        service = DecentAccountService(
+          httpClient: client,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(
+          await service.isBackendReachable(
+            timeout: const Duration(milliseconds: 10),
+          ),
+          isFalse,
+        );
+        await client.aborted.future.timeout(const Duration(seconds: 1));
       });
     });
 

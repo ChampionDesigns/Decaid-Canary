@@ -222,7 +222,7 @@ class WebUIService {
     _resolvedHosts.clear();
     final tokenProvider = skinProxyTokenProvider;
     if (tokenProvider != null) _revokeSkinProxyToken();
-    _localIP ??= await _resolveLocalIP();
+    _localIP = await _resolveLocalIP();
 
     final webUI = createStaticHandler(
       path,

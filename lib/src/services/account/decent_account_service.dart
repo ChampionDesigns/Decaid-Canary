@@ -325,11 +325,26 @@ class DecentAccountService {
   Future<bool> isBackendReachable({
     Duration timeout = const Duration(seconds: 5),
   }) async {
+    final abort = Completer<void>();
+    final timer = Timer(timeout, abort.complete);
+    final request = http.AbortableRequest(
+      'HEAD',
+      Uri.parse(baseUrl),
+      abortTrigger: abort.future,
+    );
     try {
-      await _httpClient.head(Uri.parse(baseUrl)).timeout(timeout);
+      await _httpClient
+          .send(request)
+          .then(http.Response.fromStream)
+          .timeout(timeout);
       return true;
+    } on TimeoutException {
+      if (!abort.isCompleted) abort.complete();
+      return false;
     } on Exception {
       return false;
+    } finally {
+      timer.cancel();
     }
   }
 
