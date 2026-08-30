@@ -109,7 +109,7 @@ Only fields present in the request appear; an empty request body yields `"result
 
 | status | meaning |
 |--------|---------|
-| `applied` | the read-back matched the requested value, within one write quantization step for the scaled fields (`flushTemp`, `flushFlow`, `flushTimeout`, `hotWaterFlow` at 0.1; `steamFlow` at 0.01) |
+| `applied` | the read-back matched the requested value, within half of one write quantization step for the scaled fields (`flushTemp`, `flushFlow`, `flushTimeout`, `hotWaterFlow` at LSB 0.1; `steamFlow` at LSB 0.01) |
 | `adjusted` | the write completed but the machine now holds a different value; `actual` is the read-back |
 | `unverified` | the write was sent and the read-back failed, so the server makes no claim about the stored value |
 

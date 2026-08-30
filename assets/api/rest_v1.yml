@@ -6260,8 +6260,8 @@ components:
           type: string
           enum: [applied, adjusted, unverified]
           description: |
-            applied - the read-back matched the requested value, within one write
-            quantization step for scaled fields.
+            applied - the read-back matched the requested value, within half of one
+            write quantization step for scaled fields.
             adjusted - the write completed but the machine now holds a different value.
             The app clamps some fields before the wire (fanThreshold is bounded 0-50) and
             the firmware may ignore or modify others; both surface identically, with the
