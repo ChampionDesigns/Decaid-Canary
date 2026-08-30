@@ -719,6 +719,35 @@ paths:
           description: Machine write queue is full
         "500":
           description: No machine was connected, the machine changed during the write, or the write failed
+  /api/v1/machine/stopAtWeight:
+    get:
+      summary: Get the stop-at-weight target held in firmware
+      description: |
+        Read back the End Of Shot Weight the firmware is actually
+        holding, in grams (Bengle only). This is a read of the machine,
+        not of the workflow document: the app pushes
+        `WorkflowContext.targetYield` into that register through the SAW
+        bridge, and this endpoint is the only way to confirm the value
+        arrived. `grams` of `0` means stop-at-weight is DISABLED in
+        firmware, which is a real state and not a missing value. There
+        is no PUT: the target is set by writing
+        `context.targetYield` on `/api/v1/workflow`. A workflow with no
+        `targetYield` leaves the firmware register untouched, so this
+        endpoint can legitimately report a target the current workflow
+        does not mention. Returns 404 when the connected machine is not
+        a Bengle.
+      tags: [Machine]
+      responses:
+        "200":
+          description: Current firmware stop-at-weight target
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StopAtWeightTarget"
+        "404":
+          description: Machine connected but does not support stop-at-weight
+        "500":
+          description: No machine was ever connected, or the firmware read failed
   /api/v1/machine/settings:
     get:
       summary: Get machine settings
@@ -5878,6 +5907,20 @@ components:
           description: machine busy or shot in progress
         state:
           $ref: "#/components/schemas/ScaleCalibrationState"
+
+    StopAtWeightTarget:
+      type: object
+      required: [grams]
+      properties:
+        grams:
+          type: number
+          minimum: 0
+          maximum: 10000
+          description: |
+            End Of Shot Weight currently held in firmware, in grams
+            (the register stores centigrams). `0` means stop-at-weight
+            is disabled.
+          example: 50.0
 
     MachineStateError:
       type: object

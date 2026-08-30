@@ -345,6 +345,15 @@ class De1Handler {
       });
     });
 
+    app.get('/api/v1/machine/stopAtWeight', (Request _) async {
+      return withDe1((de1) async {
+        final gate = _bengleFirmwareGate(de1, 'stopAtWeight');
+        if (gate != null) return gate;
+        final grams = await (de1 as BengleInterface).getStopAtWeightTarget();
+        return jsonOk({'grams': grams});
+      });
+    });
+
     app.post('/api/v1/machine/waterLevels', (Request r) async {
       final dynamic json;
       try {
