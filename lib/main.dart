@@ -161,10 +161,7 @@ Future<void> _printStoragePaths() async {
 
 const skinPortAssignmentsPreferenceKey = 'webUISkinPorts';
 
-Future<Map<String, int>> loadPersistedSkinPortAssignments() async {
-  final raw = await SharedPreferencesAsync().getString(
-    skinPortAssignmentsPreferenceKey,
-  );
+Map<String, int> decodeSkinPortAssignments(String? raw) {
   if (raw == null || raw.isEmpty) return {};
   try {
     final decoded = jsonDecode(raw);
@@ -177,6 +174,13 @@ Future<Map<String, int>> loadPersistedSkinPortAssignments() async {
   } catch (_) {
     return {};
   }
+}
+
+Future<Map<String, int>> loadPersistedSkinPortAssignments() async {
+  final raw = await SharedPreferencesAsync().getString(
+    skinPortAssignmentsPreferenceKey,
+  );
+  return decodeSkinPortAssignments(raw);
 }
 
 Future<void> persistSkinPortAssignments(Map<String, int> assignments) async {

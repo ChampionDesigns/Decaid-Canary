@@ -142,6 +142,7 @@ class WebUIService {
 
   static const Set<int> _reservedSkinPorts = {3000, 4001, 8080};
   static const int _skinPortBindAttempts = 3;
+  static const int _temporarySkinPortAttempts = 8;
   static const Duration _skinPortBindRetryDelay = Duration(milliseconds: 150);
 
   static const int _resolvedHostLimit = 128;
@@ -330,7 +331,8 @@ class WebUIService {
 
     try {
       if (tokenProvider != null) skinProxyToken = tokenProvider(path);
-      final identity = skinIdentityProvider?.call(path) ?? path;
+      final identityProvider = skinIdentityProvider;
+      final identity = identityProvider == null ? path : identityProvider(path);
       _server = await _serveStable(handler, identity);
       this.port = _server!.port;
       await _serveEntryPoint(port);
@@ -368,13 +370,37 @@ class WebUIService {
     var loaded = <String, int>{};
     if (loader != null) {
       try {
-        loaded = Map<String, int>.from(await loader());
+        loaded = _validSkinPortAssignments(await loader());
       } catch (e) {
         _log.warning('Failed to load skin port assignments', e);
       }
     }
     _skinPortAssignments = loaded;
     return loaded;
+  }
+
+  Map<String, int> _validSkinPortAssignments(Map<String, int> stored) {
+    final valueCounts = <int, int>{};
+    for (final port in stored.values) {
+      valueCounts[port] = (valueCounts[port] ?? 0) + 1;
+    }
+    final rangeEnd = skinPortRangeStart + skinPortRangeSize;
+    final valid = <String, int>{};
+    for (final entry in stored.entries) {
+      final port = entry.value;
+      if (port < skinPortRangeStart ||
+          port >= rangeEnd ||
+          _reservedSkinPorts.contains(port) ||
+          valueCounts[port] != 1) {
+        _log.warning(
+          'Dropping stored skin port $port for ${entry.key}: '
+          'outside the skin port range or not unique',
+        );
+        continue;
+      }
+      valid[entry.key] = port;
+    }
+    return valid;
   }
 
   Future<HttpServer?> _bindSkinPort(Handler handler, int port) async {
@@ -397,8 +423,12 @@ class WebUIService {
     return null;
   }
 
-  Future<HttpServer> _serveStable(Handler handler, String identity) async {
+  Future<HttpServer> _serveStable(Handler handler, String? identity) async {
     final assignments = await _loadedSkinPortAssignments();
+    if (identity == null) {
+      _log.warning('Skin has no identity; serving on a temporary port');
+      return _serveTemporarySkinPort(handler, assignments);
+    }
     final assigned = assignments[identity];
     if (assigned != null) {
       final server = await _bindAssignedSkinPort(handler, assigned);
@@ -407,7 +437,7 @@ class WebUIService {
         'Skin port $assigned for $identity is in use; '
         'serving this session on a temporary port',
       );
-      return shelf_io.serve(handler, '0.0.0.0', 0);
+      return _serveTemporarySkinPort(handler, assignments);
     }
 
     final taken = assignments.values.toSet();
@@ -426,7 +456,29 @@ class WebUIService {
     }
 
     _log.severe('No free skin port for $identity; serving on a temporary port');
-    return shelf_io.serve(handler, '0.0.0.0', 0);
+    return _serveTemporarySkinPort(handler, assignments);
+  }
+
+  Future<HttpServer> _serveTemporarySkinPort(
+    Handler handler,
+    Map<String, int> assignments,
+  ) async {
+    final avoid = {...assignments.values, ..._reservedSkinPorts};
+    var server = await shelf_io.serve(handler, '0.0.0.0', 0);
+    for (
+      var attempt = 1;
+      attempt < _temporarySkinPortAttempts && avoid.contains(server.port);
+      attempt++
+    ) {
+      await server.close(force: true);
+      server = await shelf_io.serve(handler, '0.0.0.0', 0);
+    }
+    if (avoid.contains(server.port)) {
+      _log.severe(
+        'Temporary skin port ${server.port} collides with an assigned port',
+      );
+    }
+    return server;
   }
 
   Future<void> _persistSkinPortAssignments(Map<String, int> assignments) async {

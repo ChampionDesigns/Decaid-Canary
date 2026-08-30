@@ -196,6 +196,68 @@ void main() {
     expect(saves, 1);
   });
 
+  test('serves and reassigns when the loader throws', () async {
+    var saved = <String, int>{};
+    final service = createService(
+      load: () async => throw const FormatException('corrupt prefs'),
+      save: (assignments) async => saved = assignments,
+    );
+
+    await service.serveFolderAtPath(skinA.path, port: entryPort);
+
+    expect(service.port, greaterThanOrEqualTo(testRangeStart));
+    expect(service.port, lessThan(testRangeStart + testRangeSize));
+    expect(saved, {skinA.path: service.port});
+    expect(await fetchBody(service.port), contains('skin-a'));
+  });
+
+  test('never adopts a stored port outside the skin range', () async {
+    var saved = <String, int>{};
+    final service = createService(
+      load: () async => {skinA.path: 8080, 'skin:other': 65000},
+      save: (assignments) async => saved = assignments,
+    );
+
+    await service.serveFolderAtPath(skinA.path, port: entryPort);
+
+    expect(service.port, greaterThanOrEqualTo(testRangeStart));
+    expect(service.port, lessThan(testRangeStart + testRangeSize));
+    expect(saved, {skinA.path: service.port});
+  });
+
+  test('drops stored assignments that share one port', () async {
+    final duplicatedPort = testRangeStart + 5;
+    var saved = <String, int>{};
+    final service = createService(
+      load: () async => {'skin:x': duplicatedPort, 'skin:y': duplicatedPort},
+      save: (assignments) async => saved = assignments,
+    );
+
+    await service.serveFolderAtPath(skinA.path, port: entryPort);
+
+    expect(saved.keys, [skinA.path]);
+  });
+
+  test('serves a skin without an identity on a temporary port', () async {
+    var saves = 0;
+    final service = createService(
+      load: () async => {},
+      save: (_) async {
+        saves++;
+      },
+    );
+    service.skinIdentityProvider = (_) => null;
+
+    await service.serveFolderAtPath(skinA.path, port: entryPort);
+
+    expect(
+      service.port,
+      isNot(inInclusiveRange(testRangeStart, testRangeStart + testRangeSize)),
+    );
+    expect(saves, 0);
+    expect(await fetchBody(service.port), contains('skin-a'));
+  });
+
   test('saves an assignment once, not on every serve', () async {
     var saves = 0;
     var saved = <String, int>{};
