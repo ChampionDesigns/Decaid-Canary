@@ -43,11 +43,26 @@ curl -s -X PUT http://localhost:8080/api/v1/machine/ledStrip \
   }' | jq
 ```
 
-Expect `{"status": "accepted"}` (status 200). The palette registers are
-persisted by the firmware on write; `frontSwitch` in the body is ignored.
+Expect status 200 with the stored `LedStripState` as the body. The palette
+registers are persisted by the firmware on write; `frontSwitch` in the body
+is ignored on write and the echo carries the derived palette instead.
 The wire stores 8 bits per channel, so non-byte-aligned 16-bit values in
-the request are quantized (low bytes dropped); a subsequent GET returns
-what the firmware actually holds.
+the request are quantized (low bytes dropped) and the echo is the
+canonical spelling the firmware actually holds:
+
+```bash
+curl -s -X PUT http://localhost:8080/api/v1/machine/ledStrip \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "frontStrip": {"sleeping": "FFFF22220000", "awake": "FF00F0008000"},
+    "backStrip":  {"sleeping": "300020001000", "awake": "FFFFFFFFFFFF"},
+    "frontSwitch":{"sleeping": "000000000000", "awake": "000000000000"}
+  }' | jq -e '.frontStrip.sleeping == "FF0022000000"'
+```
+
+The replicated-byte `FFFF22220000` is echoed as `FF0022000000`. A client
+that byte-compares what it sent against what it reads back must adopt the
+echoed form.
 
 ### 4. Read back
 

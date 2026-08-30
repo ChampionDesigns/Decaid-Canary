@@ -148,14 +148,6 @@ class MockBengle extends MockDe1 implements BengleInterface, SimulatedDevice {
 
   @override
   Future<void> setLedStrip(LedStripState state) async {
-    Color16 quantize(Color16 color) =>
-        Color16(color.red & 0xFF00, color.green & 0xFF00, color.blue & 0xFF00);
-
-    ZoneLedState quantizeZone(ZoneLedState zone) => ZoneLedState(
-      awake: quantize(zone.awake),
-      sleeping: quantize(zone.sleeping),
-    );
-
     ZoneLedState derive(ZoneLedState strip, int defaultRgb) {
       Color16 fallback(int rgb) => Color16(
         ((rgb >> 16) & 0xFF) << 8,
@@ -171,8 +163,8 @@ class MockBengle extends MockDe1 implements BengleInterface, SimulatedDevice {
       );
     }
 
-    final frontStrip = quantizeZone(state.frontStrip);
-    final backStrip = quantizeZone(state.backStrip);
+    final frontStrip = state.frontStrip.quantized();
+    final backStrip = state.backStrip.quantized();
     _ledState.add(
       LedStripState(
         frontStrip: frontStrip,

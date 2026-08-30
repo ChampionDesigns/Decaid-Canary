@@ -15,14 +15,6 @@ Color16 _fromFirmwareRgb(int rgb) => Color16(
 bool _isBlack(Color16 color) =>
     color.red == 0 && color.green == 0 && color.blue == 0;
 
-Color16 _quantize(Color16 color) =>
-    Color16(color.red & 0xFF00, color.green & 0xFF00, color.blue & 0xFF00);
-
-ZoneLedState _quantizeZone(ZoneLedState zone) => ZoneLedState(
-  awake: _quantize(zone.awake),
-  sleeping: _quantize(zone.sleeping),
-);
-
 ZoneLedState _deriveSwitchPalette(ZoneLedState frontStrip) {
   return ZoneLedState(
     awake: _isBlack(frontStrip.awake)
@@ -43,8 +35,8 @@ mixin LedStripCapability on UnifiedDe1 {
   Future<LedStripState?> getLedStripState() => _ledStripState.first;
 
   Future<void> setLedStrip(LedStripState state) async {
-    final frontStrip = _quantizeZone(state.frontStrip);
-    final backStrip = _quantizeZone(state.backStrip);
+    final frontStrip = state.frontStrip.quantized();
+    final backStrip = state.backStrip.quantized();
     try {
       await writeMmrInt(
         BengleMmr.frontLedAwake,
