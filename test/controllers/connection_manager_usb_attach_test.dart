@@ -43,6 +43,7 @@ class _AttachScanner extends MockDeviceScanner implements DeviceAttachNotifier {
 
 class _ProbeScanner extends _AttachScanner implements UsbAttachProbe {
   AttachProbeResult probeResult = const AttachProbeUnsupported();
+  List<AttachProbeResult> probeResults = const [];
   int probeCallCount = 0;
   final List<DeviceAttachedEvent> probeEvents = [];
 
@@ -58,12 +59,15 @@ class _ProbeScanner extends _AttachScanner implements UsbAttachProbe {
   ) async {
     probeCallCount++;
     probeEvents.add(event);
+    final result = probeCallCount <= probeResults.length
+        ? probeResults[probeCallCount - 1]
+        : probeResult;
     if (!probeStarted.isCompleted) probeStarted.complete();
     final gate = probeGate;
     if (gate != null) await gate.future;
     final error = probeError;
     if (error != null) throw error;
-    return probeResult;
+    return result;
   }
 
   @override
@@ -947,6 +951,35 @@ void main() {
         expect(manager.currentStatus.phase, ConnectionPhase.idle);
       },
     );
+
+    test('a queued attach is probed before automatic replay', () async {
+      final usbMachine = _FakeDe1(deviceId: 'usb-machine-id');
+      final bleMachine = _FakeDe1(deviceId: 'ble-machine-id');
+      probeScanner.probeResults = [
+        const AttachProbeUnsupported(),
+        AttachProbeConnected(usbMachine),
+      ];
+      probeScanner.probeGate = Completer<void>();
+      probeScanner.scanCompleter = Completer<void>();
+
+      final connecting = manager.connect();
+      await probeScanner.scanningStream.firstWhere((scanning) => scanning);
+      probeScanner.attach();
+      await Future<void>.delayed(Duration.zero);
+      probeScanner.completeScan();
+      await probeScanner.probeStarted.future;
+
+      probeScanner.attach();
+      await Future<void>.delayed(Duration.zero);
+      probeScanner.addDevice(bleMachine);
+      probeScanner.probeGate!.complete();
+      await connecting;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(probeScanner.probeCallCount, 2);
+      expect(bleMachine.onConnectCalls, 0);
+      expect(settings.preferredMachineId, 'usb-machine-id');
+    });
 
     test('an adoption failure still completes the latch lifecycle', () async {
       await settings.setPreferredMachineId('ble-machine-id');

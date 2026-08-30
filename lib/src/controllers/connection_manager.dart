@@ -338,6 +338,7 @@ class ConnectionManager {
   }
 
   Future<void> _completeUsbAttachLifecycle() async {
+    if (_pendingAttachAttempt) return;
     _usbAttachLatched = false;
     _automaticMachineAttemptSuperseded = false;
     if (_machineConnected) {
