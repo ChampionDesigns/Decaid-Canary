@@ -92,32 +92,44 @@ class DecentAccountService {
   }
 
   Future<void> get accountReady async {
-    final inFlight = _refreshFuture;
-    if (inFlight != null) {
-      await inFlight;
+    while (true) {
+      final inFlight = _refreshFuture;
+      if (inFlight != null) {
+        await inFlight;
+        final latest = _refreshFuture;
+        if (latest != null && !identical(inFlight, latest)) continue;
+        return;
+      }
+      if (_machinesRefreshed || !_cacheLoaded || !_hasLinkedAccount) return;
+      await _ensureMachinesFresh();
       return;
     }
-    if (_machinesRefreshed || !_cacheLoaded || !_hasLinkedAccount) return;
-    await _ensureMachinesFresh();
   }
 
   Future<void> _ensureMachinesFresh() {
     final inFlight = _refreshFuture;
     if (inFlight != null) return inFlight;
-    final future = _backgroundRefresh();
+    return _trackRefresh(_backgroundRefresh());
+  }
+
+  Future<void> _trackRefresh(Future<void> future) {
     _refreshFuture = future;
+    future.whenComplete(() {
+      if (identical(_refreshFuture, future)) _refreshFuture = null;
+    }).ignore();
     return future;
   }
 
   Future<void> _backgroundRefresh() async {
+    final generation = _authGeneration;
     try {
       if (!await hasLinkedAccount()) return;
+      if (generation != _authGeneration) return;
+      _hasLinkedAccount = true;
       if (!await isLoggedIn()) return;
       await refreshRegisteredMachines();
     } catch (e) {
       _log.info('Background registered-machine refresh unavailable: $e');
-    } finally {
-      _refreshFuture = null;
     }
   }
 
@@ -191,48 +203,60 @@ class DecentAccountService {
   static String _normalizeEmail(String email) => email.trim().toLowerCase();
 
   Future<bool> login(String email, String password) async {
+    final generation = _authGeneration;
     final response = await _authedGet(
       email,
       password,
       '/support/api/login_test',
     );
+    if (generation != _authGeneration) return false;
 
-    if (response.statusCode == 200 && response.body.trim() != '0') {
+    final token = response.body.trim();
+    if (response.statusCode == 200 && token.isNotEmpty && token != '0') {
       final storedEmail = await _store.read(key: 'email');
+      if (generation != _authGeneration) return false;
       final emailChanged =
           _normalizeEmail(storedEmail ?? '') != _normalizeEmail(email);
-      _authGeneration++;
+      final committedGeneration = ++_authGeneration;
       _authenticated = false;
       _hasLinkedAccount = false;
-      await _withAccountWriteLock(() async {
+      final committed = await _withAccountWriteLock(() async {
+        if (committedGeneration != _authGeneration) return false;
         if (emailChanged) {
           _machines = const [];
           _mappings = const [];
-          _machinesRefreshed = false;
           await _store.delete(key: _registeredMachinesKey);
           await _store.delete(key: _identityMappingsKey);
         }
+        _machinesRefreshed = false;
         await _store.write(key: 'email', value: email);
-        await _store.write(key: 'password', value: response.body.trim());
+        await _store.write(key: 'password', value: token);
+        return committedGeneration == _authGeneration;
       });
+      if (!committed || committedGeneration != _authGeneration) return false;
       _authenticated = true;
       _hasLinkedAccount = true;
       _log.info('login -> accepted');
-      try {
-        await refreshRegisteredMachines();
-      } catch (e) {
-        _log.warning('Registered-machine refresh after login failed: $e');
-      }
-      return true;
+      await _trackRefresh(_refreshAfterLogin());
+      return committedGeneration == _authGeneration && _authenticated == true;
     }
     _log.warning('login -> rejected');
     return false;
+  }
+
+  Future<void> _refreshAfterLogin() async {
+    try {
+      await refreshRegisteredMachines();
+    } catch (e) {
+      _log.warning('Registered-machine refresh after login failed: $e');
+    }
   }
 
   Future<void> logout() {
     _authGeneration++;
     _authenticated = false;
     _hasLinkedAccount = false;
+    _refreshFuture = null;
     return _withAccountWriteLock(() async {
       _machines = const [];
       _mappings = const [];
@@ -257,6 +281,7 @@ class DecentAccountService {
       hasUsableAccountCache ? List.unmodifiable(_machines) : const [];
 
   Future<List<RegisteredDecentMachine>> fetchRegisteredMachines() async {
+    final generation = _authGeneration;
     final email = await _store.read(key: 'email');
     final password = await _store.read(key: 'password');
     if (email == null || password == null) {
@@ -267,6 +292,9 @@ class DecentAccountService {
       password,
       '/support/api/sn?onlyespressomachines=1&withskus=1',
     );
+    if (response.statusCode == 401 && generation == _authGeneration) {
+      reportAuthenticationFailure();
+    }
     if (response.statusCode != 200) {
       throw Exception(
         'registered machine fetch failed (${response.statusCode}): '
@@ -316,12 +344,17 @@ class DecentAccountService {
     }
     final account = _normalizeEmail(email);
     await _withAccountWriteLock(() async {
-      if (!accountLinked || generation != _authGeneration) return;
+      if (!accountLinked ||
+          !hasUsableAccountCache ||
+          generation != _authGeneration) {
+        return;
+      }
       final currentEmail = await _store.read(key: 'email');
       if (currentEmail == null || _normalizeEmail(currentEmail) != account) {
         return;
       }
       if (generation != _authGeneration) return;
+      if (!_machines.any((machine) => machine.serial == serial)) return;
       _mappings = [
         ..._mappings.where(
           (m) => !(m.transportType == transportType && m.deviceId == deviceId),
@@ -340,7 +373,10 @@ class DecentAccountService {
     required String transportType,
     required String deviceId,
   }) async {
+    final generation = _authGeneration;
+    if (!hasUsableAccountCache) return null;
     if (!await hasLinkedAccount()) return null;
+    if (generation != _authGeneration || !hasUsableAccountCache) return null;
     final serial = _mappings
         .where(
           (m) => m.transportType == transportType && m.deviceId == deviceId,
@@ -380,7 +416,7 @@ class DecentAccountService {
       if (_authenticated == null) {
         _cooldownUntil = clock.now().add(retryInterval);
       }
-    });
+    }).ignore();
     return future;
   }
 
@@ -407,10 +443,12 @@ class DecentAccountService {
           ? DecentAccountStatus.unauthenticated
           : DecentAccountStatus.indeterminate;
     }
-    final valid = response.statusCode == 200 && response.body.trim() != '0';
+    final token = response.body.trim();
+    final valid =
+        response.statusCode == 200 && token.isNotEmpty && token != '0';
     final rejected =
         response.statusCode == 401 ||
-        (response.statusCode == 200 && response.body.trim() == '0');
+        (response.statusCode == 200 && (token.isEmpty || token == '0'));
     if (!valid && !rejected) {
       _log.info('validation -> indeterminate');
       return _authenticated == false
@@ -437,7 +475,9 @@ class DecentAccountService {
   };
 
   void _setAuthenticated(int generation, bool value) {
-    if (generation == _authGeneration) _authenticated = value;
+    if (generation != _authGeneration) return;
+    _authenticated = value;
+    if (value) _hasLinkedAccount = true;
   }
 
   void reportAuthenticationFailure() {

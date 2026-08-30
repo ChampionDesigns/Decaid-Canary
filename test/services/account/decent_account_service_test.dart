@@ -9,11 +9,18 @@ import 'package:reaprime/src/services/account/decent_account_service.dart';
 class FakeCredentialStore implements CredentialStore {
   final Map<String, String> _store = {};
   String? failingReadKey;
+  int? remainingReadFailures;
   String? failingDeleteKey;
 
   @override
   Future<String?> read({required String key}) async {
-    if (key == failingReadKey) throw StateError('read failed: $key');
+    if (key == failingReadKey &&
+        (remainingReadFailures == null || remainingReadFailures! > 0)) {
+      if (remainingReadFailures != null) {
+        remainingReadFailures = remainingReadFailures! - 1;
+      }
+      throw StateError('read failed: $key');
+    }
     return _store[key];
   }
 
@@ -183,6 +190,38 @@ void main() {
         final result = await service.login('test@example.com', 'hunter2');
         expect(result, isFalse);
       });
+
+      test('returns false when API returns an empty token', () async {
+        httpClient = _mockClient(statusCode: 200, body: '');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(await service.login('test@example.com', 'hunter2'), isFalse);
+        expect(store.hasCredentials, isFalse);
+      });
+
+      test(
+        'returns false when the machine refresh rejects the token',
+        () async {
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/login_test') {
+              return http.Response('cryptpw_abc123\n', 200);
+            }
+            return http.Response('unauthorized', 401);
+          });
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          expect(await service.login('test@example.com', 'hunter2'), isFalse);
+          expect(await service.isAuthKnownInvalid(), isTrue);
+        },
+      );
 
       test('returns false when network error occurs', () async {
         httpClient = http_testing.MockClient(
@@ -385,6 +424,26 @@ void main() {
         expect(calls, 1);
       });
 
+      test(
+        'validation cleanup does not leak a credential read error',
+        () async {
+          final uncaughtErrors = <Object>[];
+          await store.write(key: 'email', value: 'returning@example.com');
+          await store.write(key: 'password', value: 'cryptpw_abc123');
+          store.failingReadKey = 'email';
+          store.remainingReadFailures = 0;
+
+          await runZonedGuarded(() async {
+            final validation = service.isLoggedIn();
+            store.remainingReadFailures = 1;
+            await expectLater(validation, throwsStateError);
+            await pumpEventQueue();
+          }, (error, _) => uncaughtErrors.add(error));
+
+          expect(uncaughtErrors, isEmpty);
+        },
+      );
+
       test('does not retry after a definitive rejection', () async {
         var calls = 0;
         httpClient = http_testing.MockClient((request) async {
@@ -489,6 +548,19 @@ void main() {
         expect(await service.verifyStoredCredentials(), isFalse);
       });
 
+      test('returns false when login_test returns an empty token', () async {
+        httpClient = _mockClient(statusCode: 200, body: '');
+        await store.write(key: 'email', value: 'user@example.com');
+        await store.write(key: 'password', value: 'cryptpw_abc123');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(await service.verifyStoredCredentials(), isFalse);
+      });
+
       test('does not clear auth state on a transient server error', () async {
         await service.login('test@example.com', 'hunter2');
         expect(await service.isLoggedIn(), isTrue);
@@ -558,6 +630,33 @@ void main() {
     });
 
     group('concurrent auth updates', () {
+      test('logout invalidates a login still awaiting validation', () async {
+        final loginStarted = Completer<void>();
+        final loginRelease = Completer<void>();
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/login_test') {
+            loginStarted.complete();
+            await loginRelease.future;
+            return http.Response('cryptpw_abc123\n', 200);
+          }
+          return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+        });
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        final login = service.login('user@example.com', 'hunter2');
+        await loginStarted.future;
+        await service.logout();
+        loginRelease.complete();
+
+        expect(await login, isFalse);
+        expect(store.hasCredentials, isFalse);
+        expect(service.usableRegisteredMachines, isEmpty);
+      });
+
       test(
         'stale validation does not clobber a newer successful login',
         () async {
@@ -731,6 +830,39 @@ void main() {
 
         final serials = await service.fetchSerialNumbers();
         expect(serials, isEmpty);
+      });
+
+      test('a stale 401 does not invalidate a replacement login', () async {
+        final staleRequestStarted = Completer<void>();
+        final releaseStaleRequest = Completer<void>();
+        var snCalls = 0;
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/login_test') {
+            return http.Response('new_cryptpw\n', 200);
+          }
+          snCalls++;
+          if (snCalls == 1) {
+            staleRequestStarted.complete();
+            await releaseStaleRequest.future;
+            return http.Response('unauthorized', 401);
+          }
+          return http.Response('2222 DE-DE1PRO220V7-00533\n', 200);
+        });
+        await store.write(key: 'email', value: 'old@example.com');
+        await store.write(key: 'password', value: 'old_cryptpw');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        final staleFetch = service.fetchSerialNumbers();
+        await staleRequestStarted.future;
+        expect(await service.login('new@example.com', 'new-password'), isTrue);
+        releaseStaleRequest.complete();
+
+        await expectLater(staleFetch, throwsException);
+        expect(await service.isAuthKnownInvalid(), isFalse);
       });
 
       test('throws on network error', () async {
@@ -965,6 +1097,118 @@ void main() {
 
           expect(service.hasUsableAccountCache, isFalse);
           expect(service.usableRegisteredMachines, isEmpty);
+        },
+      );
+
+      test(
+        'startup recovers after a transient credential read failure',
+        () async {
+          var snCalls = 0;
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/sn') {
+              snCalls++;
+              return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+            }
+            return http.Response('cryptpw_abc123\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          store.failingReadKey = 'email';
+          store.remainingReadFailures = 1;
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+          await pumpEventQueue();
+
+          expect(snCalls, 1);
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1338',
+          ]);
+        },
+      );
+
+      test(
+        'confirmed credentials keep the offline cache usable after a transient '
+        'validation failure',
+        () async {
+          var validationCalls = 0;
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/login_test') {
+              validationCalls++;
+              throw Exception('offline');
+            }
+            return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          ]);
+          store.failingReadKey = 'email';
+          store.remainingReadFailures = 1;
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+          await pumpEventQueue();
+
+          expect(validationCalls, 1);
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1337',
+          ]);
+        },
+      );
+
+      test(
+        'an sn 401 revokes cache authority but keeps recovery data',
+        () async {
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/sn') {
+              return http.Response('unauthorized', 401);
+            }
+            return http.Response('cryptpw_abc123\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          ]);
+          await store.write(
+            key: 'identity_mappings',
+            value: jsonEncode({
+              'account': 'user@example.com',
+              'mappings': [
+                {
+                  'transportType': 'ble',
+                  'deviceId': 'AA:BB:CC',
+                  'serial': '1337',
+                },
+              ],
+            }),
+          );
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+          await pumpEventQueue();
+
+          expect(await service.isAuthKnownInvalid(), isTrue);
+          expect(service.usableRegisteredMachines, isEmpty);
+          expect(
+            await service.lookupMapping(
+              transportType: 'ble',
+              deviceId: 'AA:BB:CC',
+            ),
+            isNull,
+          );
+          expect(await store.read(key: 'registered_machines'), isNotNull);
         },
       );
 
@@ -1515,6 +1759,50 @@ void main() {
           ]);
         },
       );
+
+      test('accountReady follows a replacement login refresh', () async {
+        final oldSnStarted = Completer<void>();
+        final oldSnRelease = Completer<void>();
+        final newSnStarted = Completer<void>();
+        final newSnRelease = Completer<void>();
+        var snCalls = 0;
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/sn') {
+            snCalls++;
+            if (snCalls == 1) {
+              oldSnStarted.complete();
+              await oldSnRelease.future;
+              return http.Response('1111 DE-DE1220V-00001\n', 200);
+            }
+            newSnStarted.complete();
+            await newSnRelease.future;
+            return http.Response('2222 DE-DE1PRO220V7-00533\n', 200);
+          }
+          return http.Response('cryptpw_abc123\n', 200);
+        });
+        await seedAccount('old@example.com', 'cryptpw_abc123');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+        await service.initialize();
+        await oldSnStarted.future;
+
+        var readyCompleted = false;
+        final ready = service.accountReady.then((_) => readyCompleted = true);
+        final login = service.login('new@example.com', 'hunter2');
+        await newSnStarted.future;
+
+        oldSnRelease.complete();
+        await pumpEventQueue();
+        expect(readyCompleted, isFalse);
+
+        newSnRelease.complete();
+        expect(await login, isTrue);
+        await ready;
+        expect(service.usableRegisteredMachines.map((m) => m.serial), ['2222']);
+      });
 
       test('an in-flight refresh from the old account cannot overwrite a '
           'replacement login', () async {
