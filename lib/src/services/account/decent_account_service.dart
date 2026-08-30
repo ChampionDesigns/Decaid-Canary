@@ -67,6 +67,7 @@ class DecentAccountService {
   List<_IdentityMapping> _mappings = const [];
   bool _cacheLoaded = false;
   bool _hasLinkedAccount = false;
+  bool _linkedAccountKnown = false;
   bool _machinesRefreshed = false;
   Future<void>? _refreshFuture;
   Completer<void> _refreshChanged = Completer<void>();
@@ -82,6 +83,7 @@ class DecentAccountService {
   Future<void> initialize() async {
     try {
       _hasLinkedAccount = await hasLinkedAccount();
+      _linkedAccountKnown = true;
     } catch (e, st) {
       _hasLinkedAccount = false;
       _log.warning('Failed to read linked account', e, st);
@@ -96,7 +98,11 @@ class DecentAccountService {
     while (true) {
       var inFlight = _refreshFuture;
       if (inFlight == null) {
-        if (_machinesRefreshed || !_cacheLoaded || !_hasLinkedAccount) return;
+        if (_machinesRefreshed ||
+            !_cacheLoaded ||
+            (!_hasLinkedAccount && _linkedAccountKnown)) {
+          return;
+        }
         inFlight = _ensureMachinesFresh();
       }
       await Future.any([inFlight, _refreshChanged.future]);
@@ -130,9 +136,11 @@ class DecentAccountService {
   Future<void> _backgroundRefresh() async {
     final generation = _authGeneration;
     try {
-      if (!await hasLinkedAccount()) return;
+      final linked = await hasLinkedAccount();
       if (generation != _authGeneration) return;
-      _hasLinkedAccount = true;
+      _hasLinkedAccount = linked;
+      _linkedAccountKnown = true;
+      if (!linked) return;
       if (!await isLoggedIn()) return;
       await refreshRegisteredMachines();
     } catch (e) {
@@ -227,6 +235,7 @@ class DecentAccountService {
       final committedGeneration = ++_authGeneration;
       _authenticated = false;
       _hasLinkedAccount = false;
+      _linkedAccountKnown = true;
       final committed = await _withAccountWriteLock(() async {
         if (committedGeneration != _authGeneration) return false;
         if (emailChanged) {
@@ -263,6 +272,7 @@ class DecentAccountService {
     _authGeneration++;
     _authenticated = false;
     _hasLinkedAccount = false;
+    _linkedAccountKnown = true;
     _replaceRefresh(null);
     return _withAccountWriteLock(() async {
       _machines = const [];
@@ -438,6 +448,10 @@ class DecentAccountService {
     final password = await _store.read(key: 'password');
     if (email == null || password == null) {
       _log.info('validation -> no stored credentials (account not linked)');
+      if (generation == _authGeneration) {
+        _hasLinkedAccount = false;
+        _linkedAccountKnown = true;
+      }
       _setAuthenticated(generation, false);
       return _accountStatus;
     }
@@ -484,7 +498,10 @@ class DecentAccountService {
   void _setAuthenticated(int generation, bool value) {
     if (generation != _authGeneration) return;
     _authenticated = value;
-    if (value) _hasLinkedAccount = true;
+    if (value) {
+      _hasLinkedAccount = true;
+      _linkedAccountKnown = true;
+    }
   }
 
   void reportAuthenticationFailure() {

@@ -39,6 +39,33 @@ class FakeCredentialStore implements CredentialStore {
       _store.containsKey('email') && _store.containsKey('password');
 }
 
+class _GateFirstEmailReadStore implements CredentialStore {
+  final CredentialStore _inner;
+  final Completer<void> started = Completer<void>();
+  final Completer<void> release = Completer<void>();
+  bool _gated = false;
+
+  _GateFirstEmailReadStore(this._inner);
+
+  @override
+  Future<String?> read({required String key}) async {
+    final value = await _inner.read(key: key);
+    if (!_gated && key == 'email') {
+      _gated = true;
+      started.complete();
+      await release.future;
+    }
+    return value;
+  }
+
+  @override
+  Future<void> write({required String key, required String value}) =>
+      _inner.write(key: key, value: value);
+
+  @override
+  Future<void> delete({required String key}) => _inner.delete(key: key);
+}
+
 class _GateFirstMachinesWriteStore implements CredentialStore {
   final CredentialStore _inner;
   final Completer<void> gate = Completer<void>();
@@ -690,6 +717,40 @@ void main() {
         },
       );
 
+      test(
+        'stale missing-credential validation does not hide a newer login',
+        () async {
+          final gatedStore = _GateFirstEmailReadStore(store);
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/sn') {
+              return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+            }
+            return http.Response('cryptpw_abc123\n', 200);
+          });
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: gatedStore,
+            baseUrl: _baseUrl,
+          );
+
+          final staleValidation = service.verifyStoredCredentialsStatus();
+          await gatedStore.started.future;
+
+          expect(await service.login('new@example.com', 'goodpw'), isTrue);
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1338',
+          ]);
+
+          gatedStore.release.complete();
+
+          expect(await staleValidation, DecentAccountStatus.authenticated);
+          expect(service.hasUsableAccountCache, isTrue);
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1338',
+          ]);
+        },
+      );
+
       test('in-flight validation does not resurrect auth after an upstream '
           'failure', () async {
         final completer = Completer<http.Response>();
@@ -1121,6 +1182,45 @@ void main() {
           );
 
           await service.initialize();
+          await pumpEventQueue();
+
+          expect(snCalls, 1);
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1338',
+          ]);
+        },
+      );
+
+      test(
+        'accountReady retries an indeterminate linked-account read',
+        () async {
+          var snCalls = 0;
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/sn') {
+              snCalls++;
+              return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+            }
+            return http.Response('cryptpw_abc123\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          ]);
+          store.failingReadKey = 'email';
+          store.remainingReadFailures = 3;
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+          await pumpEventQueue();
+
+          expect(snCalls, 0);
+          expect(service.usableRegisteredMachines, isEmpty);
+
+          await service.accountReady;
           await pumpEventQueue();
 
           expect(snCalls, 1);
