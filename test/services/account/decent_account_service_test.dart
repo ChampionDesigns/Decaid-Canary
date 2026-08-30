@@ -1216,7 +1216,7 @@ void main() {
             {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
           ]);
           store.failingReadKey = 'email';
-          store.remainingReadFailures = 3;
+          store.remainingReadFailures = 4;
           service = DecentAccountService(
             httpClient: httpClient,
             credentialStore: store,
@@ -1236,6 +1236,106 @@ void main() {
           expect(service.usableRegisteredMachines.map((m) => m.serial), [
             '1338',
           ]);
+        },
+      );
+
+      test(
+        'accountReady retries a failed startup machine-cache read',
+        () async {
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/login_test') {
+              throw Exception('offline');
+            }
+            return http.Response('0\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          ]);
+          store.failingReadKey = 'registered_machines';
+          store.remainingReadFailures = 2;
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+          await service.accountReady;
+
+          expect(service.usableRegisteredMachines, isEmpty);
+
+          await service.accountReady;
+
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '1337',
+          ]);
+        },
+      );
+
+      test(
+        'accountReady retries a failed startup mapping-cache read',
+        () async {
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/sn') {
+              return http.Response(
+                '1337 DE-DE1220V-00001\n'
+                '1338 DE-DE1PRO220V7-00533\n',
+                200,
+              );
+            }
+            return http.Response('cryptpw_abc123\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+            {
+              'serial': '1338',
+              'sku': 'DE-DE1PRO220V7-00533',
+              'model': 'DE1Pro',
+            },
+          ]);
+          await store.write(
+            key: 'identity_mappings',
+            value: jsonEncode({
+              'account': 'user@example.com',
+              'mappings': [
+                {
+                  'transportType': 'ble',
+                  'deviceId': 'AA:BB:CC',
+                  'serial': '1338',
+                },
+              ],
+            }),
+          );
+          store.failingReadKey = 'identity_mappings';
+          store.remainingReadFailures = 2;
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+          await service.accountReady;
+
+          expect(
+            await service.lookupMapping(
+              transportType: 'ble',
+              deviceId: 'AA:BB:CC',
+            ),
+            isNull,
+          );
+
+          await service.accountReady;
+
+          expect(
+            (await service.lookupMapping(
+              transportType: 'ble',
+              deviceId: 'AA:BB:CC',
+            ))?.serial,
+            '1338',
+          );
         },
       );
 

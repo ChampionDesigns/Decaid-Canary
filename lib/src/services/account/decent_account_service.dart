@@ -66,6 +66,8 @@ class DecentAccountService {
   List<RegisteredDecentMachine> _machines = const [];
   List<_IdentityMapping> _mappings = const [];
   bool _cacheLoaded = false;
+  bool _machineCacheLoadFailed = false;
+  bool _mappingCacheLoadFailed = false;
   bool _hasLinkedAccount = false;
   bool _linkedAccountKnown = false;
   bool _machinesRefreshed = false;
@@ -98,7 +100,9 @@ class DecentAccountService {
     while (true) {
       var inFlight = _refreshFuture;
       if (inFlight == null) {
-        if (_machinesRefreshed ||
+        if ((_machinesRefreshed &&
+                !_machineCacheLoadFailed &&
+                !_mappingCacheLoadFailed) ||
             !_cacheLoaded ||
             (!_hasLinkedAccount && _linkedAccountKnown)) {
           return;
@@ -136,6 +140,9 @@ class DecentAccountService {
   Future<void> _backgroundRefresh() async {
     final generation = _authGeneration;
     try {
+      if (_machineCacheLoadFailed) await _loadCachedRegisteredMachines();
+      if (_mappingCacheLoadFailed) await _loadCachedMappings();
+      if (_machinesRefreshed) return;
       final linked = await hasLinkedAccount();
       if (generation != _authGeneration) return;
       _hasLinkedAccount = linked;
@@ -149,6 +156,7 @@ class DecentAccountService {
   }
 
   Future<void> _loadCachedRegisteredMachines() async {
+    _machineCacheLoadFailed = false;
     try {
       final raw = await _store.read(key: _registeredMachinesKey);
       if (raw == null || raw.isEmpty) return;
@@ -160,11 +168,13 @@ class DecentAccountService {
           RegisteredDecentMachine.fromJson(m as Map<String, dynamic>),
       ];
     } catch (e) {
+      _machineCacheLoadFailed = true;
       _log.warning('Failed to load cached registered machines: $e');
     }
   }
 
   Future<void> _loadCachedMappings() async {
+    _mappingCacheLoadFailed = false;
     try {
       final raw = await _store.read(key: _identityMappingsKey);
       if (raw == null || raw.isEmpty) return;
@@ -175,6 +185,7 @@ class DecentAccountService {
           _IdentityMapping.fromJson(m as Map<String, dynamic>),
       ];
     } catch (e) {
+      _mappingCacheLoadFailed = true;
       _log.warning('Failed to load cached identity mappings: $e');
     }
   }
@@ -246,6 +257,8 @@ class DecentAccountService {
           _mappings = const [];
           await _store.delete(key: _registeredMachinesKey);
           await _store.delete(key: _identityMappingsKey);
+          _machineCacheLoadFailed = false;
+          _mappingCacheLoadFailed = false;
         }
         _machinesRefreshed = false;
         await _store.write(key: 'email', value: email);
@@ -276,6 +289,8 @@ class DecentAccountService {
     _authenticated = false;
     _hasLinkedAccount = false;
     _linkedAccountKnown = true;
+    _machineCacheLoadFailed = false;
+    _mappingCacheLoadFailed = false;
     _replaceRefresh(null);
     return _withAccountWriteLock(() async {
       _machines = const [];
@@ -346,6 +361,7 @@ class DecentAccountService {
       _machines = machines;
       _cacheLoaded = true;
       await _persistRegisteredMachines(machines, account: account);
+      _machineCacheLoadFailed = false;
       await _pruneMappings(machines, account);
       _machinesRefreshed = true;
     });
