@@ -1450,8 +1450,8 @@ void main() {
         );
       });
 
-      test('a stale old-account refresh write cannot clobber the replacement '
-          'account cache', () async {
+      test('a stale old-account refresh is hidden and cannot clobber the '
+          'replacement account cache', () async {
         final gatedStore = _GateFirstMachinesWriteStore(store);
         var snCalls = 0;
         httpClient = http_testing.MockClient((request) async {
@@ -1484,6 +1484,9 @@ void main() {
         // A replacement login lands in that window and waits on the lock.
         final loginFuture = service.login('new@example.com', 'hunter2');
         await pumpEventQueue();
+
+        expect(service.usableRegisteredMachines, isEmpty);
+        expect(await service.isLoggedIn(), isFalse);
 
         gatedStore.gate.complete();
         expect(await loginFuture, isTrue);

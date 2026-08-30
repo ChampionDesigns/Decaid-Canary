@@ -204,14 +204,14 @@ class DecentAccountService {
       final storedEmail = await _store.read(key: 'email');
       final emailChanged =
           _normalizeEmail(storedEmail ?? '') != _normalizeEmail(email);
-      await _store.write(key: 'email', value: email);
-      await _store.write(key: 'password', value: response.body.trim());
       _authGeneration++;
       _authenticated = false;
       _hasLinkedAccount = false;
       if (emailChanged) {
         await _clearAccountScopedState();
       }
+      await _store.write(key: 'email', value: email);
+      await _store.write(key: 'password', value: response.body.trim());
       _authenticated = true;
       _hasLinkedAccount = true;
       _log.info('login -> accepted');
