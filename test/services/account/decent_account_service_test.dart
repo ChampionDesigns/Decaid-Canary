@@ -8,10 +8,14 @@ import 'package:reaprime/src/services/account/decent_account_service.dart';
 
 class FakeCredentialStore implements CredentialStore {
   final Map<String, String> _store = {};
+  String? failingReadKey;
   String? failingDeleteKey;
 
   @override
-  Future<String?> read({required String key}) async => _store[key];
+  Future<String?> read({required String key}) async {
+    if (key == failingReadKey) throw StateError('read failed: $key');
+    return _store[key];
+  }
 
   @override
   Future<void> write({required String key, required String value}) async {
@@ -950,6 +954,19 @@ void main() {
         expect(snCalls, 1);
         expect(service.usableRegisteredMachines.map((m) => m.serial), ['1338']);
       });
+
+      test(
+        'startup continues when linked credentials cannot be read',
+        () async {
+          store.failingReadKey = 'email';
+
+          await expectLater(service.initialize(), completes);
+          await pumpEventQueue();
+
+          expect(service.hasUsableAccountCache, isFalse);
+          expect(service.usableRegisteredMachines, isEmpty);
+        },
+      );
 
       test('startup refresh only happens after credentials validate', () async {
         var snCalls = 0;

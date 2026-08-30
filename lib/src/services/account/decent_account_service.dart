@@ -79,7 +79,12 @@ class DecentAccountService {
        _store = credentialStore;
 
   Future<void> initialize() async {
-    _hasLinkedAccount = await hasLinkedAccount();
+    try {
+      _hasLinkedAccount = await hasLinkedAccount();
+    } catch (e, st) {
+      _hasLinkedAccount = false;
+      _log.warning('Failed to read linked account', e, st);
+    }
     await _loadCachedRegisteredMachines();
     await _loadCachedMappings();
     _cacheLoaded = true;
