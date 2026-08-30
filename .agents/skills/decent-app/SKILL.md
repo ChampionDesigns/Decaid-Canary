@@ -39,6 +39,7 @@ Pick the scenario that matches the task, run it verbatim, and finish before call
 | Hot-water stop-at-weight | `scenarios/hot-water-stop-at-weight.md` |
 | Shot-state WebSocket + persisted stop reason | `scenarios/shot-state-ws.md` |
 | Display brightness 0-100 + low-battery toggle | `scenarios/display-brightness.md` |
+| Machine settings per-field write verification | `scenarios/machine-settings-verify.md` |
 | Debug scale control (simulate) | `scenarios/debug-scale-control.md` |
 | Bengle LED strip v2 | `scenarios/bengle-led-strip.md` |
 | Bengle integrated scale end-to-end | `scenarios/bengle-integrated-scale.md` |
