@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:reaprime/src/account/account_page.dart';
 import 'package:reaprime/src/plugins/plugin_loader_service.dart';
 import 'package:reaprime/src/plugins/plugin_manifest.dart';
+import 'package:reaprime/src/services/account/decent_account_service.dart';
 import 'package:reaprime/src/settings/plugins_settings_view.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 class FakePluginLoaderService extends Fake implements PluginLoaderService {
   FakePluginLoaderService({
@@ -56,6 +58,19 @@ class FakePluginLoaderService extends Fake implements PluginLoaderService {
   ) async {
     saveCallCount++;
     savedSettings = settings;
+  }
+}
+
+class FakeDecentAccountService extends Fake implements DecentAccountService {
+  FakeDecentAccountService(this.status);
+
+  final DecentAccountStatus status;
+  int verificationCallCount = 0;
+
+  @override
+  Future<DecentAccountStatus> verifyStoredCredentialsStatus() async {
+    verificationCallCount++;
+    return status;
   }
 }
 
@@ -194,6 +209,146 @@ void main() {
 
     expect(find.text('proxy.decent_api'), findsOneWidget);
     expect(find.text('proxyDecentApi'), findsNothing);
+  });
+
+  PluginManifest accountProxyManifest({bool hasSettings = true}) =>
+      PluginManifest(
+        id: 'account.reaplugin',
+        name: 'Account Plugin',
+        author: 'Test',
+        description: 'Test plugin',
+        version: '1.0.0',
+        apiVersion: 1,
+        permissions: {PluginPermissions.proxyDecentApiWrite},
+        settings: hasSettings
+            ? {
+                'AutoUpload': {'type': 'boolean', 'default': false},
+              }
+            : {},
+        api: PluginApi(endpoints: []),
+      );
+
+  Future<FakeDecentAccountService> openAccountProxySettings(
+    WidgetTester tester, {
+    required DecentAccountStatus status,
+    bool hasSettings = true,
+  }) async {
+    final accountService = FakeDecentAccountService(status);
+    fakePluginLoaderService = FakePluginLoaderService(
+      plugins: [accountProxyManifest(hasSettings: hasSettings)],
+    );
+    await tester.pumpWidget(
+      ShadApp(
+        builder: (_, child) => ScaffoldMessenger(child: child!),
+        onGenerateRoute: (settings) {
+          if (settings.name == AccountPage.routeName) {
+            return MaterialPageRoute<void>(
+              settings: settings,
+              builder: (_) => const Scaffold(body: Text('Account page')),
+            );
+          }
+          return null;
+        },
+        home: PluginsSettingsView(
+          pluginLoaderService: fakePluginLoaderService,
+          decentAccountService: accountService,
+          allowInstall: false,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ShadButton, 'Settings'));
+    await tester.pumpAndSettle();
+    return accountService;
+  }
+
+  testWidgets('shows logged-in status for Decent account plugins', (
+    tester,
+  ) async {
+    final accountService = await openAccountProxySettings(
+      tester,
+      status: DecentAccountStatus.authenticated,
+    );
+
+    expect(find.text('Decent account'), findsOneWidget);
+    expect(find.text('Logged In'), findsOneWidget);
+    expect(find.text('Account settings'), findsNothing);
+    expect(accountService.verificationCallCount, 1);
+  });
+
+  testWidgets('caps the settings dialog width on large screens', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1920, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await openAccountProxySettings(
+      tester,
+      status: DecentAccountStatus.authenticated,
+    );
+
+    final content = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(ListView),
+    );
+    expect(tester.getSize(content).width, lessThanOrEqualTo(800));
+  });
+
+  testWidgets('logged-out account action opens Account without saving', (
+    tester,
+  ) async {
+    final accountService = await openAccountProxySettings(
+      tester,
+      status: DecentAccountStatus.unauthenticated,
+    );
+
+    expect(find.text('Not Logged In'), findsOneWidget);
+    expect(find.text('Account settings'), findsOneWidget);
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(ShadSwitch),
+      ),
+    );
+    await tester.tap(find.text('Account settings'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Account page'), findsOneWidget);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(fakePluginLoaderService.saveCallCount, 0);
+    expect(accountService.verificationCallCount, 1);
+  });
+
+  testWidgets('shows unavailable when account validation is indeterminate', (
+    tester,
+  ) async {
+    final accountService = await openAccountProxySettings(
+      tester,
+      status: DecentAccountStatus.indeterminate,
+    );
+
+    expect(find.text('Account status unavailable'), findsOneWidget);
+    expect(find.text('Not Logged In'), findsNothing);
+    expect(find.text('Account settings'), findsNothing);
+    expect(accountService.verificationCallCount, 1);
+  });
+
+  testWidgets('shows account status when proxy plugin has no settings', (
+    tester,
+  ) async {
+    await openAccountProxySettings(
+      tester,
+      status: DecentAccountStatus.authenticated,
+      hasSettings: false,
+    );
+
+    expect(find.text('Decent account'), findsOneWidget);
+    expect(find.text('Logged In'), findsOneWidget);
+    expect(find.text('This plugin has no configurable settings'), findsNothing);
   });
 
   PluginManifest enumManifest({bool includeDefault = true}) => PluginManifest(

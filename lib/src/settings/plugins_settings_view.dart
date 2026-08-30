@@ -5,10 +5,12 @@ import 'package:logging/logging.dart';
 import 'package:saf_stream/saf_stream.dart';
 import 'package:saf_util/saf_util.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:reaprime/src/account/account_page.dart';
 import 'package:reaprime/src/plugins/plugin_loader_service.dart';
 import 'package:reaprime/src/plugins/plugin_manifest.dart';
 import 'package:reaprime/src/plugins/plugin_source.dart';
 import 'package:reaprime/src/plugins/plugin_source_service.dart';
+import 'package:reaprime/src/services/account/decent_account_service.dart';
 import 'package:reaprime/src/services/security_scoped_file.dart';
 
 const _maxPluginSafDepth = 32;
@@ -98,6 +100,7 @@ class PluginsSettingsView extends StatefulWidget {
     super.key,
     required this.pluginLoaderService,
     this.pluginSourceService,
+    this.decentAccountService,
     this.allowInstall = true,
   });
 
@@ -105,6 +108,7 @@ class PluginsSettingsView extends StatefulWidget {
 
   final PluginLoaderService pluginLoaderService;
   final PluginSourceService? pluginSourceService;
+  final DecentAccountService? decentAccountService;
   final bool allowInstall;
 
   @override
@@ -878,7 +882,11 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
     final settings = await widget.pluginLoaderService.pluginSettings(pluginId);
     final settingsSchema = manifest.settings;
 
-    if (settingsSchema.isEmpty) {
+    final usesDecentAccount =
+        manifest.permissions.contains(PluginPermissions.proxyDecentApi) ||
+        manifest.permissions.contains(PluginPermissions.proxyDecentApiWrite);
+
+    if (settingsSchema.isEmpty && !usesDecentAccount) {
       if (context.mounted) {
         _showSnackBar(context, 'This plugin has no configurable settings');
       }
@@ -907,6 +915,10 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
       return;
     }
 
+    final accountStatus = usesDecentAccount
+        ? widget.decentAccountService?.verifyStoredCredentialsStatus()
+        : null;
+
     final secureDrafts = <String, _SecureDraft>{
       for (final entry in settingsSchema.entries)
         if (entry.value is Map && entry.value['secure'] == true)
@@ -923,7 +935,15 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
       builder: (context) => StatefulBuilder(
         builder: (context, setState) {
           return AlertDialog(
-            title: Text('${manifest.name} Settings'),
+            constraints: const BoxConstraints(maxWidth: 800),
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${manifest.name} Settings'),
+                if (accountStatus != null)
+                  _buildDecentAccountStatus(accountStatus),
+              ],
+            ),
             content: SizedBox(
               width: double.maxFinite,
               child: ListView(
@@ -1103,52 +1123,129 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
             actions: [
               ShadButton.secondary(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
+                child: Text(settingsSchema.isEmpty ? 'Close' : 'Cancel'),
               ),
-              ShadButton(
-                onPressed: () async {
-                  try {
-                    final outgoing = Map<String, dynamic>.from(newSettings);
-                    for (final entry in secureDrafts.entries) {
-                      final draft = entry.value;
-                      if (draft.clearRequested) {
-                        outgoing[entry.key] = null;
-                      } else if (draft.text.isEmpty) {
-                        outgoing[entry.key] = {'isSet': draft.originalIsSet};
-                      } else {
-                        outgoing[entry.key] =
-                            parseValue(draft.text, draft.type ?? 'string') ??
-                            {'isSet': draft.originalIsSet};
+              if (settingsSchema.isNotEmpty)
+                ShadButton(
+                  onPressed: () async {
+                    try {
+                      final outgoing = Map<String, dynamic>.from(newSettings);
+                      for (final entry in secureDrafts.entries) {
+                        final draft = entry.value;
+                        if (draft.clearRequested) {
+                          outgoing[entry.key] = null;
+                        } else if (draft.text.isEmpty) {
+                          outgoing[entry.key] = {'isSet': draft.originalIsSet};
+                        } else {
+                          outgoing[entry.key] =
+                              parseValue(draft.text, draft.type ?? 'string') ??
+                              {'isSet': draft.originalIsSet};
+                        }
+                      }
+                      await widget.pluginLoaderService.savePluginSettings(
+                        pluginId,
+                        outgoing,
+                      );
+                      if (context.mounted == false) {
+                        return;
+                      }
+                      _showSnackBar(context, 'Settings saved');
+                      Navigator.pop(context);
+                    } catch (e, st) {
+                      Logger(
+                        'PluginsSettingsView',
+                      ).warning('Failed to save settings', e, st);
+                      if (context.mounted) {
+                        _showSnackBar(
+                          context,
+                          'Failed to save settings: $e',
+                          isError: true,
+                        );
                       }
                     }
-                    await widget.pluginLoaderService.savePluginSettings(
-                      pluginId,
-                      outgoing,
-                    );
-                    if (context.mounted == false) {
-                      return;
-                    }
-                    _showSnackBar(context, 'Settings saved');
-                    Navigator.pop(context);
-                  } catch (e, st) {
-                    Logger(
-                      'PluginsSettingsView',
-                    ).warning('Failed to save settings', e, st);
-                    if (context.mounted) {
-                      _showSnackBar(
-                        context,
-                        'Failed to save settings: $e',
-                        isError: true,
-                      );
-                    }
-                  }
-                },
-                child: const Text('Save'),
-              ),
+                  },
+                  child: const Text('Save'),
+                ),
             ],
           );
         },
       ),
+    );
+  }
+
+  Widget _buildDecentAccountStatus(Future<DecentAccountStatus> status) {
+    return FutureBuilder<DecentAccountStatus>(
+      future: status,
+      builder: (context, snapshot) {
+        final checking = snapshot.connectionState != ConnectionState.done;
+        final unavailable =
+            snapshot.hasError ||
+            snapshot.data == DecentAccountStatus.indeterminate;
+        final loggedIn = snapshot.data == DecentAccountStatus.authenticated;
+        final label = checking
+            ? 'Checking account status'
+            : unavailable
+            ? 'Account status unavailable'
+            : loggedIn
+            ? 'Logged In'
+            : 'Not Logged In';
+
+        return Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Decent account',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  if (checking)
+                    const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Icon(
+                      unavailable
+                          ? LucideIcons.circleX
+                          : loggedIn
+                          ? LucideIcons.circleCheck
+                          : LucideIcons.circleX,
+                      size: 18,
+                      color: loggedIn ? Colors.green : Colors.red,
+                    ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
+              ),
+              if (!checking && !unavailable && !loggedIn) ...[
+                const SizedBox(height: 8),
+                ShadButton.outline(
+                  onPressed: () => Navigator.of(
+                    context,
+                  ).popAndPushNamed(AccountPage.routeName),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(LucideIcons.settings, size: 16),
+                      SizedBox(width: 6),
+                      Text('Account settings'),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 
