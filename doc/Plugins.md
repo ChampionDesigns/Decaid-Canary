@@ -286,6 +286,72 @@ const upload = await fetch("https://api.example.com/upload", {
 - `btoa()` for base64 encoding (polyfilled)
 - Standard JavaScript language features
 
+## Serving HTTP Endpoints
+
+An `api` entry with `"type": "http"` exposes the plugin at
+`/api/v1/plugins/:id/:endpoint`. Decaid dispatches the request to the plugin's
+`__httpRequestHandler`, which returns a response or a promise for one.
+
+```json
+"api": [
+  { "id": "edit-shot", "type": "http", "data": {} }
+]
+```
+
+```javascript
+__httpRequestHandler: function (request) {
+  const shotId = request.query.shotId;
+  return {
+    status: 200,
+    headers: { "Content-Type": "text/html" },
+    body: renderPage(shotId)
+  };
+}
+```
+
+A `handleHttpRequest` method on the object `createPlugin` returns works the
+same way — the loader aliases it to `__httpRequestHandler` at load.
+
+The `request` object:
+
+| Field | Type | Contents |
+|-------|------|----------|
+| `requestId` | string | Correlation id for this dispatch |
+| `endpoint` | string | The endpoint `id` from the manifest |
+| `method` | string | `GET`, `POST`, and so on |
+| `headers` | object | Request headers |
+| `body` | any | Parsed JSON request body, `null` when the body is empty |
+| `query` | object | Query parameters, percent-decoded |
+
+`query` carries every parameter of the request URL and is always present — an
+empty object when the URL has none, so `request.query.name` is safe to read
+without guarding. A caller can therefore name the record a page should open on:
+
+```
+GET /api/v1/plugins/my.reaplugin/edit-shot?shotId=<id>&return=/skin/history
+```
+
+### Reading parameters in a served page
+
+Pages a plugin serves run in the browser on Decaid's API origin, so a page can
+read the same URL client-side instead:
+
+```javascript
+const shotId = new URLSearchParams(location.search).get("shotId");
+```
+
+Prefer this for a page that fetches its data over the REST API; it keeps the
+value out of the generated HTML.
+
+Skins are served from a different browser origin than plugin pages, so a skin
+cannot write a plugin page's `sessionStorage` or `localStorage`. A query
+parameter on a top-level navigation is how a skin hands a plugin page its
+subject; accept a `return` parameter for the way back.
+
+Treat every parameter as untrusted input: use it as a lookup key against the
+REST API, never interpolate it into generated HTML unescaped, and fall back to
+the page's normal empty state when the value names nothing.
+
 ## Plugin Lifecycle
 
 1. **Initialization**: Plugin directory is copied to app storage
