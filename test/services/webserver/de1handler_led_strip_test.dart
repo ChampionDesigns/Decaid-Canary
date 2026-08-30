@@ -175,6 +175,31 @@ void main() {
       );
     });
 
+    test('the audited F-044 write on frontStrip.awake echoes the palette '
+        'the machine recorded', () async {
+      await wireWith(MockBengle());
+
+      final res = await put('/api/v1/machine/ledStrip', {
+        'frontStrip': {'awake': 'FFFF22220000', 'sleeping': '400022000000'},
+        'backStrip': {'awake': 'FF00D3008E00', 'sleeping': '400022000000'},
+        'frontSwitch': {'awake': 'FFFF22220000', 'sleeping': '400022000000'},
+      });
+      expect(res.statusCode, 200);
+
+      final echoed = jsonDecode(await res.readAsString());
+      expect(
+        echoed,
+        {
+          'frontStrip': {'sleeping': '400022000000', 'awake': 'FF0022000000'},
+          'backStrip': {'sleeping': '400022000000', 'awake': 'FF00D3008E00'},
+          'frontSwitch': {'sleeping': '400022000000', 'awake': 'FF0022000000'},
+        },
+        reason:
+            'the echo must match the stored state the audited machine '
+            'served back for this exact write',
+      );
+    });
+
     test('canonical input is echoed byte-identically', () async {
       await wireWith(MockBengle());
 
