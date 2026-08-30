@@ -50,7 +50,7 @@ class De1StateManager with WidgetsBindingObserver {
   final LegacyDe1IdentityResolver _identityResolver =
       const LegacyDe1IdentityResolver();
   final Set<UnifiedDe1> _identityPromptedMachines = {};
-  final Set<UnifiedDe1> _identityResolving = {};
+  final Map<UnifiedDe1, int> _identityResolving = {};
   NavigatorState? _identityDialogNavigator;
   Route<dynamic>? _identityDialogRoute;
   bool _disposed = false;
@@ -225,8 +225,11 @@ class De1StateManager with WidgetsBindingObserver {
     }
   }
 
-  bool _stillCurrent(UnifiedDe1 machine) =>
-      !_disposed && identical(machine, _de1Controller.connectedDe1OrNull);
+  bool _stillCurrent(UnifiedDe1 machine, [int? generation]) =>
+      !_disposed &&
+      (generation == null ||
+          generation == _de1Controller.connectionGeneration) &&
+      identical(machine, _de1Controller.connectedDe1OrNull);
 
   Future<void> _retryPendingIdentityResolution() {
     if (_disposed) return Future.value();
@@ -250,15 +253,17 @@ class De1StateManager with WidgetsBindingObserver {
     UnifiedDe1 machine, {
     bool allowPrompts = true,
   }) async {
+    final generation = _de1Controller.connectionGeneration;
+    if (!_stillCurrent(machine, generation)) return;
     if (isBengleModelValue(machine.rawModelValue ?? 0)) return;
     if (allowPrompts) {
-      if (_identityResolving.contains(machine)) return;
-      _identityResolving.add(machine);
+      if (_identityResolving[machine] == generation) return;
+      _identityResolving[machine] = generation;
     }
     try {
       final account = _accountService!;
       await account.accountReady;
-      if (!_stillCurrent(machine)) return;
+      if (!_stillCurrent(machine, generation)) return;
       final rawInfo = machine.rawMachineInfo;
       final rawSerial = rawInfo.serialNumber;
       final rawModelValue = machine.rawModelValue ?? 0;
@@ -270,6 +275,7 @@ class De1StateManager with WidgetsBindingObserver {
           deviceId: machine.deviceId,
         );
       }
+      if (!_stillCurrent(machine, generation)) return;
 
       final resolution = _identityResolver.resolve(
         rawSerial: rawSerial,
@@ -285,18 +291,21 @@ class De1StateManager with WidgetsBindingObserver {
             machine,
             resolution.machine,
             persistMapping: false,
+            generation: generation,
           );
         case AmbiguousLegacyDe1Identity():
           if (!allowPrompts) break;
           final selected = await _promptMachineSelection(
             machine,
             resolution.candidates,
+            generation,
           );
-          if (selected != null && _stillCurrent(machine)) {
+          if (selected != null && _stillCurrent(machine, generation)) {
             await _applyResolvedIdentity(
               machine,
               selected,
               persistMapping: true,
+              generation: generation,
             );
           }
         case UnavailableLegacyDe1Identity():
@@ -304,13 +313,15 @@ class De1StateManager with WidgetsBindingObserver {
             _maybeCheckSerialOwnership(rawSerial);
           }
           if (allowPrompts && (rawSerial == '0' || rawModelValue == 0)) {
-            await _maybePromptLinkAccount(machine);
+            await _maybePromptLinkAccount(machine, generation);
           }
       }
     } catch (e, st) {
       _logger.warning('Legacy DE1 identity resolution failed', e, st);
     } finally {
-      if (allowPrompts) _identityResolving.remove(machine);
+      if (allowPrompts && _identityResolving[machine] == generation) {
+        _identityResolving.remove(machine);
+      }
     }
   }
 
@@ -318,8 +329,9 @@ class De1StateManager with WidgetsBindingObserver {
     UnifiedDe1 machine,
     RegisteredDecentMachine record, {
     required bool persistMapping,
+    required int generation,
   }) async {
-    if (!_stillCurrent(machine)) return;
+    if (!_stillCurrent(machine, generation)) return;
     final model = record.recognizedModel?.name ?? machine.rawMachineInfo.model;
     machine.applyEffectiveIdentity(serial: record.serial, model: model);
     _de1Controller.recordResolvedSerial(record.serial);
@@ -342,8 +354,9 @@ class De1StateManager with WidgetsBindingObserver {
   Future<RegisteredDecentMachine?> _promptMachineSelection(
     UnifiedDe1 machine,
     List<RegisteredDecentMachine> candidates,
+    int generation,
   ) async {
-    if (!_stillCurrent(machine)) return null;
+    if (!_stillCurrent(machine, generation)) return null;
     if (_identityPromptedMachines.contains(machine)) return null;
     if (!_appIsInForeground) return null;
     final context = _navigatorKey.currentContext;
@@ -377,12 +390,15 @@ class De1StateManager with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _maybePromptLinkAccount(UnifiedDe1 machine) async {
+  Future<void> _maybePromptLinkAccount(
+    UnifiedDe1 machine,
+    int generation,
+  ) async {
     final account = _accountService;
-    if (account == null || !_stillCurrent(machine)) return;
+    if (account == null || !_stillCurrent(machine, generation)) return;
     final linked = await account.hasLinkedAccount();
     final authInvalid = await account.isAuthKnownInvalid();
-    if (!_stillCurrent(machine)) return;
+    if (!_stillCurrent(machine, generation)) return;
     if (linked && !authInvalid) return;
     if (_identityPromptedMachines.contains(machine)) return;
     if (!_appIsInForeground) return;
@@ -412,13 +428,14 @@ class De1StateManager with WidgetsBindingObserver {
       },
     );
     if (accepted != true) return;
-    if (!_stillCurrent(machine)) return;
+    if (!_stillCurrent(machine, generation)) return;
     final navigator = _navigatorKey.currentState;
     if (navigator == null) return;
     await navigator.pushNamed(AccountPage.routeName);
-    if (!_stillCurrent(machine)) return;
+    if (!_stillCurrent(machine, generation)) return;
     final nowLinked = await account.hasLinkedAccount();
     final nowInvalid = await account.isAuthKnownInvalid();
+    if (!_stillCurrent(machine, generation)) return;
     if (!nowLinked || nowInvalid) return;
     _identityPromptedMachines.remove(machine);
     _identityResolving.remove(machine);

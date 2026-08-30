@@ -20,6 +20,7 @@ import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/device/impl/mock_de1/mock_de1.dart';
 import 'package:reaprime/src/services/account/decent_account_service.dart';
+import 'package:reaprime/src/services/account/registered_decent_machine.dart';
 import 'package:reaprime/src/services/storage/storage_service.dart';
 import 'package:reaprime/src/settings/gateway_mode.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
@@ -34,6 +35,7 @@ class _IdentityTestDe1Controller extends De1Controller {
     null,
   );
   De1Interface? current;
+  int _generation = 0;
 
   _IdentityTestDe1Controller({required super.controller});
 
@@ -50,12 +52,17 @@ class _IdentityTestDe1Controller extends De1Controller {
   @override
   De1Interface? get connectedDe1OrNull => current;
 
+  @override
+  int get connectionGeneration => _generation;
+
   void connect(De1Interface de1) {
+    _generation++;
     current = de1;
     de1Subject.add(de1);
   }
 
   void disconnect() {
+    _generation++;
     current = null;
     de1Subject.add(null);
   }
@@ -164,6 +171,55 @@ class _FakeBleTransportWithId extends FakeBleTransport {
 
   @override
   String get id => customId;
+}
+
+class _SequencedMappingAccountService extends DecentAccountService {
+  _SequencedMappingAccountService(CredentialStore store)
+    : super(
+        httpClient: http_testing.MockClient(
+          (_) async => http.Response('', 200),
+        ),
+        credentialStore: store,
+      );
+
+  final firstLookupStarted = Completer<void>();
+  final firstLookupRelease = Completer<void>();
+  int lookupCount = 0;
+
+  final List<RegisteredDecentMachine> machines = [
+    RegisteredDecentMachine.fromJson(const {
+      'serial': '1337',
+      'sku': 'DE-DE1220V-00001',
+      'model': 'DE1',
+    }),
+    RegisteredDecentMachine.fromJson(const {
+      'serial': '1338',
+      'sku': 'DE-DE1PRO220V7-00533',
+      'model': 'DE1Pro',
+    }),
+  ];
+
+  @override
+  Future<void> get accountReady => Future.value();
+
+  @override
+  Future<bool> isAuthKnownInvalid() async => false;
+
+  @override
+  List<RegisteredDecentMachine> get usableRegisteredMachines => machines;
+
+  @override
+  Future<RegisteredDecentMachine?> lookupMapping({
+    required String transportType,
+    required String deviceId,
+  }) async {
+    final index = lookupCount++;
+    if (index == 0) {
+      firstLookupStarted.complete();
+      await firstLookupRelease.future;
+    }
+    return machines[index];
+  }
 }
 
 void main() {
@@ -479,6 +535,27 @@ void main() {
 
     expect(find.text('Select your machine'), findsNothing);
     expect(find.text('Link your Decent account'), findsNothing);
+  });
+
+  testWidgets('same machine reconnect rejects the prior generation lookup', (
+    tester,
+  ) async {
+    final accountService = _SequencedMappingAccountService(store);
+    await createManager(tester, accountService: accountService);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await accountService.firstLookupStarted.future;
+
+    de1Controller.disconnect();
+    de1Controller.connect(de1);
+    await tester.pump();
+
+    accountService.firstLookupRelease.complete();
+    await pumpUntil(tester, () async {});
+
+    expect(accountService.lookupCount, 2);
+    expect(de1.machineInfo.serialNumber, '1338');
+    await disconnectAndSettle(tester);
   });
 
   testWidgets('a persisted mapping is reused on reconnect without a dialog', (
