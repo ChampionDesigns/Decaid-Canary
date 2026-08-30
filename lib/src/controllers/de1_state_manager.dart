@@ -52,7 +52,7 @@ class De1StateManager with WidgetsBindingObserver {
   final Set<UnifiedDe1> _identityPromptedMachines = {};
   final Set<UnifiedDe1> _identityResolving = {};
   NavigatorState? _identityDialogNavigator;
-  Object? _identityDialogToken;
+  Route<dynamic>? _identityDialogRoute;
   bool _disposed = false;
   StreamSubscription<MachineSnapshot>? _snapshotSubscription;
   ShotSequencer? _currentShotSequencer;
@@ -428,25 +428,30 @@ class De1StateManager with WidgetsBindingObserver {
     required WidgetBuilder builder,
   }) async {
     final navigator = Navigator.of(context, rootNavigator: true);
-    final token = Object();
+    final route = DialogRoute<T>(
+      context: context,
+      builder: builder,
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
+    );
     _identityDialogNavigator = navigator;
-    _identityDialogToken = token;
+    _identityDialogRoute = route;
     try {
-      return await showDialog<T>(context: context, builder: builder);
+      return await navigator.push(route);
     } finally {
-      if (identical(_identityDialogToken, token)) {
+      if (identical(_identityDialogRoute, route)) {
         _identityDialogNavigator = null;
-        _identityDialogToken = null;
+        _identityDialogRoute = null;
       }
     }
   }
 
   void _dismissIdentityDialog() {
     final navigator = _identityDialogNavigator;
+    final route = _identityDialogRoute;
     _identityDialogNavigator = null;
-    _identityDialogToken = null;
-    if (navigator != null && navigator.mounted && navigator.canPop()) {
-      navigator.pop();
+    _identityDialogRoute = null;
+    if (navigator != null && navigator.mounted && route?.isActive == true) {
+      navigator.removeRoute(route!);
     }
   }
 

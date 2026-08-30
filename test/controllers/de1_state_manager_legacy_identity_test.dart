@@ -423,6 +423,38 @@ void main() {
     expect(find.text('Select your machine'), findsNothing);
   });
 
+  testWidgets('disconnect removes only its identity dialog', (tester) async {
+    final accountService = await seededService(const [
+      {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await createManager(tester, accountService: accountService);
+
+    await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+    expect(find.text('Select your machine'), findsOneWidget);
+
+    unawaited(
+      navigatorKey.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('Other route')),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('Other route'), findsOneWidget);
+
+    de1Controller.disconnect();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(find.text('Other route'), findsOneWidget);
+    navigatorKey.currentState!.pop();
+    await tester.pump();
+    expect(find.text('Select your machine'), findsNothing);
+  });
+
   testWidgets('disconnect during account lookup does not open a stale dialog', (
     tester,
   ) async {
