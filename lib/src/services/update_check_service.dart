@@ -283,7 +283,9 @@ class UpdateCheckService {
     _log.info('DEBUG: forcing fake update notification ($version)');
     _availableUpdate = UpdateInfo(
       version: version,
-      downloadUrl: downloadUrl ?? 'https://github.com/ChampionDesigns/Decaid-Canary/releases/download/v0.7.7/decent-android-0.7.7.apk',
+      downloadUrl:
+          downloadUrl ??
+          'https://github.com/ChampionDesigns/Decaid-Canary/releases/download/v0.7.7/decent-android-0.7.7.apk',
       releaseNotes: 'Forced update for testing the update API.',
       isPrerelease: false,
       tagName: 'v$version',
