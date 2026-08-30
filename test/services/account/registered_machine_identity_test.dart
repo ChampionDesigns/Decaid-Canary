@@ -83,6 +83,7 @@ void main() {
       expect(parseSkuModel('DE-DE1XXXLZ230V-00001'), isNull);
       expect(parseSkuModel('DE-DE1XXLZ230V-00001'), isNull);
       expect(parseSkuModel('DE-DE1XLZ120V-00001'), isNull);
+      expect(parseSkuModel('DE-DE1+PRO220V-00001'), isNull);
       expect(parseSkuModel('DE-DE1Z220V-00001'), isNull);
     });
   });

@@ -63,7 +63,7 @@ DecentMachineModel? parseSkuModel(String sku) {
   if (modelPart.isEmpty) return null;
   for (final (token, model) in _skuModelTokens) {
     if (!modelPart.startsWith(token)) continue;
-    if (_matchesAtTokenBoundary(modelPart, token)) return model;
+    return _matchesAtTokenBoundary(modelPart, token) ? model : null;
   }
   return null;
 }
