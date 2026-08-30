@@ -50,6 +50,11 @@ void main() {
       expect(de1.rawMachineInfo.serialNumber, '0');
       expect(de1.rawMachineInfo.model, DecentMachineModel.DE1Pro.name);
 
+      await de1.onConnect();
+
+      expect(de1.machineInfo.serialNumber, '0');
+      expect(de1.machineInfo.model, DecentMachineModel.DE1Pro.name);
+
       await transport.dispose();
     },
   );

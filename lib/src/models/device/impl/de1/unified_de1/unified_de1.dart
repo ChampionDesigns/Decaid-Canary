@@ -272,6 +272,8 @@ class UnifiedDe1 implements De1Interface {
     await _transport.connect();
 
     _currentProfile = null;
+    _info = _rawInfo ?? _info;
+    _rawInfo = null;
 
     if (_info != null) {
       return;
