@@ -40,6 +40,7 @@ void main() {
     },
     'weather.reaplugin': {
       PluginPermissions.log,
+      PluginPermissions.api,
       PluginPermissions.emit,
       PluginPermissions.pluginStorage,
     },
