@@ -342,9 +342,9 @@ class DecentAccountService {
       if (generation != _authGeneration) return;
       _machines = machines;
       _cacheLoaded = true;
-      _machinesRefreshed = true;
       await _persistRegisteredMachines(machines, account: account);
       await _pruneMappings(machines, account);
+      _machinesRefreshed = true;
     });
   }
 

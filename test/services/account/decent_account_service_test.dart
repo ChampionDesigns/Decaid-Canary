@@ -10,6 +10,8 @@ class FakeCredentialStore implements CredentialStore {
   final Map<String, String> _store = {};
   String? failingReadKey;
   int? remainingReadFailures;
+  String? failingWriteKey;
+  int? remainingWriteFailures;
   String? failingDeleteKey;
 
   @override
@@ -26,6 +28,13 @@ class FakeCredentialStore implements CredentialStore {
 
   @override
   Future<void> write({required String key, required String value}) async {
+    if (key == failingWriteKey &&
+        (remainingWriteFailures == null || remainingWriteFailures! > 0)) {
+      if (remainingWriteFailures != null) {
+        remainingWriteFailures = remainingWriteFailures! - 1;
+      }
+      throw StateError('write failed: $key');
+    }
     _store[key] = value;
   }
 
@@ -1857,6 +1866,52 @@ void main() {
           expect(service.usableRegisteredMachines.map((m) => m.serial), [
             '1338',
           ]);
+        },
+      );
+
+      test(
+        'a transient machine-cache write failure is retried by accountReady',
+        () async {
+          var snCalls = 0;
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/sn') {
+              snCalls++;
+              return http.Response('1338 DE-DE1PRO220V7-00533\n', 200);
+            }
+            return http.Response('cryptpw_abc123\n', 200);
+          });
+          await seedAccount('user@example.com', 'cryptpw_abc123');
+          await seedMachinesCache([
+            {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+          ]);
+          store.failingWriteKey = 'registered_machines';
+          store.remainingWriteFailures = 1;
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: store,
+            baseUrl: _baseUrl,
+          );
+
+          await service.initialize();
+          await service.accountReady;
+
+          expect(snCalls, 1);
+          expect(
+            jsonDecode(
+              (await store.read(key: 'registered_machines'))!,
+            )['machines'][0]['serial'],
+            '1337',
+          );
+
+          await service.accountReady;
+
+          expect(snCalls, 2);
+          expect(
+            jsonDecode(
+              (await store.read(key: 'registered_machines'))!,
+            )['machines'][0]['serial'],
+            '1338',
+          );
         },
       );
 
