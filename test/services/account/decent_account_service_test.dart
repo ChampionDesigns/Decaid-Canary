@@ -1760,7 +1760,7 @@ void main() {
         },
       );
 
-      test('accountReady follows a replacement login refresh', () async {
+      test('accountReady abandons a superseded refresh', () async {
         final oldSnStarted = Completer<void>();
         final oldSnRelease = Completer<void>();
         final newSnStarted = Completer<void>();
@@ -1794,14 +1794,19 @@ void main() {
         final login = service.login('new@example.com', 'hunter2');
         await newSnStarted.future;
 
-        oldSnRelease.complete();
-        await pumpEventQueue();
-        expect(readyCompleted, isFalse);
-
         newSnRelease.complete();
-        expect(await login, isTrue);
-        await ready;
-        expect(service.usableRegisteredMachines.map((m) => m.serial), ['2222']);
+        try {
+          expect(await login, isTrue);
+          await pumpEventQueue();
+          expect(readyCompleted, isTrue);
+          await ready;
+          expect(service.usableRegisteredMachines.map((m) => m.serial), [
+            '2222',
+          ]);
+        } finally {
+          if (!oldSnRelease.isCompleted) oldSnRelease.complete();
+          await pumpEventQueue();
+        }
       });
 
       test('an in-flight refresh from the old account cannot overwrite a '

@@ -69,6 +69,7 @@ class DecentAccountService {
   bool _hasLinkedAccount = false;
   bool _machinesRefreshed = false;
   Future<void>? _refreshFuture;
+  Completer<void> _refreshChanged = Completer<void>();
 
   DecentAccountService({
     required http.Client httpClient,
@@ -93,15 +94,14 @@ class DecentAccountService {
 
   Future<void> get accountReady async {
     while (true) {
-      final inFlight = _refreshFuture;
-      if (inFlight != null) {
-        await inFlight;
-        final latest = _refreshFuture;
-        if (latest != null && !identical(inFlight, latest)) continue;
-        return;
+      var inFlight = _refreshFuture;
+      if (inFlight == null) {
+        if (_machinesRefreshed || !_cacheLoaded || !_hasLinkedAccount) return;
+        inFlight = _ensureMachinesFresh();
       }
-      if (_machinesRefreshed || !_cacheLoaded || !_hasLinkedAccount) return;
-      await _ensureMachinesFresh();
+      await Future.any([inFlight, _refreshChanged.future]);
+      final latest = _refreshFuture;
+      if (latest != null && !identical(inFlight, latest)) continue;
       return;
     }
   }
@@ -113,11 +113,18 @@ class DecentAccountService {
   }
 
   Future<void> _trackRefresh(Future<void> future) {
-    _refreshFuture = future;
+    _replaceRefresh(future);
     future.whenComplete(() {
       if (identical(_refreshFuture, future)) _refreshFuture = null;
     }).ignore();
     return future;
+  }
+
+  void _replaceRefresh(Future<void>? future) {
+    final changed = _refreshChanged;
+    _refreshFuture = future;
+    _refreshChanged = Completer<void>();
+    changed.complete();
   }
 
   Future<void> _backgroundRefresh() async {
@@ -256,7 +263,7 @@ class DecentAccountService {
     _authGeneration++;
     _authenticated = false;
     _hasLinkedAccount = false;
-    _refreshFuture = null;
+    _replaceRefresh(null);
     return _withAccountWriteLock(() async {
       _machines = const [];
       _mappings = const [];
