@@ -917,6 +917,59 @@ void main() {
       remembered.dispose();
     });
 
+    test(
+      'a second latch during the probe preserves the replay obligation',
+      () async {
+        probeScanner.probeResult = const AttachProbeUnsupported();
+        probeScanner.scanCompleter = Completer<void>();
+        probeScanner.probeGate = Completer<void>();
+
+        // An automatic no-preference scan is interrupted by the first
+        // attach; the queued probe runs after the scan bails.
+        final connecting = manager.connect();
+        await probeScanner.scanningStream.firstWhere((scanning) => scanning);
+        probeScanner.attach();
+        await Future<void>.delayed(Duration.zero);
+        probeScanner.completeScan();
+        await probeScanner.probeStarted.future;
+
+        // A second attach latches while the first probe is in flight; the
+        // recorded replay obligation must survive this latch.
+        probeScanner.attach();
+        await Future<void>.delayed(Duration.zero);
+
+        probeScanner.probeGate!.complete();
+        await connecting;
+
+        expect(probeScanner.probeCallCount, 2);
+        expect(probeScanner.scanCallCount, 2);
+        expect(settings.preferredMachineId, isNull);
+        expect(manager.currentStatus.phase, ConnectionPhase.idle);
+      },
+    );
+
+    test('an adoption failure still completes the latch lifecycle', () async {
+      await settings.setPreferredMachineId('ble-machine-id');
+      final usbMachine = _FakeDe1(deviceId: 'usb-machine-id');
+      probeScanner.probeResult = AttachProbeConnected(usbMachine);
+      settingsService.failSetPreferredMachineId = true;
+
+      await attachAndSettle();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(probeScanner.probeCallCount, 1);
+      // The failed adoption falls back to the preferred-machine attempt;
+      // the latch must not suppress that scan or later recovery.
+      expect(probeScanner.scanCallCount, 1);
+      expect(settingsService.preferredMachineIdWrites.last, 'usb-machine-id');
+
+      // The adopted machine goes away; recovery scheduling must not be
+      // gated by the latch either.
+      await usbMachine.disconnect();
+      await Future<void>.delayed(Duration.zero);
+      expect(manager.machineReconnectFailures, 1);
+    });
+
     test('unsupported probe clears the latch and resumes the interrupted '
         'automatic policy', () async {
       await settings.setPreferredMachineId('ble-machine-id');

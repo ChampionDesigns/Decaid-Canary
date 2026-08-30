@@ -308,7 +308,12 @@ class ConnectionManager {
 
   void _onUsbAttachLatched() {
     _usbAttachLatched = true;
+    // Preserve an already-recorded replay obligation: a second attach may
+    // latch while the first attach's probe is in flight, when the ambient
+    // automatic state is false, and must not clear the interrupted
+    // automatic attempt's right to resume.
     _resumeAutomaticAfterUsbAttach =
+        _resumeAutomaticAfterUsbAttach ||
         _machineRecoveryActive ||
         _machineReconnect != null ||
         _activeAutomaticMachineAttempt;
@@ -438,7 +443,15 @@ class ConnectionManager {
             'Attach probe: machine ${machine.name} (${machine.deviceId}) '
             'connected, adopting',
           );
-          await _adoptAttachedMachine(machine);
+          try {
+            await _adoptAttachedMachine(machine);
+          } catch (e, st) {
+            // A failed adoption (e.g. preference persistence) must not
+            // leave the latch set forever; fall back like an unavailable
+            // probe so the lifecycle completes.
+            _log.warning('Adopting the attached machine failed', e, st);
+            return false;
+          }
           return true;
         case AttachProbeUnsupported():
           _log.fine(
