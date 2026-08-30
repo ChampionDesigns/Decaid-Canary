@@ -473,6 +473,45 @@ void main() {
     await bridge.dispose();
   });
 
+  test(
+    'a trailing null inside the debounce window cancels the pending write',
+    () async {
+      final bengle = _RecordingBengle();
+      await connectBengle(bengle);
+
+      final bridge = BengleSawBridge(
+        workflowController: workflow,
+        de1Controller: de1Controller,
+        debounce: _debounce,
+      );
+      await Future<void>.delayed(Duration.zero);
+      bengle.sawWrites.clear();
+
+      final base = workflow.currentWorkflow.context ?? const WorkflowContext();
+      workflow.updateWorkflow(context: base.copyWith(targetYield: 30.0));
+      await pumpDebounce();
+      expect(bengle.sawWrites, [30.0]);
+
+      workflow.updateWorkflow(context: base.copyWith(targetYield: 31.0));
+      workflow.updateWorkflow(
+        context: const WorkflowContext(targetDoseWeight: 18.0),
+      );
+      await pumpDebounce();
+      expect(
+        bengle.sawWrites,
+        [30.0],
+        reason:
+            'the document ended the debounce window with no target, so '
+            'neither the superseded 31 nor a spurious 0 may be written',
+      );
+
+      workflow.updateWorkflow(context: base.copyWith(targetYield: 32.0));
+      await pumpDebounce();
+      expect(bengle.sawWrites, [30.0, 32.0]);
+      await bridge.dispose();
+    },
+  );
+
   test('queue saturation retries the current target', () async {
     await de1Controller.dispose();
     de1Controller = De1Controller(
