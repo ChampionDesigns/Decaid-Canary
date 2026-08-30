@@ -307,6 +307,8 @@ class De1StateManager with WidgetsBindingObserver {
             await _maybePromptLinkAccount(machine);
           }
       }
+    } catch (e, st) {
+      _logger.warning('Legacy DE1 identity resolution failed', e, st);
     } finally {
       if (allowPrompts) _identityResolving.remove(machine);
     }

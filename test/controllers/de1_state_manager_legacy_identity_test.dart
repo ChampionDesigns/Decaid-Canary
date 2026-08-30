@@ -65,9 +65,11 @@ class _FakeCredentialStore implements CredentialStore {
   final Map<String, String> _store = {};
   Completer<void>? emailReadStarted;
   Completer<void>? emailReadRelease;
+  String? failingReadKey;
 
   @override
   Future<String?> read({required String key}) async {
+    if (key == failingReadKey) throw StateError('read failed: $key');
     final release = emailReadRelease;
     if (key == 'email' && release != null) {
       emailReadStarted?.complete();
@@ -754,6 +756,27 @@ void main() {
     expect(find.text('Select your machine'), findsNothing);
     expect(find.text('Link your Decent account'), findsNothing);
     await tester.pumpWidget(Container());
+  });
+
+  testWidgets('credential read errors do not escape identity resolution', (
+    tester,
+  ) async {
+    final accountService = await seededService(const [
+      {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await accountService.accountReady;
+    await createManager(tester, accountService: accountService);
+    store.failingReadKey = 'email';
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    expect(tester.takeException(), isNull);
+    expect(de1.machineInfo.serialNumber, '0');
+    expect(find.text('Select your machine'), findsNothing);
+    store.failingReadKey = null;
+    await disconnectAndSettle(tester);
   });
 
   testWidgets(
