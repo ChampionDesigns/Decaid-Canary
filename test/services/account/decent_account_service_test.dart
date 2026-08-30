@@ -1687,6 +1687,57 @@ void main() {
         },
       );
 
+      test('mapping queued during account replacement stays cleared', () async {
+        final gatedStore = _GateFirstMachinesDeleteStore(store);
+        var snCalls = 0;
+        httpClient = http_testing.MockClient((request) async {
+          if (request.url.path == '/support/api/login_test') {
+            return http.Response('cryptpw_abc123\n', 200);
+          }
+          if (request.url.path == '/support/api/sn') {
+            snCalls++;
+            return http.Response(
+              snCalls == 1
+                  ? '1111 DE-DE1220V-00001\n'
+                  : '2222 DE-DE1PRO220V7-00533\n',
+              200,
+            );
+          }
+          return http.Response('0\n', 200);
+        });
+        await gatedStore.write(key: 'email', value: 'old@example.com');
+        await gatedStore.write(key: 'password', value: 'cryptpw_abc123');
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: gatedStore,
+          baseUrl: _baseUrl,
+        );
+        await service.initialize();
+        await pumpEventQueue();
+
+        final loginFuture = service.login('new@example.com', 'hunter2');
+        await pumpEventQueue();
+        final mappingFuture = service.saveMapping(
+          transportType: 'ble',
+          deviceId: 'AA:BB:CC',
+          serial: '2222',
+        );
+        await pumpEventQueue();
+
+        gatedStore.gate.complete();
+        expect(await loginFuture, isTrue);
+        await mappingFuture;
+
+        expect(
+          await service.lookupMapping(
+            transportType: 'ble',
+            deviceId: 'AA:BB:CC',
+          ),
+          isNull,
+        );
+        expect(await store.read(key: 'identity_mappings'), isNull);
+      });
+
       test(
         'a refresh queued behind logout cannot repersist scoped data',
         () async {

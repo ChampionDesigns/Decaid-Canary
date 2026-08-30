@@ -183,16 +183,6 @@ class DecentAccountService {
     );
   }
 
-  Future<void> _clearAccountScopedState() {
-    return _withAccountWriteLock(() async {
-      _machines = const [];
-      _mappings = const [];
-      _machinesRefreshed = false;
-      await _store.delete(key: _registeredMachinesKey);
-      await _store.delete(key: _identityMappingsKey);
-    });
-  }
-
   static String _normalizeEmail(String email) => email.trim().toLowerCase();
 
   Future<bool> login(String email, String password) async {
@@ -209,11 +199,17 @@ class DecentAccountService {
       _authGeneration++;
       _authenticated = false;
       _hasLinkedAccount = false;
-      if (emailChanged) {
-        await _clearAccountScopedState();
-      }
-      await _store.write(key: 'email', value: email);
-      await _store.write(key: 'password', value: response.body.trim());
+      await _withAccountWriteLock(() async {
+        if (emailChanged) {
+          _machines = const [];
+          _mappings = const [];
+          _machinesRefreshed = false;
+          await _store.delete(key: _registeredMachinesKey);
+          await _store.delete(key: _identityMappingsKey);
+        }
+        await _store.write(key: 'email', value: email);
+        await _store.write(key: 'password', value: response.body.trim());
+      });
       _authenticated = true;
       _hasLinkedAccount = true;
       _log.info('login -> accepted');
@@ -308,12 +304,18 @@ class DecentAccountService {
     required String serial,
   }) async {
     final generation = _authGeneration;
+    final accountLinked = _hasLinkedAccount;
     final email = await _store.read(key: 'email');
     if (email == null) {
       throw StateError('not logged in');
     }
     final account = _normalizeEmail(email);
     await _withAccountWriteLock(() async {
+      if (!accountLinked || generation != _authGeneration) return;
+      final currentEmail = await _store.read(key: 'email');
+      if (currentEmail == null || _normalizeEmail(currentEmail) != account) {
+        return;
+      }
       if (generation != _authGeneration) return;
       _mappings = [
         ..._mappings.where(
