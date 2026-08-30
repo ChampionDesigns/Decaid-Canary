@@ -357,17 +357,25 @@ function createPlugin(host) {
       state.timer = null;
     }
     if (state.beat) {
-      clearInterval(state.beat);
+      clearTimeout(state.beat);
       state.beat = null;
     }
   }
 
-  /** Re-publish what we already have, so a socket that opens late is not left blank. */
+  /**
+   * Re-publish what we already have, so a socket that opens late is not left blank.
+   *
+   * A SELF-RESCHEDULING setTimeout, NOT setInterval: the runtime provides only
+   * `setTimeout` and `clearTimeout` (doc/Plugins.md, "Available in JavaScript Runtime"),
+   * so `setInterval` is undefined here and calling it throws.
+   */
   function beat() {
     if (state.beat) return;
-    state.beat = setInterval(function () {
+    state.beat = setTimeout(function () {
+      state.beat = null;
       if (state.last) publish();
       else if (!state.location) refuse("no_location");
+      beat();
     }, HEARTBEAT_MS);
   }
 

@@ -7,6 +7,7 @@
   "apiVersion": 1,
   "permissions": [
     "log",
+    "api",
     "emit",
     "pluginStorage"
   ],
@@ -25,7 +26,7 @@
     "Units": {
       "type": "string",
       "label": "Units",
-      "description": "\"metric\" for °C and mm, \"imperial\" for °F and inches. Leave blank to follow the skin.",
+      "description": "\"metric\" for \u00b0C and mm, \"imperial\" for \u00b0F and inches. Leave blank to follow the skin.",
       "default": "metric"
     }
   },
@@ -36,11 +37,16 @@
       "data": {
         "ok": {
           "type": "boolean",
-          "description": "false when there is no usable reading — no location set, or the fetch failed and the cache is stale."
+          "description": "false when there is no usable reading \u2014 no location set, or the fetch failed and the cache is stale."
         },
         "reason": {
           "type": "enum",
-          "values": ["no_location", "unknown_place", "offline", "stale"],
+          "values": [
+            "no_location",
+            "unknown_place",
+            "offline",
+            "stale"
+          ],
           "description": "why ok is false; absent when ok is true."
         },
         "place": {
@@ -57,7 +63,7 @@
         },
         "isDay": {
           "type": "boolean",
-          "description": "Whether it is daylight at the location — the skin picks a sun or moon mark."
+          "description": "Whether it is daylight at the location \u2014 the skin picks a sun or moon mark."
         },
         "code": {
           "type": "number",
@@ -93,12 +99,15 @@
         },
         "units": {
           "type": "enum",
-          "values": ["metric", "imperial"],
+          "values": [
+            "metric",
+            "imperial"
+          ],
           "description": "Which unit set every value above is in."
         },
         "periods": {
           "type": "array",
-          "description": "The next THREE parts of the day, FORWARD ONLY — the one running now first. Each carries {id, label, fromHour, toHour, tomorrow, probability, amount}. The corner draws the first two; the modal draws all three."
+          "description": "The next THREE parts of the day, FORWARD ONLY \u2014 the one running now first. Each carries {id, label, fromHour, toHour, tomorrow, probability, amount}. The corner draws the first two; the modal draws all three."
         }
       },
       "message": {
