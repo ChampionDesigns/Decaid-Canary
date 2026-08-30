@@ -1112,6 +1112,40 @@ void main() {
     await disconnectAndSettle(tester);
   });
 
+  testWidgets('an account rejection arriving during resolution still prompts '
+      'to link', (tester) async {
+    final validationStarted = Completer<void>();
+    final validationRelease = Completer<void>();
+    final client = http_testing.MockClient((request) async {
+      if (request.url.path == '/support/api/login_test') {
+        validationStarted.complete();
+        await validationRelease.future;
+      }
+      return http.Response('0\n', 200);
+    });
+    final service = DecentAccountService(
+      httpClient: client,
+      credentialStore: store,
+    );
+    await store.write(key: 'email', value: 'user@example.com');
+    await store.write(key: 'password', value: 'stale_cryptpw');
+    await service.initialize();
+    await validationStarted.future;
+    await createManager(tester, accountService: service);
+
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    validationRelease.complete();
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Link your Decent account'), findsOneWidget);
+
+    await tester.tap(find.text('Not now'));
+    await pumpUntil(tester, () async {});
+
+    expect(de1.machineInfo.serialNumber, '0');
+    await disconnectAndSettle(tester);
+  });
+
   testWidgets('identity prompts skipped while backgrounded are retried on '
       'resume', (tester) async {
     final accountService = await seededService(const [

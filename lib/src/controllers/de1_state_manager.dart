@@ -232,7 +232,7 @@ class De1StateManager with WidgetsBindingObserver {
       return;
     }
     machine.clearEffectiveIdentity();
-    if (_accountService?.hasUsableAccountCache == true) {
+    if (_accountService?.hasLinkedCredentials == true) {
       unawaited(_resolveLegacyIdentity(machine));
     }
   }

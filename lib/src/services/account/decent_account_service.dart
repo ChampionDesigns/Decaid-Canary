@@ -322,6 +322,8 @@ class DecentAccountService {
       await _store.read(key: 'email') != null &&
       await _store.read(key: 'password') != null;
 
+  bool get hasLinkedCredentials => _linkedAccountKnown && _hasLinkedAccount;
+
   bool get hasUsableAccountCache =>
       _cacheLoaded && _hasLinkedAccount && _authenticated != false;
 
