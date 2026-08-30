@@ -187,13 +187,22 @@ channels:
     description: |
       Bidirectional app-update channel. Emits an `AppUpdateState` snapshot on
       connect and on every state change. Accepts commands:
-      - `{"command": "check"}` — force a re-poll of GitHub releases.
+      - `{"command": "check"}` — force a re-poll of GitHub releases. The answer
+        arrives on the stream as `checking` followed by a terminal frame:
+        `available` or `idle` when the poll succeeded, or `error` carrying a
+        message when it failed. `idle` therefore means the poll succeeded and
+        no newer release exists — a failed check never terminates in `idle`.
+        On platforms with no in-app updater (macOS, where Sparkle owns app
+        updates) this is not supported and replies with a transient
+        `{"error", "url"}`. Periodic background checks are quiet: a failure is
+        logged and the previous state is re-emitted rather than `error`.
       - `{"command": "install"}` — on Android: auto-check if needed, then
         download + launch the system installer. On other platforms this is not
         supported and replies with a transient `{"error", "url"}`.
       Command-level problems (unknown command, unsupported platform) come back
-      as a direct `{"error": ...}` reply; operational outcomes (download/install
-      progress and failures) flow through the `AppUpdateState` stream.
+      as a direct `{"error": ...}` reply; operational outcomes (check outcome,
+      download/install progress and failures) flow through the `AppUpdateState`
+      stream.
     messages:
       updateState:
         $ref: '#/components/messages/UpdateState'
