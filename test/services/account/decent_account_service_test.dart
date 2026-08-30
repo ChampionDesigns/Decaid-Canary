@@ -148,6 +148,18 @@ class _GateFirstMachinesDeleteStore implements CredentialStore {
   }
 }
 
+class _AbortAwareClient extends http.BaseClient {
+  final aborted = Completer<void>();
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final abortable = request as http.AbortableRequest;
+    await abortable.abortTrigger;
+    aborted.complete();
+    throw http.RequestAbortedException(request.url);
+  }
+}
+
 const _baseUrl = 'https://decentespresso.com';
 
 http_testing.MockClient _mockClient({
@@ -173,6 +185,74 @@ void main() {
         credentialStore: store,
         baseUrl: _baseUrl,
       );
+    });
+
+    group('isBackendReachable', () {
+      test('uses an unauthenticated HEAD request', () async {
+        late http.Request request;
+        httpClient = http_testing.MockClient((captured) async {
+          request = captured;
+          return http.Response('', 503);
+        });
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(await service.isBackendReachable(), isTrue);
+        expect(request.method, 'HEAD');
+        expect(request.url, Uri.parse(_baseUrl));
+        expect(request.headers, isNot(contains('authorization')));
+      });
+
+      test('returns false on a network error', () async {
+        httpClient = http_testing.MockClient(
+          (_) async => throw http.ClientException('offline'),
+        );
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(await service.isBackendReachable(), isFalse);
+      });
+
+      test('returns false when the check times out', () async {
+        httpClient = http_testing.MockClient(
+          (_) => Completer<http.Response>().future,
+        );
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(
+          await service.isBackendReachable(
+            timeout: const Duration(milliseconds: 10),
+          ),
+          isFalse,
+        );
+      });
+
+      test('aborts the request when the check times out', () async {
+        final client = _AbortAwareClient();
+        service = DecentAccountService(
+          httpClient: client,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(
+          await service.isBackendReachable(
+            timeout: const Duration(milliseconds: 10),
+          ),
+          isFalse,
+        );
+        await client.aborted.future.timeout(const Duration(seconds: 1));
+      });
     });
 
     group('login', () {

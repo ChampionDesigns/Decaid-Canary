@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -452,6 +453,18 @@ const bodyExample = "</body>";
       expect(service.deviceIp(), 'localhost');
     });
 
+    test('falls back to localhost when getWifiIP does not return', () async {
+      WebUIService.resolveWifiIP = () => Completer<String?>().future;
+      service = WebUIService(
+        wifiIpResolutionTimeout: const Duration(milliseconds: 10),
+      );
+
+      await service.serveFolderAtPath(tempDir.path);
+
+      expect(service.isServing, isTrue);
+      expect(service.deviceIp(), 'localhost');
+    });
+
     test('falls back to localhost when getWifiIP returns null', () async {
       WebUIService.resolveWifiIP = () async => null;
 
@@ -459,6 +472,20 @@ const bodyExample = "</body>";
 
       expect(service.isServing, isTrue);
       expect(service.deviceIp(), 'localhost');
+    });
+
+    test('re-resolves the WiFi address after an offline start', () async {
+      const lanIp = '10.0.0.7';
+      var online = false;
+      WebUIService.resolveWifiIP = () async => online ? lanIp : null;
+
+      await service.serveFolderAtPath(tempDir.path);
+      expect(service.deviceIp(), 'localhost');
+
+      online = true;
+      await service.serveFolderAtPath(tempDir.path);
+
+      expect(service.deviceIp(), lanIp);
     });
 
     test(
