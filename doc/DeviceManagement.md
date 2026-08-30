@@ -457,11 +457,18 @@ so a full scan that ran to completion never triggers one.
 - `connectMachine(De1Interface)` / `connectScale(Scale)` — Deliberate direct connection
 - `selectMachine(De1Interface)` / `selectScale(Scale)` — Continue the active selection session; stale choices are rejected
 - `disconnectMachine()` / `disconnectScale()` — Explicit disconnects
+- `shutdown()` — Terminal, idempotent connection teardown
 
 The deliberate connect and selection methods return `ConnectionResult` with a
 connected, already-connected, conflict, failed, or timed-out outcome. REST and
 WebSocket connect handlers preserve that result instead of inferring success
 from normal completion.
+
+`shutdown()` permanently rejects new connection requests, stops active discovery,
+adapter and USB-attach recovery, scale watch, and reconnect timers, releases
+queued requests, and waits for in-flight connection work. It then disconnects
+the machine before the scale while isolating each cleanup failure. Flutter
+`detached` and requested desktop exit use this path; `paused` and `hidden` do not.
 
 ### Disconnect Handling
 
