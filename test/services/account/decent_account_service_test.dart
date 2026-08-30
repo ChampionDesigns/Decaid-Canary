@@ -124,6 +124,7 @@ class _GateEmailDeleteStore implements CredentialStore {
 
 class _GateFirstMachinesDeleteStore implements CredentialStore {
   final CredentialStore _inner;
+  final Completer<void> started = Completer<void>();
   final Completer<void> gate = Completer<void>();
   bool _gated = false;
 
@@ -140,6 +141,7 @@ class _GateFirstMachinesDeleteStore implements CredentialStore {
   Future<void> delete({required String key}) async {
     if (!_gated && key == 'registered_machines') {
       _gated = true;
+      started.complete();
       await gate.future;
     }
     await _inner.delete(key: key);
@@ -2101,6 +2103,52 @@ void main() {
             )['machines'][0]['serial'],
             '1338',
           );
+        },
+      );
+
+      test(
+        'a superseded pre-fetch refresh cannot invalidate a replacement login',
+        () async {
+          final deleteStore = _GateFirstMachinesDeleteStore(store);
+          final emailStore = _GateFirstEmailReadStore(deleteStore);
+          final oldAuth = base64Encode(
+            utf8.encode('old@example.com:old_cryptpw'),
+          );
+          httpClient = http_testing.MockClient((request) async {
+            if (request.url.path == '/support/api/login_test') {
+              return http.Response('new_cryptpw\n', 200);
+            }
+            if (request.headers['authorization'] == 'Basic $oldAuth') {
+              return http.Response('unauthorized', 401);
+            }
+            return http.Response('2222 DE-DE1PRO220V7-00533\n', 200);
+          });
+          await seedAccount('old@example.com', 'old_cryptpw');
+          service = DecentAccountService(
+            httpClient: httpClient,
+            credentialStore: emailStore,
+            baseUrl: _baseUrl,
+          );
+
+          final staleRefresh = service.refreshRegisteredMachines();
+          await emailStore.started.future;
+          final login = service.login('new@example.com', 'hunter2');
+          await deleteStore.started.future;
+
+          emailStore.release.complete();
+          Object? staleError;
+          try {
+            await staleRefresh;
+          } catch (error) {
+            staleError = error;
+          } finally {
+            deleteStore.gate.complete();
+          }
+
+          expect(staleError, isNull);
+          expect(await login, isTrue);
+          expect(await service.isLoggedIn(), isTrue);
+          expect(await store.read(key: 'email'), 'new@example.com');
         },
       );
 

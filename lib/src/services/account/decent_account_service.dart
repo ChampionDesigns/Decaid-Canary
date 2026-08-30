@@ -346,6 +346,7 @@ class DecentAccountService {
   Future<void> refreshRegisteredMachines() async {
     final generation = _authGeneration;
     final email = await _store.read(key: 'email');
+    if (generation != _authGeneration) return;
     if (email == null) {
       throw StateError('not logged in');
     }
