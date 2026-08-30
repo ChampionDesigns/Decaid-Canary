@@ -576,7 +576,7 @@ All WebSocket endpoints are on port 8080 at `/ws/v1/...`. See [`assets/api/webso
 | `/ws/v1/logs` | App log stream | Timestamped log entries |
 | `/ws/v1/webview/logs` | WebView console log stream | WebView console messages |
 | `/ws/v1/display` | Display state changes | Brightness, wakelock |
-| `/ws/v1/update` | App-update state stream. Also accepts `{"command":"check"}` and `{"command":"install"}` (Android installs; other platforms reply `{"error","url"}`). | `phase`, `progress`, `latestVersion`, `installable` |
+| `/ws/v1/update` | App-update state stream. Also accepts `{"command":"check"}` and `{"command":"install"}` (Android installs; other platforms reply `{"error","url"}`). A manual `check` terminates in `available`, `idle`, or `error` — `idle` means the poll succeeded and nothing newer exists, a failed poll is `error` with a message. `check` on a platform with no in-app updater replies `{"error","url"}` directly. Periodic background checks stay quiet on failure. | `phase`, `progress`, `latestVersion`, `installable`, `error` |
 
 ### Machine sockets re-bind across a reconnect
 
