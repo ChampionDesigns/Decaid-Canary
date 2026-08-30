@@ -53,6 +53,57 @@ void main() {
       );
     });
 
+    group('isBackendReachable', () {
+      test('uses an unauthenticated HEAD request', () async {
+        late http.Request request;
+        httpClient = http_testing.MockClient((captured) async {
+          request = captured;
+          return http.Response('', 503);
+        });
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(await service.isBackendReachable(), isTrue);
+        expect(request.method, 'HEAD');
+        expect(request.url, Uri.parse(_baseUrl));
+        expect(request.headers, isNot(contains('authorization')));
+      });
+
+      test('returns false on a network error', () async {
+        httpClient = http_testing.MockClient(
+          (_) async => throw http.ClientException('offline'),
+        );
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(await service.isBackendReachable(), isFalse);
+      });
+
+      test('returns false when the check times out', () async {
+        httpClient = http_testing.MockClient(
+          (_) => Completer<http.Response>().future,
+        );
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(
+          await service.isBackendReachable(
+            timeout: const Duration(milliseconds: 10),
+          ),
+          isFalse,
+        );
+      });
+    });
+
     group('login', () {
       late http.BaseRequest capturedRequest;
 

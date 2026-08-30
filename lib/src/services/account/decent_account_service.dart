@@ -78,6 +78,17 @@ class DecentAccountService {
       await _store.read(key: 'email') != null &&
       await _store.read(key: 'password') != null;
 
+  Future<bool> isBackendReachable({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    try {
+      await _httpClient.head(Uri.parse(baseUrl)).timeout(timeout);
+      return true;
+    } on Exception {
+      return false;
+    }
+  }
+
   Future<bool> isLoggedIn() async {
     if (!await hasLinkedAccount()) return false;
     final cached = _authenticated;

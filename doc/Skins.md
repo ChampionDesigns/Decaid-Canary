@@ -64,6 +64,14 @@ backgrounded. After ten minutes in the background, it unloads the page and
 reloads the selected skin when the app returns. Skin state that must survive
 this reload should be persisted through the Decaid API or browser storage.
 
+### Offline Operation
+
+Decaid serves installed skins from `localhost`, so Wi-Fi and internet access
+are not required for machine control or the embedded skin itself. Release
+builds include a bundled skin for first-run offline use. Account features, skin
+downloads and updates, and any external resources requested by a skin remain
+unavailable until internet access returns.
+
 ---
 
 ## Getting Started

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -445,6 +446,18 @@ const bodyExample = "</body>";
 
     test('falls back to localhost when getWifiIP throws (gh#337)', () async {
       WebUIService.resolveWifiIP = () async => throw Exception('no wifi');
+
+      await service.serveFolderAtPath(tempDir.path);
+
+      expect(service.isServing, isTrue);
+      expect(service.deviceIp(), 'localhost');
+    });
+
+    test('falls back to localhost when getWifiIP does not return', () async {
+      WebUIService.resolveWifiIP = () => Completer<String?>().future;
+      service = WebUIService(
+        wifiIpResolutionTimeout: const Duration(milliseconds: 10),
+      );
 
       await service.serveFolderAtPath(tempDir.path);
 
