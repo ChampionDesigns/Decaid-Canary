@@ -321,6 +321,30 @@ physical connection. On Android/Linux/Windows, direct
 The identity check happens during `onConnect()` — for machines, `v13Model`
 is read and compared against the expected `DeviceImplementation`.
 
+## DE1 MMR model mapping (`DecentMachineModel`)
+
+`v13Model` (MMR `0x0080000C`) is the machine model read on connect. For the
+DE1 family the raw value is 0 (unset) through 7, per de1app:
+
+| value | model     |
+|-------|-----------|
+| 0     | Unknown   |
+| 1     | DE1       |
+| 2     | DE1+      |
+| 3     | DE1PRO    |
+| 4     | DE1XL     |
+| 5     | DE1CAFE   |
+| 6     | DE1XXL    |
+| 7     | DE1XXXL   |
+| >=128 | Bengle    |
+
+The 5/6/7 rows were previously collapsed to DE1XXL/DE1XXXL/Unknown. The
+corrected mapping matches the firmware values used by de1app and is the
+canonical conversion for both raw MMR reads (`DecentMachineModel.fromInt`)
+and API SKU parsing (`parseSkuModel`), so firmware values and SKU tokens
+agree. Bengle values (>= 128) are outside the legacy DE1 identity-resolution
+flow.
+
 ## Focused Tests
 
 ```sh
