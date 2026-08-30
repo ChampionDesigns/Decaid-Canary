@@ -51,6 +51,8 @@ class De1StateManager with WidgetsBindingObserver {
       const LegacyDe1IdentityResolver();
   final Set<UnifiedDe1> _identityPromptedMachines = {};
   final Set<UnifiedDe1> _identityResolving = {};
+  NavigatorState? _identityDialogNavigator;
+  Object? _identityDialogToken;
   bool _disposed = false;
   StreamSubscription<MachineSnapshot>? _snapshotSubscription;
   ShotSequencer? _currentShotSequencer;
@@ -79,7 +81,6 @@ class De1StateManager with WidgetsBindingObserver {
 
   bool _appIsInForeground = true;
   bool _navigationContextReady = false;
-  bool _identityDialogOpen = false;
 
   De1StateManager({
     required De1Controller de1Controller,
@@ -124,18 +125,26 @@ class De1StateManager with WidgetsBindingObserver {
 
     _de1Subscription = _de1Controller.de1.listen(_handleDe1Change);
 
-    Future.delayed(const Duration(milliseconds: 500), () {
-      _checkNavigationContext();
-    });
+    WidgetsBinding.instance.addPostFrameCallback(
+      _retryIdentityWhenNavigationReady,
+    );
+  }
+
+  void _retryIdentityWhenNavigationReady(Duration _) {
+    if (_disposed) return;
+    _checkNavigationContext();
+    if (!_navigationContextReady) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        _retryIdentityWhenNavigationReady,
+      );
+      return;
+    }
+    unawaited(_retryPendingIdentityResolution());
   }
 
   void _checkNavigationContext() {
     final context = _navigatorKey.currentContext;
-    final ready = context != null && context.mounted;
-    if (ready && !_navigationContextReady) {
-      unawaited(_retryPendingIdentityResolution());
-    }
-    _navigationContextReady = ready;
+    _navigationContextReady = context != null && context.mounted;
     _logger.fine('Navigation context ready: $_navigationContextReady');
   }
 
@@ -185,6 +194,7 @@ class De1StateManager with WidgetsBindingObserver {
   }
 
   void _handleDe1Change(Machine? machine) {
+    if (machine == null) _dismissIdentityDialog();
     _snapshotSubscription?.cancel();
     _snapshotSubscription = null;
     _identityPromptedMachines.clear();
@@ -203,15 +213,8 @@ class De1StateManager with WidgetsBindingObserver {
       }
     } else {
       _logger.info('DE1 disconnected');
-      _dismissIdentityDialog();
       _cleanupShotSequencer();
     }
-  }
-
-  void _dismissIdentityDialog() {
-    if (!_identityDialogOpen) return;
-    _identityDialogOpen = false;
-    _navigatorKey.currentState?.pop();
   }
 
   void _maybeCheckSerialOwnership(String serial) {
@@ -344,8 +347,7 @@ class De1StateManager with WidgetsBindingObserver {
     final context = _navigatorKey.currentContext;
     if (context == null || !context.mounted) return null;
     _identityPromptedMachines.add(machine);
-    _identityDialogOpen = true;
-    final selected = await showDialog<RegisteredDecentMachine>(
+    return _showIdentityDialog<RegisteredDecentMachine>(
       context: context,
       builder: (dialogContext) {
         return SimpleDialog(
@@ -371,8 +373,6 @@ class De1StateManager with WidgetsBindingObserver {
         );
       },
     );
-    _identityDialogOpen = false;
-    return selected;
   }
 
   Future<void> _maybePromptLinkAccount(UnifiedDe1 machine) async {
@@ -386,8 +386,7 @@ class De1StateManager with WidgetsBindingObserver {
     final context = _navigatorKey.currentContext;
     if (context == null || !context.mounted) return;
     _identityPromptedMachines.add(machine);
-    _identityDialogOpen = true;
-    final accepted = await showDialog<bool>(
+    final accepted = await _showIdentityDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
@@ -409,7 +408,6 @@ class De1StateManager with WidgetsBindingObserver {
         );
       },
     );
-    _identityDialogOpen = false;
     if (accepted != true) return;
     if (!_stillCurrent(machine)) return;
     final navigator = _navigatorKey.currentState;
@@ -422,6 +420,33 @@ class De1StateManager with WidgetsBindingObserver {
     _identityPromptedMachines.remove(machine);
     _identityResolving.remove(machine);
     await _resolveLegacyIdentity(machine);
+  }
+
+  Future<T?> _showIdentityDialog<T>({
+    required BuildContext context,
+    required WidgetBuilder builder,
+  }) async {
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final token = Object();
+    _identityDialogNavigator = navigator;
+    _identityDialogToken = token;
+    try {
+      return await showDialog<T>(context: context, builder: builder);
+    } finally {
+      if (identical(_identityDialogToken, token)) {
+        _identityDialogNavigator = null;
+        _identityDialogToken = null;
+      }
+    }
+  }
+
+  void _dismissIdentityDialog() {
+    final navigator = _identityDialogNavigator;
+    _identityDialogNavigator = null;
+    _identityDialogToken = null;
+    if (navigator != null && navigator.mounted && navigator.canPop()) {
+      navigator.pop();
+    }
   }
 
   Future<void> _checkSerialOwnership(String serial) async {
@@ -947,6 +972,8 @@ class De1StateManager with WidgetsBindingObserver {
   void dispose() {
     _disposed = true;
     _logger.fine('Disposing De1StateManager');
+
+    _dismissIdentityDialog();
 
     WidgetsBinding.instance.removeObserver(this);
 

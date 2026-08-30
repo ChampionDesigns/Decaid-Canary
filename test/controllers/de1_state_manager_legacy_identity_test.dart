@@ -214,9 +214,27 @@ void main() {
     return service;
   }
 
+  Future<void> mountTestApp(WidgetTester tester) {
+    return tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: navigatorKey,
+        home: const Scaffold(body: Text('home')),
+        onGenerateRoute: (settings) {
+          if (settings.name == AccountPage.routeName) {
+            return MaterialPageRoute<void>(
+              builder: (_) => const Scaffold(body: Text('AccountPage stub')),
+            );
+          }
+          return null;
+        },
+      ),
+    );
+  }
+
   Future<De1StateManager> createManager(
     WidgetTester tester, {
     DecentAccountService? accountService,
+    bool mountNavigator = true,
   }) async {
     final scaleController = ScaleController();
     final settingsService = MockSettingsService();
@@ -242,20 +260,7 @@ void main() {
       accountService: accountService,
       navigatorKey: navigatorKey,
     );
-    await tester.pumpWidget(
-      MaterialApp(
-        navigatorKey: navigatorKey,
-        home: const Scaffold(body: Text('home')),
-        onGenerateRoute: (settings) {
-          if (settings.name == AccountPage.routeName) {
-            return MaterialPageRoute<void>(
-              builder: (_) => const Scaffold(body: Text('AccountPage stub')),
-            );
-          }
-          return null;
-        },
-      ),
-    );
+    if (mountNavigator) await mountTestApp(tester);
     return manager;
   }
 
@@ -384,6 +389,27 @@ void main() {
     },
   );
 
+  testWidgets('disconnect dismisses an active identity selection dialog', (
+    tester,
+  ) async {
+    final accountService = await seededService(const [
+      {'serial': '1337', 'sku': 'DE-DE1220V-00001', 'model': 'DE1'},
+      {'serial': '1338', 'sku': 'DE-DE1PRO220V7-00533', 'model': 'DE1Pro'},
+    ]);
+    await createManager(tester, accountService: accountService);
+
+    await connectMachine(tester, v13Model: 0, serialN: 0);
+    await pumpUntil(tester, () async {});
+
+    expect(find.text('Select your machine'), findsOneWidget);
+
+    await disconnectAndSettle(tester);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(find.text('Select your machine'), findsNothing);
+  });
+
   testWidgets('a persisted mapping is reused on reconnect without a dialog', (
     tester,
   ) async {
@@ -474,6 +500,33 @@ void main() {
     expect(find.text('Link your Decent account'), findsNothing);
     expect(de1.machineInfo.serialNumber, '0');
     expect(de1.machineInfo.model, 'Unknown');
+    await disconnectAndSettle(tester);
+  });
+
+  testWidgets('a preconnected machine prompts after the navigator mounts', (
+    tester,
+  ) async {
+    final accountService = await seededService(
+      const [],
+      withCredentials: false,
+    );
+    final de1 = await connectMachine(tester, v13Model: 0, serialN: 0);
+    await createManager(
+      tester,
+      accountService: accountService,
+      mountNavigator: false,
+    );
+    await tester.pump();
+
+    expect(de1.machineInfo.serialNumber, '0');
+
+    await tester.pump(const Duration(milliseconds: 600));
+    await mountTestApp(tester);
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(find.text('Link your Decent account'), findsOneWidget);
+    await tester.tap(find.text('Not now'));
+    await pumpUntil(tester, () async {});
     await disconnectAndSettle(tester);
   });
 
