@@ -625,6 +625,9 @@ __httpRequestHandler: function (request) {
 }
 ```
 
+A `handleHttpRequest` method on the object `createPlugin` returns works the
+same way — the loader aliases it to `__httpRequestHandler` at load.
+
 The `request` object:
 
 | Field | Type | Contents |
