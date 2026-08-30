@@ -138,13 +138,15 @@ class ConnectionManager {
   bool _isConnectingMachine = false;
   bool _isConnectingScale = false;
   bool _activeScaleOnlyScan = false;
+  bool _shuttingDown = false;
+  Future<void>? _shutdownFuture;
+  int _activeConnectionWork = 0;
+  Completer<void>? _connectionWorkDone;
   ConnectionSelectionSession? _selectionSession;
 
   int _explicitScanGeneration = 0;
 
-  Duration get _connectTimeout => Platform.isLinux
-      ? const Duration(seconds: 60)
-      : const Duration(seconds: 30);
+  final Duration _connectTimeout;
 
   bool get _machineConnected => _disconnectSupervisor.isMachineConnected;
   bool get _scaleConnected => _disconnectSupervisor.isScaleConnected;
@@ -242,7 +244,12 @@ class ConnectionManager {
     required this.settingsController,
     this.rememberedDevices,
     Duration deviceAttachSettleDelay = const Duration(milliseconds: 500),
-  }) {
+    Duration? connectTimeout,
+  }) : _connectTimeout =
+           connectTimeout ??
+           (Platform.isLinux
+               ? const Duration(seconds: 60)
+               : const Duration(seconds: 30)) {
     _disconnectSupervisor = DisconnectSupervisor(
       machineStream: de1Controller.de1,
       scaleStream: scaleController.connectionState,
@@ -293,6 +300,7 @@ class ConnectionManager {
   }
 
   bool _shouldAttemptAttachReconnect() {
+    if (_shuttingDown) return false;
     if (_machineConnected && !_automaticMachineAttemptSuperseded) return false;
     if (_attachProbe != null) return true;
     final preferredMachineId = settingsController.preferredMachineId;
@@ -376,6 +384,7 @@ class ConnectionManager {
   }
 
   Future<bool> _attemptAttachReconnect(DeviceAttachedEvent event) async {
+    if (_shuttingDown) return true;
     if (_machineConnected && !_automaticMachineAttemptSuperseded) return true;
     if (_attachProbe == null) {
       _completeUsbAttachLifecycle();
@@ -523,6 +532,7 @@ class ConnectionManager {
   }
 
   void _ensureMachineRecoveryArmed() {
+    if (_shuttingDown) return;
     if (!_shouldAttemptAttachReconnect()) return;
     if (!_machineRecoveryActive) {
       _machineRecoveryActive = true;
@@ -532,6 +542,7 @@ class ConnectionManager {
 
   void _listenForAdapter() {
     _adapterSub = deviceScanner.adapterStateStream.listen((state) {
+      if (_shuttingDown) return;
       if (state == _lastAdapterState) return;
       final previous = _lastAdapterState;
       _lastAdapterState = state;
@@ -716,6 +727,7 @@ class ConnectionManager {
   );
 
   Future<void> scanAndConnect() async {
+    if (_shuttingDown) return;
     if (_queuedExplicitScan != null) {
       return _queuedExplicitScan!.future;
     }
@@ -733,6 +745,37 @@ class ConnectionManager {
   }
 
   Future<bool> _runConnect({
+    required bool scaleOnly,
+    required ConnectionAttemptPolicy policy,
+    bool adapterRecovery = false,
+    DeviceAttachedEvent? attachEvent,
+  }) {
+    if (_shuttingDown) return Future.value(false);
+    return _trackConnectionWork(
+      () => _runConnectImpl(
+        scaleOnly: scaleOnly,
+        policy: policy,
+        adapterRecovery: adapterRecovery,
+        attachEvent: attachEvent,
+      ),
+    );
+  }
+
+  Future<T> _trackConnectionWork<T>(Future<T> Function() work) async {
+    _activeConnectionWork++;
+    final workDone = _connectionWorkDone ??= Completer<void>();
+    try {
+      return await work();
+    } finally {
+      _activeConnectionWork--;
+      if (_activeConnectionWork == 0) {
+        _connectionWorkDone = null;
+        workDone.complete();
+      }
+    }
+  }
+
+  Future<bool> _runConnectImpl({
     required bool scaleOnly,
     required ConnectionAttemptPolicy policy,
     bool adapterRecovery = false,
@@ -757,10 +800,11 @@ class ConnectionManager {
         await _executeConnect(scaleOnly, policy: policy);
       }
     } finally {
-      while (_pendingAttachAttempt ||
-          _queuedExplicitScan != null ||
-          _adapterRecoveryQueued ||
-          _queuedScaleOnly != null) {
+      while (!_shuttingDown &&
+          (_pendingAttachAttempt ||
+              _queuedExplicitScan != null ||
+              _adapterRecoveryQueued ||
+              _queuedScaleOnly != null)) {
         if (_pendingAttachAttempt) {
           _pendingAttachAttempt = false;
           final event = _pendingAttachEvent;
@@ -862,6 +906,7 @@ class ConnectionManager {
   }
 
   void _queueAdapterRecovery() {
+    if (_shuttingDown) return;
     if (_adapterRecoveryQueued) return;
     _adapterRecoveryQueued = true;
     if (_isConnecting) return;
@@ -1179,6 +1224,7 @@ class ConnectionManager {
   }
 
   void _armPostQuickConnectScaleScan() {
+    if (_shuttingDown) return;
     if (_scaleConnected) return;
     if (_scaleReconnectBlockedByPowerMode) return;
     _log.fine(
@@ -1195,6 +1241,7 @@ class ConnectionManager {
   }
 
   void _maybeArmDeferredScaleScan() {
+    if (_shuttingDown) return;
     if (!_earlyStopFired) return;
     if (!_machineConnected || _scaleConnected) return;
     if (_scaleReconnectBlockedByPowerMode) return;
@@ -1212,6 +1259,7 @@ class ConnectionManager {
   }
 
   void _ensureScaleReacquisition() {
+    if (_shuttingDown) return;
     if (deviceScanner.supportsBackgroundWatch) {
       unawaited(_scaleWatch.arm());
     } else {
@@ -1252,7 +1300,8 @@ class ConnectionManager {
   }
 
   bool _shouldRetryPreferredScale() {
-    return _machineConnected &&
+    return !_shuttingDown &&
+        _machineConnected &&
         !_scaleConnected &&
         currentStatus.pendingAmbiguity != AmbiguityReason.scalePicker &&
         settingsController.preferredScaleId != null &&
@@ -1271,6 +1320,7 @@ class ConnectionManager {
   }
 
   void _handleMachineConnected() {
+    if (_shuttingDown) return;
     _stopMachineRecovery();
     _watchConnectedMachineState();
     _ensureScaleReacquisition();
@@ -1289,6 +1339,7 @@ class ConnectionManager {
   }
 
   void _startMachineRecovery() {
+    if (_shuttingDown) return;
     if (settingsController.preferredMachineId == null) return;
     _machineRecoveryActive = true;
     _log.info(
@@ -1311,7 +1362,8 @@ class ConnectionManager {
   int get machineReconnectFailures => _machineReconnectFailures;
 
   bool _shouldRetryMachine() {
-    return _machineRecoveryActive &&
+    return !_shuttingDown &&
+        _machineRecoveryActive &&
         !_machineConnected &&
         settingsController.preferredMachineId != null;
   }
@@ -1385,7 +1437,7 @@ class ConnectionManager {
         '${snapshotStalenessTimeout.inSeconds}s with link still '
         '"connected"; forcing a clean machine reconnect',
       );
-      _forceMachineReconnect();
+      unawaited(_trackConnectionWork(_forceMachineReconnect));
     });
   }
 
@@ -1526,6 +1578,18 @@ class ConnectionManager {
   Future<ConnectionResult> connectMachine(
     De1Interface machine, {
     bool automatic = false,
+  }) {
+    if (_shuttingDown) {
+      return Future.value(const ConnectionResult.conflict());
+    }
+    return _trackConnectionWork(
+      () => _connectMachine(machine, automatic: automatic),
+    );
+  }
+
+  Future<ConnectionResult> _connectMachine(
+    De1Interface machine, {
+    required bool automatic,
   }) async {
     // Only the passive automatic attempt may be superseded by USB attach
     // intent. Explicit direct connects (REST/WS) are never superseded, even
@@ -1564,7 +1628,9 @@ class ConnectionManager {
     );
 
     try {
-      await de1Controller.connectToDe1(machine).timeout(_connectTimeout);
+      await _trackConnectionWork(
+        () => de1Controller.connectToDe1(machine),
+      ).timeout(_connectTimeout);
       if (automatic && _automaticMachineAttemptSuperseded) {
         // This connect was in flight when USB intent latched; it may still
         // have completed its transport connect, but it must not persist its
@@ -1666,7 +1732,14 @@ class ConnectionManager {
     }
   }
 
-  Future<ConnectionResult> connectScale(Scale scale) async {
+  Future<ConnectionResult> connectScale(Scale scale) {
+    if (_shuttingDown) {
+      return Future.value(const ConnectionResult.conflict());
+    }
+    return _trackConnectionWork(() => _connectScale(scale));
+  }
+
+  Future<ConnectionResult> _connectScale(Scale scale) async {
     if (_isConnectingScale) {
       _log.fine('connectScale: already connecting, skipping');
       return const ConnectionResult.conflict();
@@ -1694,7 +1767,9 @@ class ConnectionManager {
     );
 
     try {
-      await scaleController.connectToScale(scale).timeout(_connectTimeout);
+      await _trackConnectionWork(
+        () => scaleController.connectToScale(scale),
+      ).timeout(_connectTimeout);
       if (_scaleReconnectBlockedByPowerMode) {
         markExpectingDisconnect(scale.deviceId);
         _publishStatus(
@@ -1922,23 +1997,83 @@ class ConnectionManager {
     } catch (_) {}
   }
 
-  Future<void> dispose() async {
+  Future<void> shutdown() {
+    final existing = _shutdownFuture;
+    if (existing != null) return existing;
+
+    _shuttingDown = true;
+    final shutdown = _performShutdown();
+    _shutdownFuture = shutdown;
+    return shutdown;
+  }
+
+  Future<void> _performShutdown() async {
+    _explicitScanGeneration++;
     _cancelSelectionSession(emitReport: false);
     _stopMachineRecovery();
+    _stopWatchingConnectedMachineState();
     _deferredScaleScan?.cancel();
+    _deferredScaleScan = null;
+    _adapterRecoveryEpoch++;
+    _adapterRecoveryNeeded = false;
     _adapterRecoveryTimer?.cancel();
     _adapterRecoveryTimer = null;
     _adapterRecoveryQueued = false;
+    _pendingAttachAttempt = false;
+    _pendingAttachEvent = null;
     _cancelPreferredScaleReconnect();
-    await _attachReconnectCoordinator?.dispose();
-    _queuedExplicitScan?.complete();
+
+    final queuedExplicitScan = _queuedExplicitScan;
     _queuedExplicitScan = null;
-    await _scaleWatch.dispose();
-    _stopWatchingConnectedMachineState();
+    if (queuedExplicitScan != null && !queuedExplicitScan.isCompleted) {
+      queuedExplicitScan.complete();
+    }
+    final queuedScaleOnly = _queuedScaleOnly;
+    _queuedScaleOnly = null;
+    if (queuedScaleOnly != null && !queuedScaleOnly.isCompleted) {
+      queuedScaleOnly.complete();
+    }
+
+    try {
+      deviceScanner.stopScan();
+    } catch (error, stackTrace) {
+      _log.warning('Scan stop during shutdown failed', error, stackTrace);
+    }
+    try {
+      await _attachReconnectCoordinator?.dispose();
+    } catch (error, stackTrace) {
+      _log.warning('Attach recovery shutdown failed', error, stackTrace);
+    }
+    try {
+      await _scaleWatch.dispose();
+    } catch (error, stackTrace) {
+      _log.warning('Scale watch shutdown failed', error, stackTrace);
+    }
+    try {
+      await _adapterSub?.cancel();
+    } catch (error, stackTrace) {
+      _log.warning('Adapter subscription shutdown failed', error, stackTrace);
+    }
+
+    await _connectionWorkDone?.future;
+
+    try {
+      await disconnectMachine();
+    } catch (error, stackTrace) {
+      _log.warning('Machine disconnect failed', error, stackTrace);
+    }
+    try {
+      await disconnectScale();
+    } catch (error, stackTrace) {
+      _log.warning('Scale disconnect failed', error, stackTrace);
+    }
+  }
+
+  Future<void> dispose() async {
+    await shutdown();
     await de1Controller.dispose();
     scaleController.dispose();
     _disconnectSupervisor.dispose();
-    _adapterSub?.cancel();
     _disconnectExpectations.dispose();
     _statusPublisher.dispose();
     _scanReportSubject.close();

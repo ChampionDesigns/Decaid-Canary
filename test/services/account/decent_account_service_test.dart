@@ -362,16 +362,19 @@ void main() {
     });
 
     group('verifyStoredCredentials', () {
-      test('returns true when backend accepts stored credentials', () async {
+      test('reports authenticated when backend accepts credentials', () async {
         await store.write(key: 'email', value: 'user@example.com');
         await store.write(key: 'password', value: 'cryptpw_abc123');
 
-        expect(await service.verifyStoredCredentials(), isTrue);
+        expect(
+          await service.verifyStoredCredentialsStatus(),
+          DecentAccountStatus.authenticated,
+        );
         expect(await service.isLoggedIn(), isTrue);
       });
 
       test(
-        'returns false on a 401 and marks the account not authenticated',
+        'reports unauthenticated on a 401 and marks the account invalid',
         () async {
           httpClient = _mockClient(statusCode: 401, body: '');
           await store.write(key: 'email', value: 'user@example.com');
@@ -382,7 +385,10 @@ void main() {
             baseUrl: _baseUrl,
           );
 
-          expect(await service.verifyStoredCredentials(), isFalse);
+          expect(
+            await service.verifyStoredCredentialsStatus(),
+            DecentAccountStatus.unauthenticated,
+          );
           expect(await service.isLoggedIn(), isFalse);
           expect(await service.hasLinkedAccount(), isTrue);
         },
@@ -429,6 +435,43 @@ void main() {
 
         expect(await service.verifyStoredCredentials(), isFalse);
         expect(store.hasCredentials, isTrue);
+      });
+
+      test('reports an indeterminate status on a network error', () async {
+        await store.write(key: 'email', value: 'user@example.com');
+        await store.write(key: 'password', value: 'cryptpw_abc123');
+        httpClient = http_testing.MockClient(
+          (_) async => throw Exception('SocketException'),
+        );
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+
+        expect(
+          await service.verifyStoredCredentialsStatus(),
+          DecentAccountStatus.indeterminate,
+        );
+      });
+
+      test('preserves known invalid status on a network error', () async {
+        await store.write(key: 'email', value: 'user@example.com');
+        await store.write(key: 'password', value: 'cryptpw_abc123');
+        httpClient = http_testing.MockClient(
+          (_) async => throw Exception('SocketException'),
+        );
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+        service.reportAuthenticationFailure();
+
+        expect(
+          await service.verifyStoredCredentialsStatus(),
+          DecentAccountStatus.unauthenticated,
+        );
       });
     });
 
@@ -484,6 +527,40 @@ void main() {
         completer.complete(http.Response('cryptpw_abc123\n', 200));
         expect(await validation, isFalse);
         expect(await service.isLoggedIn(), isFalse);
+      });
+    });
+
+    group('uploadAppLogs', () {
+      test('stale rejection does not invalidate a newer login', () async {
+        final uploadStarted = Completer<void>();
+        final releaseUpload = Completer<void>();
+        httpClient = http_testing.MockClient((request) async {
+          if (request.method == 'POST') {
+            uploadStarted.complete();
+            await releaseUpload.future;
+            return http.Response('', 401);
+          }
+          return http.Response('new_cryptpw', 200);
+        });
+        service = DecentAccountService(
+          httpClient: httpClient,
+          credentialStore: store,
+          baseUrl: _baseUrl,
+        );
+        await store.write(key: 'email', value: 'old@example.com');
+        await store.write(key: 'password', value: 'old_cryptpw');
+
+        final upload = service.uploadAppLogs(
+          '{}',
+          isAllowed: () => true,
+          timeout: const Duration(seconds: 30),
+        );
+        await uploadStarted.future;
+        expect(await service.login('new@example.com', 'new-password'), isTrue);
+        releaseUpload.complete();
+
+        expect((await upload).statusCode, 401);
+        expect(await service.isAuthKnownInvalid(), isFalse);
       });
     });
 
