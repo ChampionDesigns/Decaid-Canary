@@ -307,6 +307,12 @@ class MockReplayDe1 implements BengleInterface, SimulatedDevice {
     ),
   );
   @override
+  Future<void> previewLedStrip({Color16? front, Color16? back}) async {}
+
+  @override
+  Future<void> clearLedStripPreview() async {}
+
+  @override
   Future<void> commitLedStrip() async {}
   @override
   Future<LedStripState?> resetLedStrip() async => _led.value;
