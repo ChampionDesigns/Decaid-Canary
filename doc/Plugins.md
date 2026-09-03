@@ -32,6 +32,12 @@ A Decaid plugin consists of two required files:
     "pluginStorage",
     "events.machine"
   ],
+  "drivers": [
+    {
+      "id": "humidity",
+      "type": "sensor"
+    }
+  ],
   "settings": {
     "SettingName": {
       "type": "string",
@@ -77,6 +83,7 @@ A Decaid plugin consists of two required files:
   - `network.websocket`: Open outbound WebSocket connections (`ws://` and `wss://`) through `host.transport`
   - `network.tcp`: Open outbound raw TCP connections through `host.transport`
   - `network.tls`: Open outbound TLS connections (platform trust store) through `host.transport`
+- **drivers**: Device classes the plugin may register. Each declaration has a plugin-local `id` and a `type`. The only currently supported type is `sensor`. A manifest may declare at most 8 drivers. Driver declarations authorize registration; they do not grant transport access. For example, a WebSocket-backed sensor also needs `network.websocket`.
 - **settings**: User-configurable options with `type` (`string`, `number`, `boolean`, `enum`), an optional `label` giving the setting a human-friendly name, an optional `description` explaining what the setting does, an optional `default`, and an optional `secure` flag for credentials such as passwords. Enum `values` are a JSON array of strings. Secure values use platform credential storage, are supplied in memory to `onLoad(settings)`, and are never returned by the REST API.
 
   `GET /api/v1/plugins` returns this schema verbatim under `settings`, so a skin can render a settings form — labels, help text and defaults included — without reading the plugin's repository. `GET /api/v1/plugins/:id/settings` returns the stored values only.
@@ -488,6 +495,106 @@ host.transport.onEvent(opened.handle, (event) => {
 await host.transport.send(opened.handle, { type: "binary", data: btoa("\x00\x01\x02") });
 ```
 
+## Device Registration (`host.devices`)
+
+A plugin with a declared sensor driver can register runtime sensor instances.
+Registered sensors join Decaid's normal device inventory and sensor registry; no
+plugin-specific endpoint is created. They are available through:
+
+- `GET /api/v1/devices`
+- `GET /api/v1/sensors`
+- `GET /api/v1/sensors/:id`
+- `POST /api/v1/sensors/:id/execute`
+- `/ws/v1/sensors/:id/snapshot`
+
+Registration and transport authorization are independent. The manifest below
+allows a sensor registration and an outbound WebSocket connection:
+
+```json
+{
+  "drivers": [{ "id": "humidity", "type": "sensor" }],
+  "permissions": ["network.websocket"]
+}
+```
+
+Register the sensor from `onLoad()`:
+
+```js
+let sensor;
+let transportHandle;
+
+async function registerSensor() {
+  sensor = await host.devices.register({
+    driverId: "humidity",
+    instanceId: "office",
+    name: "Office humidity",
+    vendor: "Example",
+    dataChannels: [
+      { key: "relativeHumidity", type: "number", unit: "%RH" }
+    ],
+    commands: [
+      {
+        id: "sampleNow",
+        name: "Sample now",
+        paramsSchema: { type: "object" },
+        resultsSchema: {
+          type: "object",
+          properties: { relativeHumidity: { type: "number" } }
+        }
+      }
+    ]
+  }, {
+    async connect() {
+      const opened = await host.transport.open({
+        kind: "websocket",
+        url: "ws://sensor.local/readings"
+      });
+      transportHandle = opened.handle;
+    },
+    async disconnect() {
+      if (transportHandle) await host.transport.close(transportHandle);
+    },
+    async execute(command) {
+      if (command.commandId === "sampleNow") {
+        return { relativeHumidity: 52.4 };
+      }
+      throw new Error("unknown command");
+    }
+  });
+
+  await sensor.publish({ relativeHumidity: 52.4 });
+}
+```
+
+Call `registerSensor()` from the plugin's `onLoad()` method.
+
+`host.devices.register(definition, handlers)` returns a Promise for a device
+handle with:
+
+- `deviceId`: stable public identity derived from plugin id, driver id, and
+  instance id; plugin generation is not part of the identity.
+- `publish(snapshot)`: publishes one complete snapshot. Every declared channel
+  must be present, values must match their declared JSON type, and undeclared
+  channels are rejected.
+- `reportDisconnected()`: marks the sensor disconnected after an unexpected
+  transport or protocol failure.
+- `unregister()`: removes the sensor from the device inventory.
+
+All three handlers are required. Decaid calls `connect()` when the sensor joins
+the sensor registry; resolving means the driver is ready to serve commands, not
+merely that its transport opened. `disconnect()` performs normal driver cleanup.
+`execute({ commandId, params })` handles a declared command and returns an object.
+Handler failures propagate through the existing sensor command API. Calls time
+out after 10 seconds.
+
+Definitions, snapshots, command parameters and command results are limited to
+64 KiB of JSON. A plugin generation can register at most 8 devices. Registration
+is not remembered across app restarts. On plugin unload, Decaid removes every
+device and rejects in-flight commands owned by the retiring generation, even if
+`onUnload()` fails. Late publications and command results from older generations
+are ignored. BLE-backed drivers, discovery, probing and grinder registration are
+not supported by this first sensor registration contract.
+
 ## Plugin Lifecycle
 
 1. **Initialization**: Plugin directory is copied to app storage
@@ -635,7 +742,7 @@ it in Decaid UI.
 - **Global Functions**: `fetch()`, `btoa()`, `setTimeout()`, `clearTimeout()`
 - **Objects**: `Promise`, `JSON`, `Math`, `Date`, `Array`, `Object`
 - **Constants**: `undefined`, `null`, `Infinity`, `NaN`
-- **Host API**: `host.log()`, `host.emit()`, `host.storage()`, `host.decentProxy()`, `host.transport`
+- **Host API**: `host.log()`, `host.emit()`, `host.storage()`, `host.decentProxy()`, `host.transport`, `host.devices`
 
 ### Not Available
 
