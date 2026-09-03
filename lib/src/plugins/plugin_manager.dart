@@ -46,6 +46,7 @@ class _PendingDeviceInvocation {
   _PendingDeviceInvocation({
     required this.pluginId,
     required this.generation,
+    required this.registrationHandle,
     required this.operation,
     required this.completer,
     required this.timer,
@@ -53,6 +54,7 @@ class _PendingDeviceInvocation {
 
   final String pluginId;
   final int generation;
+  final String registrationHandle;
   final PluginDeviceOperation operation;
   final Completer<Map<String, dynamic>> completer;
   final Timer timer;
@@ -1159,6 +1161,13 @@ class PluginManager {
           );
           _replyDevice(requestId, bridgeToken, result: const {});
         case 'unregister':
+          _rejectDeviceInvocations(
+            pluginId,
+            generation,
+            'Plugin device unregistered',
+            registrationHandle: registrationHandle,
+            excludeOperation: PluginDeviceOperation.disconnect,
+          );
           await deviceService.unregister(
             pluginId: pluginId,
             generation: generation,
@@ -1230,6 +1239,7 @@ class PluginManager {
     _pendingDeviceInvocations[invocationId] = _PendingDeviceInvocation(
       pluginId: pluginId,
       generation: generation,
+      registrationHandle: registrationHandle,
       operation: operation,
       completer: completer,
       timer: timer,
@@ -1287,13 +1297,19 @@ class PluginManager {
   void _rejectDeviceInvocations(
     String pluginId,
     int generation,
-    String reason,
-  ) {
+    String reason, {
+    String? registrationHandle,
+    PluginDeviceOperation? excludeOperation,
+  }) {
     final ids = _pendingDeviceInvocations.entries
         .where(
           (entry) =>
               entry.value.pluginId == pluginId &&
-              entry.value.generation == generation,
+              entry.value.generation == generation &&
+              (registrationHandle == null ||
+                  entry.value.registrationHandle == registrationHandle) &&
+              (excludeOperation == null ||
+                  entry.value.operation != excludeOperation),
         )
         .map((entry) => entry.key)
         .toList();

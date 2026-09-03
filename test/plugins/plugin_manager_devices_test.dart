@@ -320,6 +320,7 @@ void main() {
                 execute() { return {}; }
               }).then((device) => {
                 globalThis.testUnregisterDevice = device;
+                globalThis.performReportDisconnected = () => device.reportDisconnected();
                 globalThis.performUnregister = () => device.unregister().then(() => {
                   host.emit("unregistered", device.deviceId);
                 });
@@ -341,6 +342,11 @@ void main() {
           .where((state) => state == ConnectionState.connected)
           .first
           .timeout(const Duration(seconds: 2));
+      final disconnected = sensor.connectionState
+          .where((state) => state == ConnectionState.disconnected)
+          .first;
+      manager.js.evaluate('globalThis.performReportDisconnected();');
+      await disconnected.timeout(const Duration(seconds: 2));
 
       final unregistered = manager.emitStream
           .where((event) => event['event'] == 'unregistered')
@@ -565,6 +571,269 @@ void main() {
       expect(deviceController.devices, isEmpty);
     },
   );
+
+  test(
+    'direct unregister after reportDisconnected closes device transport',
+    () async {
+      final server = await _startWsServer((ws) {
+        ws.listen((data) {});
+      });
+      final deviceService = PluginDeviceService();
+      final deviceController = DeviceController([deviceService]);
+      await deviceController.initialize();
+      final sensorController = SensorController(controller: deviceController);
+      final manager = PluginManager(
+        kvStore: FakeKeyValueStoreService(),
+        deviceService: deviceService,
+      );
+      addTearDown(() async {
+        await manager.dispose();
+        sensorController.dispose();
+        deviceController.dispose();
+      });
+
+      final registered = manager.emitStream
+          .where((event) => event['event'] == 'registered')
+          .map((event) => event['payload'] as String)
+          .first;
+      await manager.loadPlugin(
+        id: 'direct-cleanup-transport.plugin',
+        manifest: testManifest(
+          'direct-cleanup-transport.plugin',
+          permissions: const {
+            PluginPermissions.emit,
+            PluginPermissions.networkWebsocket,
+          },
+          drivers: const [
+            PluginDriverDeclaration(
+              id: 'humidity',
+              type: PluginDriverType.sensor,
+            ),
+          ],
+        ),
+        settings: const {},
+        jsCode:
+            '''
+        function createPlugin(host) {
+          return {
+            id: "direct-cleanup-transport.plugin",
+            onLoad() {
+              host.devices.register({
+                driverId: "humidity",
+                instanceId: "office",
+                name: "Office humidity",
+                vendor: "Test",
+                dataChannels: [{ key: "relativeHumidity", type: "number" }]
+              }, {
+                connect() {
+                  return host.transport.open({
+                    kind: "websocket",
+                    url: "ws://127.0.0.1:${server.port}/x"
+                  }).then((opened) => {
+                    globalThis.directCleanupHandle = opened.handle;
+                  });
+                },
+                disconnect() {
+                  return host.transport.close(globalThis.directCleanupHandle)
+                    .then(() => {
+                      globalThis.directDisconnectClosed =
+                        (globalThis.directDisconnectClosed || 0) + 1;
+                    });
+                },
+                execute() { return {}; }
+              }).then((device) => {
+                globalThis.directCleanupDevice = device;
+                globalThis.performDirectUnregister = () =>
+                  device.unregister().then(() => {
+                    host.emit("unregistered", device.deviceId);
+                  });
+                host.emit("registered", device.deviceId);
+              });
+            }
+          };
+        }
+      ''',
+      );
+
+      final deviceId = await registered.timeout(const Duration(seconds: 2));
+      final sensor = await sensorController.sensorRegistry
+          .map((sensors) => sensors[deviceId])
+          .where((sensor) => sensor != null)
+          .cast<Sensor>()
+          .first;
+      await sensor.connectionState
+          .where((state) => state == ConnectionState.connected)
+          .first
+          .timeout(const Duration(seconds: 2));
+      expect(manager.liveTransportCount, 1);
+
+      final disconnected = sensor.connectionState
+          .where((state) => state == ConnectionState.disconnected)
+          .first;
+      manager.js.evaluate(
+        'globalThis.directCleanupDevice.reportDisconnected();',
+      );
+      await disconnected.timeout(const Duration(seconds: 2));
+
+      final unregistered = manager.emitStream
+          .where((event) => event['event'] == 'unregistered')
+          .map((event) => event['payload'] as String)
+          .first;
+      manager.js.evaluate('globalThis.performDirectUnregister();');
+      expect(await unregistered.timeout(const Duration(seconds: 2)), deviceId);
+      expect(manager.liveTransportCount, 0);
+      expect(
+        manager.js
+            .evaluate('String(globalThis.directDisconnectClosed || 0)')
+            .stringResult,
+        '1',
+      );
+      await sensorController.sensorRegistry
+          .where((sensors) => !sensors.containsKey(deviceId))
+          .first;
+      expect(deviceController.devices, isEmpty);
+    },
+  );
+
+  test('unregister rejects only pending invocations for its device', () async {
+    final deviceService = PluginDeviceService();
+    final deviceController = DeviceController([deviceService]);
+    await deviceController.initialize();
+    final sensorController = SensorController(controller: deviceController);
+    final manager = PluginManager(
+      kvStore: FakeKeyValueStoreService(),
+      deviceService: deviceService,
+    );
+    addTearDown(() async {
+      await manager.dispose();
+      sensorController.dispose();
+      deviceController.dispose();
+    });
+
+    final registrations = manager.emitStream
+        .where((event) => event['event'] == 'registered')
+        .map((event) => event['payload'] as String)
+        .take(2)
+        .toList();
+    await manager.loadPlugin(
+      id: 'pending-device.plugin',
+      manifest: testManifest(
+        'pending-device.plugin',
+        permissions: const {PluginPermissions.emit},
+        drivers: const [
+          PluginDriverDeclaration(
+            id: 'humidity',
+            type: PluginDriverType.sensor,
+          ),
+        ],
+      ),
+      settings: const {},
+      jsCode: '''
+        function createPlugin(host) {
+          function register(instanceId, key) {
+            return host.devices.register({
+              driverId: "humidity",
+              instanceId: instanceId,
+              name: instanceId,
+              vendor: "Test",
+              dataChannels: [{ key: "relativeHumidity", type: "number" }],
+              commands: [{ id: "wait" }]
+            }, {
+              connect() {},
+              disconnect() { return {}; },
+              execute() {
+                return new Promise((resolve) => {
+                  globalThis["resolve" + key] = resolve;
+                  host.emit(key + "-started", null);
+                });
+              }
+            }).then((device) => {
+              globalThis[key + "Device"] = device;
+              host.emit("registered", key + ":" + device.deviceId);
+            });
+          }
+          return {
+            id: "pending-device.plugin",
+            onLoad() {
+              globalThis.performFirstUnregister = () =>
+                globalThis.FirstDevice.unregister().then(() => {
+                  host.emit("unregistered", globalThis.FirstDevice.deviceId);
+                });
+              register("one", "First");
+              register("two", "Second");
+            }
+          };
+        }
+      ''',
+    );
+
+    final ids = await registrations.timeout(const Duration(seconds: 2));
+    final firstId = ids
+        .firstWhere((id) => id.startsWith('First:'))
+        .substring('First:'.length);
+    final secondId = ids
+        .firstWhere((id) => id.startsWith('Second:'))
+        .substring('Second:'.length);
+    final firstSensor = await sensorController.sensorRegistry
+        .map((sensors) => sensors[firstId])
+        .where((sensor) => sensor != null)
+        .cast<Sensor>()
+        .first;
+    final secondSensor = await sensorController.sensorRegistry
+        .map((sensors) => sensors[secondId])
+        .where((sensor) => sensor != null)
+        .cast<Sensor>()
+        .first;
+    await Future.wait([
+      firstSensor.connectionState
+          .where((state) => state == ConnectionState.connected)
+          .first,
+      secondSensor.connectionState
+          .where((state) => state == ConnectionState.connected)
+          .first,
+    ]);
+
+    final firstStarted = manager.emitStream
+        .where((event) => event['event'] == 'First-started')
+        .first;
+    final secondStarted = manager.emitStream
+        .where((event) => event['event'] == 'Second-started')
+        .first;
+    final firstCommand = firstSensor.execute('wait', null);
+    final secondCommand = secondSensor.execute('wait', null);
+    await Future.wait([
+      firstStarted,
+      secondStarted,
+    ]).timeout(const Duration(seconds: 2));
+    final firstFailure = expectLater(
+      firstCommand,
+      throwsA(
+        isA<PluginDeviceException>().having(
+          (error) => error.message,
+          'message',
+          'Plugin device unregistered',
+        ),
+      ),
+    );
+    final secondResult = expectLater(secondCommand, completion(isEmpty));
+
+    final unregistered = manager.emitStream
+        .where((event) => event['event'] == 'unregistered')
+        .map((event) => event['payload'] as String)
+        .first;
+    manager.js.evaluate('globalThis.performFirstUnregister();');
+    expect(await unregistered.timeout(const Duration(seconds: 2)), firstId);
+    await firstFailure;
+    manager.js.evaluate('globalThis.resolveFirst({});');
+    manager.js.evaluate('globalThis.resolveSecond({});');
+    await secondResult.timeout(const Duration(seconds: 2));
+    await sensorController.sensorRegistry
+        .where((sensors) => !sensors.containsKey(firstId))
+        .first;
+    expect(deviceController.devices.map((device) => device.deviceId), [
+      secondId,
+    ]);
+  });
 }
 
 Future<HttpServer> _startWsServer(void Function(WebSocket ws) handler) async {

@@ -256,6 +256,7 @@ class _PluginSensor implements Sensor {
   final StreamController<Map<String, dynamic>> _data =
       StreamController.broadcast();
   Future<void>? _connecting;
+  Future<void>? _disconnectCleanup;
   int _connectionEpoch = 0;
   bool _disposed = false;
 
@@ -308,12 +309,16 @@ class _PluginSensor implements Sensor {
   }
 
   @override
-  Future<void> disconnect() async {
-    if (_disposed || _connectionState.value == ConnectionState.disconnected) {
-      return;
-    }
+  Future<void> disconnect() {
+    if (_disposed) return Future.value();
+    return _disconnectCleanup ??= _runDisconnectCleanup();
+  }
+
+  Future<void> _runDisconnectCleanup() async {
     _connectionEpoch += 1;
-    _connectionState.add(ConnectionState.disconnecting);
+    if (_connectionState.value != ConnectionState.disconnected) {
+      _connectionState.add(ConnectionState.disconnecting);
+    }
     try {
       await _invoke(PluginDeviceOperation.disconnect, const {});
     } finally {

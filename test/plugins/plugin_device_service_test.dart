@@ -93,6 +93,12 @@ void main() {
         .where((sensors) => !sensors.containsKey(registered.deviceId))
         .first;
     expect(deviceController.devices, isEmpty);
+    expect(
+      operations.where(
+        (operation) => operation == PluginDeviceOperation.disconnect,
+      ),
+      hasLength(1),
+    );
   });
 
   test('registration validates definitions and caps devices', () async {
