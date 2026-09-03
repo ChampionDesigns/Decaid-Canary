@@ -46,12 +46,14 @@ class _PendingDeviceInvocation {
   _PendingDeviceInvocation({
     required this.pluginId,
     required this.generation,
+    required this.operation,
     required this.completer,
     required this.timer,
   });
 
   final String pluginId;
   final int generation;
+  final PluginDeviceOperation operation;
   final Completer<Map<String, dynamic>> completer;
   final Timer timer;
 }
@@ -105,6 +107,8 @@ class PluginManager {
   late final PluginTransportService _transportService;
   final Map<String, _PendingDeviceInvocation> _pendingDeviceInvocations = {};
   int _deviceInvocationSequence = 0;
+
+  final Set<(String, int)> _deviceDisconnectCleanup = {};
 
   De1Controller? get de1Controller => _de1controller;
   PluginManagerLifecycle get lifecycle => _lifecycle;
@@ -212,6 +216,7 @@ class PluginManager {
       _plugins.clear();
       _pluginGenerations.clear();
       _retiringPluginGenerations.clear();
+      _deviceDisconnectCleanup.clear();
       _pluginStorageOperations.clear();
       _pluginBridgeTokens.clear();
       _pluginIdsByBridgeToken.clear();
@@ -1062,16 +1067,28 @@ class PluginManager {
     final generation = msg['generation'] is num
         ? (msg['generation'] as num).toInt()
         : 0;
-    if (generation != _pluginGenerations[pluginId] ||
-        _plugins[pluginId]?.isAlive != true) {
-      return;
-    }
     final type = msg['type'];
     final payload = msg['payload'];
     if (payload is! Map) return;
     final data = Map<String, dynamic>.from(payload);
     if (type == 'invocationResult') {
+      final invocationId = data['invocationId'];
+      final pending = invocationId is String
+          ? _pendingDeviceInvocations[invocationId]
+          : null;
+      final cleanupDisconnect =
+          pending?.operation == PluginDeviceOperation.disconnect &&
+          _deviceDisconnectCleanup.contains((pluginId, generation));
+      if ((generation != _pluginGenerations[pluginId] ||
+              _plugins[pluginId]?.isAlive != true) &&
+          !cleanupDisconnect) {
+        return;
+      }
       _completeDeviceInvocation(pluginId, generation, data);
+      return;
+    }
+    if (generation != _pluginGenerations[pluginId] ||
+        _plugins[pluginId]?.isAlive != true) {
       return;
     }
     final requestId = msg['requestId'];
@@ -1188,9 +1205,15 @@ class PluginManager {
     PluginDeviceOperation operation,
     Map<String, dynamic> payload,
   ) {
-    if (_lifecycle != PluginManagerLifecycle.active ||
-        generation != _pluginGenerations[pluginId] ||
-        _plugins[pluginId]?.isAlive != true) {
+    final isCurrent =
+        _lifecycle == PluginManagerLifecycle.active &&
+        generation == _pluginGenerations[pluginId] &&
+        _plugins[pluginId]?.isAlive == true;
+    final cleanupDisconnect =
+        operation == PluginDeviceOperation.disconnect &&
+        _lifecycle == PluginManagerLifecycle.active &&
+        _deviceDisconnectCleanup.contains((pluginId, generation));
+    if (!isCurrent && !cleanupDisconnect) {
       return Future.error(
         const PluginDeviceException('Plugin generation changed'),
       );
@@ -1207,6 +1230,7 @@ class PluginManager {
     _pendingDeviceInvocations[invocationId] = _PendingDeviceInvocation(
       pluginId: pluginId,
       generation: generation,
+      operation: operation,
       completer: completer,
       timer: timer,
     );
@@ -1659,7 +1683,13 @@ class PluginManager {
                   unregister() {
                     return __deviceCall("unregister", {
                       registrationHandle: registrationHandle
-                    }).then(() => __deviceRemoveHandlers(registrationHandle));
+                    }).then(
+                      () => __deviceRemoveHandlers(registrationHandle),
+                      (error) => {
+                        __deviceRemoveHandlers(registrationHandle);
+                        throw error;
+                      }
+                    );
                   }
                 };
                 return Object.freeze(device);
@@ -1865,9 +1895,6 @@ class PluginManager {
         globalThis.__rejectDevicePendingForToken(
           ${jsonEncode(pluginBridgeToken)}, "plugin unloaded"
         );
-        globalThis.__clearDeviceHandlersForPlugin(
-          ${jsonEncode(pluginId)}
-        );
       ''');
       while (js.executePendingJob() > 0) {}
     });
@@ -1879,12 +1906,27 @@ class PluginManager {
         'Plugin unloaded',
       ),
     );
+    _deviceDisconnectCleanup.add((pluginId, retiringGeneration));
     try {
-      await deviceService.removeAllForPlugin(pluginId, retiringGeneration);
+      await deviceService.removeAllForPlugin(
+        pluginId,
+        retiringGeneration,
+        runDisconnect: _lifecycle == PluginManagerLifecycle.active,
+      );
     } catch (error, stackTrace) {
       firstError ??= error;
       firstStackTrace ??= stackTrace;
+    } finally {
+      _deviceDisconnectCleanup.remove((pluginId, retiringGeneration));
     }
+    attempt(() {
+      js.evaluate('''
+        globalThis.__clearDeviceHandlersForPlugin(
+          ${jsonEncode(pluginId)}
+        );
+      ''');
+      while (js.executePendingJob() > 0) {}
+    });
     try {
       await _transportService.closeAllForPlugin(pluginId, retiringGeneration);
     } catch (error, stackTrace) {

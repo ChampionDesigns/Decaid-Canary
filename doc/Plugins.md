@@ -582,16 +582,21 @@ handle with:
 
 All three handlers are required. Decaid calls `connect()` when the sensor joins
 the sensor registry; resolving means the driver is ready to serve commands, not
-merely that its transport opened. `disconnect()` performs normal driver cleanup.
-`execute({ commandId, params })` handles a declared command and returns an object.
-Handler failures propagate through the existing sensor command API. Calls time
-out after 10 seconds.
+merely that its transport opened. `disconnect()` performs normal driver cleanup
+and is run before a device is removed: on explicit `unregister()` and on plugin
+unload, so the driver can release its transport or other resources. A failing or
+timed-out `disconnect()` still removes the device and rejects in-flight
+commands; the failure is surfaced to the caller.
+`execute({ commandId, params })` handles a declared command and returns an
+object. Handler failures propagate through the existing sensor command API.
+Calls time out after 10 seconds.
 
 Definitions, snapshots, command parameters and command results are limited to
 64 KiB of JSON. A plugin generation can register at most 8 devices. Registration
-is not remembered across app restarts. On plugin unload, Decaid removes every
-device and rejects in-flight commands owned by the retiring generation, even if
-`onUnload()` fails. Late publications and command results from older generations
+is not remembered across app restarts. On plugin unload, Decaid runs each
+device's `disconnect()` handler, removes every device, and rejects in-flight
+commands owned by the retiring generation, even if `onUnload()` fails. Late
+publications and command results from older generations
 are ignored. BLE-backed drivers, discovery, probing and grinder registration are
 not supported by this first sensor registration contract.
 

@@ -134,6 +134,69 @@ void main() {
     );
   });
 
+  test('scan keeps a disconnected plugin registration discoverable', () async {
+    final service = PluginDeviceService();
+    final deviceController = DeviceController([service]);
+    await deviceController.initialize();
+    final sensorController = SensorController(controller: deviceController);
+    addTearDown(() async {
+      sensorController.dispose();
+      deviceController.dispose();
+      await service.dispose();
+    });
+
+    final operations = <PluginDeviceOperation>[];
+    final registered = await service.register(
+      pluginId: 'humidity.plugin',
+      generation: 1,
+      registrationHandle: 'registration-1',
+      definition: _definition('office'),
+      invoke: (operation, payload) async {
+        operations.add(operation);
+        return const {};
+      },
+    );
+    final sensor = await sensorController.sensorRegistry
+        .map((sensors) => sensors[registered.deviceId])
+        .where((sensor) => sensor != null)
+        .cast<Sensor>()
+        .first;
+    await sensor.connectionState
+        .where((state) => state == ConnectionState.connected)
+        .first;
+
+    service.reportDisconnected(
+      pluginId: 'humidity.plugin',
+      generation: 1,
+      registrationHandle: 'registration-1',
+    );
+    await sensor.connectionState
+        .where((state) => state == ConnectionState.disconnected)
+        .first;
+
+    final scan = await deviceController.scanForDevices();
+    expect(scan.failedServices, isEmpty);
+    expect(scan.matchedDevices.map((device) => device.deviceId), [
+      registered.deviceId,
+    ]);
+    expect(
+      deviceController.devices.map((device) => device.deviceId),
+      contains(registered.deviceId),
+    );
+    // The scan re-published the registration, so the sensor is connectable
+    // again through the existing sensor path.
+    await sensor.connectionState
+        .where((state) => state == ConnectionState.connected)
+        .first
+        .timeout(const Duration(seconds: 2));
+    expect(
+      operations
+          .where((operation) => operation == PluginDeviceOperation.connect)
+          .length,
+      greaterThanOrEqualTo(2),
+    );
+  });
+
   test('new generation keeps identity and fences stale publications', () async {
     final service = PluginDeviceService();
     addTearDown(service.dispose);

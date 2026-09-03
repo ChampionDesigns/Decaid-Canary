@@ -58,7 +58,10 @@ class PluginDeviceService implements DeviceDiscoveryService {
   Future<void> initialize() async {}
 
   @override
-  Future<void> scanForDevices({ScanFilter? filter}) async {}
+  Future<void> scanForDevices({ScanFilter? filter}) async {
+    if (_disposed) return;
+    _publishDevices();
+  }
 
   @override
   void stopScan() {}
@@ -142,29 +145,59 @@ class PluginDeviceService implements DeviceDiscoveryService {
     required String registrationHandle,
   }) async {
     _ensureActive();
-    final sensor = _registrations.remove((
-      pluginId,
-      generation,
-      registrationHandle,
-    ));
+    final key = (pluginId, generation, registrationHandle);
+    final sensor = _registrations[key];
     if (sensor == null) {
       throw const PluginDeviceException('Unknown plugin device registration');
     }
+    Object? disconnectError;
+    try {
+      await sensor.disconnect();
+    } catch (error) {
+      disconnectError = error;
+    }
+    _registrations.remove(key);
     await sensor.dispose();
     _publishDevices();
+    if (disconnectError != null) {
+      throw PluginDeviceException('Device disconnect failed: $disconnectError');
+    }
   }
 
-  Future<void> removeAllForPlugin(String pluginId, int generation) async {
+  Future<void> removeAllForPlugin(
+    String pluginId,
+    int generation, {
+    bool runDisconnect = true,
+  }) async {
     final keys = _registrations.keys
         .where((key) => key.$1 == pluginId && key.$2 == generation)
         .toList();
+    if (keys.isEmpty) return;
+    Object? firstError;
+    StackTrace? firstStackTrace;
+    if (runDisconnect) {
+      await Future.wait(
+        keys.map((key) async {
+          final sensor = _registrations[key];
+          if (sensor == null) return;
+          try {
+            await sensor.disconnect();
+          } catch (error, stackTrace) {
+            firstError ??= error;
+            firstStackTrace ??= stackTrace;
+          }
+        }),
+      );
+    }
     final removed = keys
         .map((key) => _registrations.remove(key))
         .whereType<_PluginSensor>()
         .toList();
-    if (removed.isEmpty) return;
     await Future.wait(removed.map((sensor) => sensor.dispose()));
     if (!_devices.isClosed) _publishDevices();
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError!, firstStackTrace!);
+    }
   }
 
   Future<void> dispose() async {
@@ -189,7 +222,7 @@ class PluginDeviceService implements DeviceDiscoveryService {
   }
 
   void _publishDevices() {
-    _devices.add(List.unmodifiable(_registrations.values));
+    _devices.add(List<Device>.of(_registrations.values));
   }
 
   void _ensureActive() {
