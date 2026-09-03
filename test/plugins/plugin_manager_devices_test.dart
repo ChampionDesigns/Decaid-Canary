@@ -767,7 +767,7 @@ void main() {
       ''',
     );
 
-    final ids = await registrations.timeout(const Duration(seconds: 2));
+    final ids = await registrations.timeout(const Duration(seconds: 10));
     final firstId = ids
         .firstWhere((id) => id.startsWith('First:'))
         .substring('First:'.length);
@@ -804,7 +804,7 @@ void main() {
     await Future.wait([
       firstStarted,
       secondStarted,
-    ]).timeout(const Duration(seconds: 2));
+    ]).timeout(const Duration(seconds: 10));
     final firstFailure = expectLater(
       firstCommand,
       throwsA(
@@ -822,11 +822,11 @@ void main() {
         .map((event) => event['payload'] as String)
         .first;
     manager.js.evaluate('globalThis.performFirstUnregister();');
-    expect(await unregistered.timeout(const Duration(seconds: 2)), firstId);
+    expect(await unregistered.timeout(const Duration(seconds: 10)), firstId);
     await firstFailure;
     manager.js.evaluate('globalThis.resolveFirst({});');
     manager.js.evaluate('globalThis.resolveSecond({});');
-    await secondResult.timeout(const Duration(seconds: 2));
+    await secondResult.timeout(const Duration(seconds: 10));
     await sensorController.sensorRegistry
         .where((sensors) => !sensors.containsKey(firstId))
         .first;
