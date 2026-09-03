@@ -6,9 +6,11 @@ import 'package:reaprime/src/models/device/device.dart';
 import 'package:reaprime/src/models/device/device_attach_notifier.dart';
 import 'package:reaprime/src/models/device/device_implementation.dart';
 import 'package:reaprime/src/models/device/machine.dart';
+import 'package:reaprime/src/models/device/remembered_device.dart';
 import 'package:reaprime/src/models/device/transport/data_transport.dart';
 import 'package:reaprime/src/models/device/usb_attach_probe.dart';
 import 'package:reaprime/src/services/serial/serial_service_android.dart';
+import 'package:reaprime/src/services/webserver_service.dart';
 import 'package:rxdart/subjects.dart';
 
 // ignore: depend_on_referenced_packages
@@ -74,6 +76,8 @@ class _FakeMachine implements De1Interface {
   Future<void> disconnect() async {
     disconnectCalls++;
   }
+
+  void setConnectionState(ConnectionState state) => _connectionState.add(state);
 
   @override
   Future<void> dispose() async {}
@@ -326,6 +330,34 @@ void main() {
 
     expect(result, isA<AttachProbeUnsupported>());
     expect(await service.devices.first, isEmpty);
+  });
+
+  test('quick-connect replaces a stale same-ID API entry', () async {
+    final stale = _FakeMachine();
+    final reconnected = _FakeMachine();
+    var detections = 0;
+    listed = [_device()];
+    detection = (_) async => detections++ == 0 ? stale : reconnected;
+    service = build();
+
+    await service.scanForDevices();
+    stale.setConnectionState(ConnectionState.disconnected);
+
+    final result = await service.tryQuickConnect(
+      const RememberedDevice(
+        id: 'usb-2e8a-a-8549628789ABCDEF',
+        name: 'DE1',
+        type: DeviceType.machine,
+        implementation: DeviceImplementation.unifiedDe1,
+        transportType: TransportType.serial,
+      ),
+    );
+    final liveDevices = await service.devices.first;
+    final apiDevices = await buildAvailabilityDeviceList(liveDevices, const []);
+
+    expect(result, same(reconnected));
+    expect(apiDevices, [containsPair('state', 'connected')]);
+    expect(liveDevices, [same(reconnected)]);
   });
 
   for (final order in ['de1-first', 'keyboard-first']) {
