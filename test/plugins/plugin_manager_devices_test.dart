@@ -822,10 +822,12 @@ void main() {
         .map((event) => event['payload'] as String)
         .first;
     manager.js.evaluate('globalThis.performFirstUnregister();');
+    while (manager.js.executePendingJob() > 0) {}
     expect(await unregistered.timeout(const Duration(seconds: 10)), firstId);
     await firstFailure;
     manager.js.evaluate('globalThis.resolveFirst({});');
     manager.js.evaluate('globalThis.resolveSecond({});');
+    while (manager.js.executePendingJob() > 0) {}
     await secondResult.timeout(const Duration(seconds: 10));
     await sensorController.sensorRegistry
         .where((sensors) => !sensors.containsKey(firstId))
