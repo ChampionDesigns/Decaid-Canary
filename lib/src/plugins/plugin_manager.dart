@@ -1319,8 +1319,16 @@ class PluginManager {
     final generation = msg['generation'] is num
         ? (msg['generation'] as num).toInt()
         : 0;
-    if (generation != _pluginGenerations[pluginId] ||
-        _plugins[pluginId]?.isAlive != true) {
+    final type = msg['type'];
+    final current =
+        generation == _pluginGenerations[pluginId] &&
+        _plugins[pluginId]?.isAlive == true;
+    final cleanupTransportClose =
+        type == 'close' &&
+        _lifecycle == PluginManagerLifecycle.active &&
+        _plugins[pluginId]?.state == PluginRuntimeState.stopping &&
+        _deviceDisconnectCleanup.contains((pluginId, generation));
+    if (!current && !cleanupTransportClose) {
       _replyTransport(
         requestId,
         bridgeToken,
@@ -1328,7 +1336,6 @@ class PluginManager {
       );
       return;
     }
-    final type = msg['type'];
     final payload = msg['payload'];
     if (payload is! Map) {
       _replyTransport(

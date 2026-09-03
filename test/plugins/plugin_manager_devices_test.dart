@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/controllers/device_controller.dart';
 import 'package:reaprime/src/controllers/sensor_controller.dart';
@@ -454,4 +456,130 @@ void main() {
         .first;
     expect(deviceController.devices, isEmpty);
   });
+
+  test(
+    'unload lets a device disconnect handler close its own transport',
+    () async {
+      final server = await _startWsServer((ws) {
+        ws.listen((data) {});
+      });
+      final deviceService = PluginDeviceService();
+      final deviceController = DeviceController([deviceService]);
+      await deviceController.initialize();
+      final sensorController = SensorController(controller: deviceController);
+      final manager = PluginManager(
+        kvStore: FakeKeyValueStoreService(),
+        deviceService: deviceService,
+      );
+      addTearDown(() async {
+        await manager.dispose();
+        sensorController.dispose();
+        deviceController.dispose();
+      });
+
+      final registered = manager.emitStream
+          .where((event) => event['event'] == 'registered')
+          .map((event) => event['payload'] as String)
+          .first;
+      await manager.loadPlugin(
+        id: 'cleanup-transport.plugin',
+        manifest: testManifest(
+          'cleanup-transport.plugin',
+          permissions: const {
+            PluginPermissions.emit,
+            PluginPermissions.networkWebsocket,
+          },
+          drivers: const [
+            PluginDriverDeclaration(
+              id: 'humidity',
+              type: PluginDriverType.sensor,
+            ),
+          ],
+        ),
+        settings: const {},
+        jsCode:
+            '''
+        function createPlugin(host) {
+          return {
+            id: "cleanup-transport.plugin",
+            onLoad() {
+              host.devices.register({
+                driverId: "humidity",
+                instanceId: "office",
+                name: "Office humidity",
+                vendor: "Test",
+                dataChannels: [{ key: "relativeHumidity", type: "number" }]
+              }, {
+                connect() {
+                  return host.transport.open({
+                    kind: "websocket",
+                    url: "ws://127.0.0.1:${server.port}/x"
+                  }).then((opened) => {
+                    globalThis.cleanupTransportHandle = opened.handle;
+                    return {};
+                  });
+                },
+                disconnect() {
+                  return host.transport.close(globalThis.cleanupTransportHandle)
+                    .then(() => {
+                      globalThis.disconnectClosed =
+                        (globalThis.disconnectClosed || 0) + 1;
+                      return {};
+                    });
+                },
+                execute() { return {}; }
+              }).then((device) => {
+                globalThis.cleanupDevice = device;
+                host.emit("registered", device.deviceId);
+              });
+            }
+          };
+        }
+      ''',
+      );
+
+      final deviceId = await registered.timeout(const Duration(seconds: 2));
+      final sensor = await sensorController.sensorRegistry
+          .map((sensors) => sensors[deviceId])
+          .where((sensor) => sensor != null)
+          .cast<Sensor>()
+          .first;
+      await sensor.connectionState
+          .where((state) => state == ConnectionState.connected)
+          .first
+          .timeout(const Duration(seconds: 2));
+      expect(manager.liveTransportCount, 1);
+
+      await manager.unloadPlugin('cleanup-transport.plugin');
+
+      expect(
+        manager.js
+            .evaluate('String(globalThis.disconnectClosed || 0)')
+            .stringResult,
+        '1',
+      );
+      expect(manager.liveTransportCount, 0);
+      await sensorController.sensorRegistry
+          .where((sensors) => !sensors.containsKey(deviceId))
+          .first;
+      expect(deviceController.devices, isEmpty);
+    },
+  );
+}
+
+Future<HttpServer> _startWsServer(void Function(WebSocket ws) handler) async {
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  server.listen((req) async {
+    try {
+      if (WebSocketTransformer.isUpgradeRequest(req)) {
+        final ws = await WebSocketTransformer.upgrade(req);
+        handler(ws);
+      } else {
+        req.response.statusCode = 404;
+        await req.response.close();
+      }
+    } catch (_) {}
+  });
+  addTearDown(() => server.close(force: true));
+  return server;
 }
