@@ -74,7 +74,6 @@ class PluginTransportService {
     required Map<String, dynamic> options,
     String? deviceRegistrationHandle,
     String? deviceInvocationId,
-    bool retiredConnectCandidate = false,
   }) async {
     final kind = switch (options['kind']) {
       'websocket' => PluginTransportKind.websocket,
@@ -100,7 +99,6 @@ class PluginTransportService {
       kind: kind,
       deviceRegistrationHandle: deviceRegistrationHandle,
       deviceInvocationId: deviceInvocationId,
-      retiredConnectCandidate: retiredConnectCandidate,
     );
     _records[record.handle] = record;
     try {
@@ -237,6 +235,20 @@ class PluginTransportService {
     }
   }
 
+  void finishDeviceConnect(
+    String pluginId,
+    int generation,
+    String registrationHandle,
+    String invocationId,
+  ) {
+    _retiredDeviceConnects.remove((
+      pluginId,
+      generation,
+      registrationHandle,
+      invocationId,
+    ));
+  }
+
   Future<void> closeDeviceConnect(
     String pluginId,
     int generation,
@@ -255,26 +267,6 @@ class PluginTransportService {
     for (final record in owned) {
       _records.remove(record.handle);
       if (record.terminal) continue;
-      record.terminal = true;
-      await _closeNative(record);
-    }
-  }
-
-  Future<void> closeRetiredConnectCandidates(
-    String pluginId,
-    int generation,
-  ) async {
-    final owned = _records.values
-        .where(
-          (record) =>
-              record.pluginId == pluginId &&
-              record.generation == generation &&
-              record.retiredConnectCandidate &&
-              !record.terminal,
-        )
-        .toList();
-    for (final record in owned) {
-      _records.remove(record.handle);
       record.terminal = true;
       await _closeNative(record);
     }
@@ -680,7 +672,6 @@ class _TransportRecord {
     required this.kind,
     this.deviceRegistrationHandle,
     this.deviceInvocationId,
-    this.retiredConnectCandidate = false,
   });
 
   final String handle;
@@ -689,7 +680,6 @@ class _TransportRecord {
   final PluginTransportKind kind;
   final String? deviceRegistrationHandle;
   final String? deviceInvocationId;
-  final bool retiredConnectCandidate;
 
   WebSocket? webSocket;
   Socket? socket;

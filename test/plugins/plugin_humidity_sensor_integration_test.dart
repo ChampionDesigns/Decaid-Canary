@@ -108,8 +108,8 @@ void main() {
                   }
                 }]
               }, {
-                connect() {
-                  return host.transport.open({
+                connect(transport) {
+                  return transport.open({
                     kind: "websocket",
                     url: "ws://127.0.0.1:${humidityServer.port}/sensor"
                   }).then((opened) => {

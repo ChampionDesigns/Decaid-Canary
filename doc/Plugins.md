@@ -544,8 +544,8 @@ async function registerSensor() {
       }
     ]
   }, {
-    async connect() {
-      const opened = await host.transport.open({
+    async connect(transport) {
+      const opened = await transport.open({
         kind: "websocket",
         url: "ws://sensor.local/readings"
       });
@@ -580,9 +580,12 @@ handle with:
   transport or protocol failure.
 - `unregister()`: removes the sensor from the device inventory.
 
-All three handlers are required. Decaid calls `connect()` when the sensor joins
-the sensor registry; resolving means the driver is ready to serve commands, not
-merely that its transport opened. `disconnect()` performs normal driver cleanup
+All three handlers are required. Decaid calls `connect(transport)` when the
+sensor joins the sensor registry. The invocation-bound `transport` has the same
+methods as `host.transport`; connections opened through it belong to that
+connect attempt across Promise continuations. Resolving means the driver is
+ready to serve commands, not merely that its transport opened. `disconnect()`
+performs normal driver cleanup
 and is run before a device is removed: on explicit `unregister()` and on plugin
 unload, so the driver can release its transport or other resources. A failing or
 timed-out `disconnect()` still removes the device and rejects in-flight

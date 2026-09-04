@@ -529,8 +529,8 @@ void main() {
                 vendor: "Test",
                 dataChannels: [{ key: "relativeHumidity", type: "number" }]
               }, {
-                connect() {
-                  return host.transport.open({
+                connect(transport) {
+                  return transport.open({
                     kind: "websocket",
                     url: "ws://127.0.0.1:${server.port}/x"
                   }).then((opened) => {
@@ -638,8 +638,8 @@ void main() {
                 vendor: "Test",
                 dataChannels: [{ key: "relativeHumidity", type: "number" }]
               }, {
-                connect() {
-                  return host.transport.open({
+                connect(transport) {
+                  return transport.open({
                     kind: "websocket",
                     url: "ws://127.0.0.1:${server.port}/x"
                   }).then((opened) => {
@@ -763,11 +763,11 @@ void main() {
                 vendor: "Test",
                 dataChannels: [{ key: "relativeHumidity", type: "number" }]
               }, {
-                connect() {
+                connect(transport) {
                   globalThis.connectStarted = true;
                   return new Promise((resolve, reject) => {
                     globalThis.releaseConnect = () => {
-                      host.transport.open({
+                      transport.open({
                         kind: "websocket",
                         url: "ws://127.0.0.1:${server.port}/x"
                       }).then((opened) => {
@@ -921,8 +921,8 @@ void main() {
                 vendor: "Test",
                 dataChannels: [{ key: "relativeHumidity", type: "number" }]
               }, {
-                connect() {
-                  return host.transport.open({
+                connect(transport) {
+                  return transport.open({
                     kind: "websocket",
                     url: "ws://127.0.0.1:${server.port}/x"
                   }).then((opened) => {
@@ -1059,12 +1059,12 @@ void main() {
                 vendor: "Test",
                 dataChannels: [{ key: "relativeHumidity", type: "number" }]
               }, {
-                async connect() {
+                async connect(transport) {
                   await new Promise((resolve) => {
                     globalThis.releaseAsyncConnect = resolve;
                   });
                   try {
-                    const opened = await host.transport.open({
+                    const opened = await transport.open({
                       kind: "websocket",
                       url: "ws://127.0.0.1:${server.port}/x"
                     });
@@ -1136,18 +1136,18 @@ void main() {
       );
 
       manager.js.evaluate('globalThis.releaseAsyncConnect();');
-      var connectCompleted = false;
-      for (var i = 0; i < 100 && !connectCompleted; i++) {
+      var connectRejected = false;
+      for (var i = 0; i < 100 && !connectRejected; i++) {
         while (manager.js.executePendingJob() > 0) {}
         final result = manager.js.evaluate(
-          'String(globalThis.connectCompleted || false)',
+          'String(globalThis.connectRejected || false)',
         );
-        connectCompleted = !result.isError && result.stringResult == 'true';
-        if (!connectCompleted) {
+        connectRejected = !result.isError && result.stringResult == 'true';
+        if (!connectRejected) {
           await Future<void>.delayed(const Duration(milliseconds: 10));
         }
       }
-      expect(connectCompleted, isTrue);
+      expect(connectRejected, isTrue);
       for (var i = 0; i < 100 && manager.liveTransportCount != 0; i++) {
         while (manager.js.executePendingJob() > 0) {}
         await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -1164,7 +1164,7 @@ void main() {
   );
 
   test(
-    'retiring one async connect does not claim another device transport',
+    'retired A cannot open a transport while B remains pending and B connects',
     () async {
       final server = await _startWsServer((ws) {
         ws.listen((data) {});
@@ -1209,12 +1209,12 @@ void main() {
           function makeHandlers(instanceKey) {
             let transportHandle;
             return {
-              async connect() {
+              async connect(transport) {
                 await new Promise((resolve) => {
                   globalThis.connectGates[instanceKey] = resolve;
                 });
                 try {
-                  const opened = await host.transport.open({
+                  const opened = await transport.open({
                     kind: "websocket",
                     url: "ws://127.0.0.1:${server.port}/x"
                   });
@@ -1265,16 +1265,6 @@ void main() {
                       devices[key === "office" ? 0 : 1].deviceId
                     );
                   });
-                globalThis.performExtraOpen = () =>
-                  host.transport.open({
-                    kind: "websocket",
-                    url: "ws://127.0.0.1:${server.port}/x"
-                  }).then((opened) => {
-                    globalThis.extraHandle = opened.handle;
-                    globalThis.extraOpened = true;
-                  });
-                globalThis.performExtraClose = () =>
-                  host.transport.close(globalThis.extraHandle);
                 host.emit("registered", devices[0].deviceId);
                 host.emit("registered", devices[1].deviceId);
               });
@@ -1304,22 +1294,10 @@ void main() {
       final labStatesSubscription = lab.connectionState.listen(labStates.add);
       addTearDown(labStatesSubscription.cancel);
       unawaited(office.onConnect().catchError((_) {}));
-      unawaited(lab.onConnect().catchError((_) {}));
       await office.connectionState
           .where((state) => state == ConnectionState.connecting)
           .first
           .timeout(const Duration(seconds: 2));
-      await lab.connectionState
-          .where((state) => state == ConnectionState.connecting)
-          .first
-          .timeout(const Duration(seconds: 2));
-      manager.js.evaluate('globalThis.connectGates.lab();');
-      while (manager.js.executePendingJob() > 0) {}
-      await lab.connectionState
-          .where((state) => state == ConnectionState.connected)
-          .first
-          .timeout(const Duration(seconds: 2));
-      expect(manager.liveTransportCount, 1);
       await office.connectionState
           .where((state) => state == ConnectionState.disconnected)
           .first
@@ -1335,7 +1313,7 @@ void main() {
           .first;
       manager.js.evaluate('globalThis.performUnregister("office");');
       expect(await unregistered.timeout(const Duration(seconds: 2)), officeId);
-      expect(manager.liveTransportCount, 1);
+      expect(manager.liveTransportCount, 0);
       expect(
         manager.js
             .evaluate('String(globalThis.disconnectCounts.office || 0)')
@@ -1348,28 +1326,29 @@ void main() {
                 devices.length == 1 && devices.single.deviceId == labId,
           )
           .first;
-      expect(labStates, contains(ConnectionState.connected));
+      expect(labStates, isNot(contains(ConnectionState.connected)));
 
+      unawaited(lab.onConnect().catchError((_) {}));
+      await lab.connectionState
+          .where((state) => state == ConnectionState.connecting)
+          .first
+          .timeout(const Duration(seconds: 2));
       manager.js.evaluate('globalThis.connectGates.office();');
       while (manager.js.executePendingJob() > 0) {}
-      var officeOpened = false;
-      for (var i = 0; i < 100 && !officeOpened; i++) {
+      var officeRejected = false;
+      for (var i = 0; i < 100 && !officeRejected; i++) {
         while (manager.js.executePendingJob() > 0) {}
         final result = manager.js.evaluate(
           'String(globalThis.connectOutcomes.office || "")',
         );
-        officeOpened = !result.isError && result.stringResult == 'opened';
-        if (!officeOpened) {
+        officeRejected = !result.isError && result.stringResult == 'rejected';
+        if (!officeRejected) {
           await Future<void>.delayed(const Duration(milliseconds: 10));
         }
       }
-      expect(officeOpened, isTrue);
-      for (var i = 0; i < 100 && manager.liveTransportCount != 1; i++) {
-        while (manager.js.executePendingJob() > 0) {}
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-      }
-      expect(manager.liveTransportCount, 1);
-      expect(labStates, contains(ConnectionState.connected));
+      expect(officeRejected, isTrue);
+      expect(manager.liveTransportCount, 0);
+      expect(labStates, isNot(contains(ConnectionState.connected)));
       expect(
         manager.js
             .evaluate('String(globalThis.disconnectCounts.office || 0)')
@@ -1378,35 +1357,26 @@ void main() {
       );
       expect(officeStates, isNot(contains(ConnectionState.connected)));
 
-      manager.js.evaluate('globalThis.performExtraOpen();');
-      var extraOpened = false;
-      for (var i = 0; i < 100 && !extraOpened; i++) {
-        while (manager.js.executePendingJob() > 0) {}
-        final result = manager.js.evaluate(
-          'String(globalThis.extraOpened || false)',
-        );
-        extraOpened = !result.isError && result.stringResult == 'true';
-        if (!extraOpened) {
-          await Future<void>.delayed(const Duration(milliseconds: 10));
-        }
-      }
-      expect(extraOpened, isTrue);
-      expect(manager.liveTransportCount, 2);
-      manager.js.evaluate('globalThis.performExtraClose();');
-      for (var i = 0; i < 100 && manager.liveTransportCount != 1; i++) {
-        while (manager.js.executePendingJob() > 0) {}
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-      }
+      manager.js.evaluate('globalThis.connectGates.lab();');
+      while (manager.js.executePendingJob() > 0) {}
+      await lab.connectionState
+          .where((state) => state == ConnectionState.connected)
+          .first
+          .timeout(const Duration(seconds: 2));
       expect(manager.liveTransportCount, 1);
       expect(labStates, contains(ConnectionState.connected));
     },
   );
 
   test(
-    'unrelated opens and a later device connect survive a retired connect',
+    'persistent unrelated plugin transport stays usable after retired A settles',
     () async {
       final server = await _startWsServer((ws) {
-        ws.listen((data) {});
+        ws.listen((data) {
+          try {
+            ws.add(data);
+          } catch (_) {}
+        });
       });
       final deviceService = PluginDeviceService();
       final deviceController = DeviceController([deviceService]);
@@ -1448,12 +1418,12 @@ void main() {
           function makeHandlers(instanceKey) {
             let transportHandle;
             return {
-              async connect() {
+              async connect(transport) {
                 await new Promise((resolve) => {
                   globalThis.connectGates[instanceKey] = resolve;
                 });
                 try {
-                  const opened = await host.transport.open({
+                  const opened = await transport.open({
                     kind: "websocket",
                     url: "ws://127.0.0.1:${server.port}/x"
                   });
@@ -1507,7 +1477,17 @@ void main() {
                     url: "ws://127.0.0.1:${server.port}/x"
                   }).then((opened) => {
                     globalThis.unrelatedHandle = opened.handle;
+                    host.transport.onEvent(opened.handle, (event) => {
+                      if (event.type === "data" && event.data === "still-live") {
+                        host.emit("unrelated-roundtrip", event.data);
+                      }
+                    });
                     globalThis.unrelatedOpened = true;
+                  });
+                globalThis.performUnrelatedRoundTrip = () =>
+                  host.transport.send(globalThis.unrelatedHandle, {
+                    type: "text",
+                    data: "still-live"
                   });
                 globalThis.performUnrelatedClose = () =>
                   host.transport.close(globalThis.unrelatedHandle);
@@ -1580,46 +1560,22 @@ void main() {
       }
       expect(unrelatedOpened, isTrue);
       expect(manager.liveTransportCount, 1);
-      manager.js.evaluate('globalThis.performUnrelatedClose();');
-      for (var i = 0; i < 100 && manager.liveTransportCount != 0; i++) {
-        while (manager.js.executePendingJob() > 0) {}
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-      }
-      expect(manager.liveTransportCount, 0);
-
-      unawaited(lab.onConnect().catchError((_) {}));
-      await lab.connectionState
-          .where((state) => state == ConnectionState.connecting)
-          .first
-          .timeout(const Duration(seconds: 2));
-      manager.js.evaluate('globalThis.connectGates.lab();');
-      while (manager.js.executePendingJob() > 0) {}
-      await lab.connectionState
-          .where((state) => state == ConnectionState.connected)
-          .first
-          .timeout(const Duration(seconds: 2));
-      expect(manager.liveTransportCount, 1);
 
       manager.js.evaluate('globalThis.connectGates.office();');
       while (manager.js.executePendingJob() > 0) {}
-      var officeOpened = false;
-      for (var i = 0; i < 100 && !officeOpened; i++) {
+      var officeRejected = false;
+      for (var i = 0; i < 100 && !officeRejected; i++) {
         while (manager.js.executePendingJob() > 0) {}
         final result = manager.js.evaluate(
           'String(globalThis.connectOutcomes.office || "")',
         );
-        officeOpened = !result.isError && result.stringResult == 'opened';
-        if (!officeOpened) {
+        officeRejected = !result.isError && result.stringResult == 'rejected';
+        if (!officeRejected) {
           await Future<void>.delayed(const Duration(milliseconds: 10));
         }
       }
-      expect(officeOpened, isTrue);
-      for (var i = 0; i < 100 && manager.liveTransportCount != 1; i++) {
-        while (manager.js.executePendingJob() > 0) {}
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-      }
+      expect(officeRejected, isTrue);
       expect(manager.liveTransportCount, 1);
-      expect(labStates, contains(ConnectionState.connected));
       expect(officeStates, isNot(contains(ConnectionState.connected)));
       expect(
         manager.js
@@ -1627,6 +1583,21 @@ void main() {
             .stringResult,
         '1',
       );
+
+      final roundTrip = manager.emitStream
+          .where((event) => event['event'] == 'unrelated-roundtrip')
+          .map((event) => event['payload'] as String)
+          .first;
+      manager.js.evaluate('globalThis.performUnrelatedRoundTrip();');
+      expect(await roundTrip.timeout(const Duration(seconds: 2)), 'still-live');
+      expect(manager.liveTransportCount, 1);
+
+      manager.js.evaluate('globalThis.performUnrelatedClose();');
+      for (var i = 0; i < 100 && manager.liveTransportCount != 0; i++) {
+        while (manager.js.executePendingJob() > 0) {}
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(manager.liveTransportCount, 0);
     },
   );
 
@@ -1682,8 +1653,8 @@ void main() {
                 vendor: "Test",
                 dataChannels: [{ key: "relativeHumidity", type: "number" }]
               }, {
-                connect() {
-                  return host.transport.open({
+                connect(transport) {
+                  return transport.open({
                     kind: "websocket",
                     url: "ws://127.0.0.1:${server.port}/x"
                   }).then((opened) => {
@@ -1805,11 +1776,11 @@ void main() {
                 vendor: "Test",
                 dataChannels: [{ key: "relativeHumidity", type: "number" }]
               }, {
-                connect() {
+                connect(transport) {
                   globalThis.connectStarted = true;
                   return new Promise((resolve) => {
                     globalThis.continueConnect = () => {
-                      host.transport.open({
+                      transport.open({
                         kind: "websocket",
                         url: "ws://127.0.0.1:${server.port}/x"
                       }).then((opened) => {
