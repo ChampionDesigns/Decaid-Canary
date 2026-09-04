@@ -114,6 +114,7 @@ class PluginManager {
   >
   _deviceConnectAttempts = {};
   final Map<(String, int, String), Set<String>> _timedOutDeviceConnects = {};
+  final Map<(String, int), Set<String>> _retiredDeviceConnectInvocations = {};
   int _deviceInvocationSequence = 0;
 
   final Set<(String, int)> _deviceDisconnectCleanup = {};
@@ -227,6 +228,7 @@ class PluginManager {
       _deviceDisconnectCleanup.clear();
       _deviceConnectAttempts.clear();
       _timedOutDeviceConnects.clear();
+      _retiredDeviceConnectInvocations.clear();
       _pluginStorageOperations.clear();
       _pluginBridgeTokens.clear();
       _pluginIdsByBridgeToken.clear();
@@ -739,23 +741,15 @@ class PluginManager {
             });
             return;
           }
-          const previousDeviceConnect = __activeDeviceConnect;
-          const connectContext = operation === "connect"
-            ? { registrationHandle: handle, invocationId: invocationId }
-            : null;
           try {
+            const previousDeviceConnect = __activeDeviceConnect;
             let handlerResult;
             try {
-              __activeDeviceConnect = connectContext;
+              __activeDeviceConnect = operation === "connect"
+                ? { registrationHandle: handle, invocationId: invocationId }
+                : null;
               handlerResult = handler(payload);
-            } catch (error) {
-              __activeDeviceConnect = previousDeviceConnect;
-              throw error;
-            }
-            const keepsDeviceConnectContext =
-              connectContext && handlerResult &&
-              typeof handlerResult.then === "function";
-            if (!keepsDeviceConnectContext) {
+            } finally {
               __activeDeviceConnect = previousDeviceConnect;
             }
             const promise = __nativeReflectApply(
@@ -764,36 +758,20 @@ class PluginManager {
               [handlerResult]
             );
             __nativeReflectApply(__nativePromiseThen, promise, [
-              (result) => {
-                if (keepsDeviceConnectContext &&
-                    __activeDeviceConnect === connectContext) {
-                  __activeDeviceConnect = previousDeviceConnect;
-                }
-                __sendDeviceMessage({
-                  bridgeToken: entry.bridgeToken,
-                  generation: generation,
-                  type: "invocationResult",
-                  payload: { invocationId: invocationId, result: result }
-                });
-              },
-              (error) => {
-                if (keepsDeviceConnectContext &&
-                    __activeDeviceConnect === connectContext) {
-                  __activeDeviceConnect = previousDeviceConnect;
-                }
-                __sendDeviceMessage({
-                  bridgeToken: entry.bridgeToken,
-                  generation: generation,
-                  type: "invocationResult",
-                  payload: { invocationId: invocationId, error: String(error) }
-                });
-              }
+              (result) => __sendDeviceMessage({
+                bridgeToken: entry.bridgeToken,
+                generation: generation,
+                type: "invocationResult",
+                payload: { invocationId: invocationId, result: result }
+              }),
+              (error) => __sendDeviceMessage({
+                bridgeToken: entry.bridgeToken,
+                generation: generation,
+                type: "invocationResult",
+                payload: { invocationId: invocationId, error: String(error) }
+              })
             ]);
-            return;
           } catch (error) {
-            if (__activeDeviceConnect === connectContext) {
-              __activeDeviceConnect = previousDeviceConnect;
-            }
             __sendDeviceMessage({
               bridgeToken: entry.bridgeToken,
               generation: generation,
@@ -1143,6 +1121,19 @@ class PluginManager {
       return;
     }
     if (type == 'invocationResult') {
+      if (invocationId is String) {
+        _timedOutDeviceConnects.removeWhere(
+          (_, ids) => ids.remove(invocationId) && ids.isEmpty,
+        );
+        final retired =
+            _retiredDeviceConnectInvocations[(pluginId, generation)];
+        if (retired != null) {
+          retired.remove(invocationId);
+          if (retired.isEmpty) {
+            _retiredDeviceConnectInvocations.remove((pluginId, generation));
+          }
+        }
+      }
       if ((generation != _pluginGenerations[pluginId] ||
               _plugins[pluginId]?.isAlive != true) &&
           !cleanupInvocation) {
@@ -1304,6 +1295,9 @@ class PluginManager {
           registrationHandle,
           connectInvocationId,
         );
+        _retiredDeviceConnectInvocations
+            .putIfAbsent((pluginId, generation), () => <String>{})
+            .add(connectInvocationId);
       }
     }
     final invocationId =
@@ -1536,6 +1530,17 @@ class PluginManager {
               requestId,
               bridgeToken,
               error: _permissionError(pluginId, permission),
+            );
+            return;
+          }
+          if (!ownsDeviceConnect &&
+              _retiredDeviceConnectInvocations[(pluginId, generation)]
+                      ?.isNotEmpty ==
+                  true) {
+            _replyTransport(
+              requestId,
+              bridgeToken,
+              error: 'Plugin device connect retired',
             );
             return;
           }
@@ -2041,6 +2046,9 @@ class PluginManager {
             attempt.pluginId == id && attempt.generation == retiringGeneration,
       );
       _timedOutDeviceConnects.removeWhere(
+        (key, _) => key.$1 == id && key.$2 == retiringGeneration,
+      );
+      _retiredDeviceConnectInvocations.removeWhere(
         (key, _) => key.$1 == id && key.$2 == retiringGeneration,
       );
       _removePluginBridgeToken(id);

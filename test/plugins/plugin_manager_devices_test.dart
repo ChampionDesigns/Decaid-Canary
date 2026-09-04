@@ -1131,6 +1131,12 @@ void main() {
       expect(connectorCalls, 0);
       await deviceService.devices.where((devices) => devices.isEmpty).first;
       expect(deviceController.devices, isEmpty);
+      expect(
+        manager.js
+            .evaluate('String(globalThis.disconnectCalls || 0)')
+            .stringResult,
+        '1',
+      );
 
       manager.js.evaluate('globalThis.releaseAsyncConnect();');
       var connectRejected = false;
@@ -1153,6 +1159,246 @@ void main() {
       );
       expect(manager.liveTransportCount, 0);
       expect(states, isNot(contains(ConnectionState.connected)));
+      expect(
+        manager.js
+            .evaluate('String(globalThis.disconnectCalls || 0)')
+            .stringResult,
+        '1',
+      );
+    },
+  );
+
+  test(
+    'retiring one async connect does not claim another device transport',
+    () async {
+      final server = await _startWsServer((ws) {
+        ws.listen((data) {});
+      });
+      final deviceService = PluginDeviceService();
+      final deviceController = DeviceController([deviceService]);
+      await deviceController.initialize();
+      final manager = PluginManager(
+        kvStore: FakeKeyValueStoreService(),
+        deviceService: deviceService,
+        deviceInvocationTimeout: const Duration(milliseconds: 60),
+      );
+      addTearDown(() async {
+        await manager.dispose();
+        deviceController.dispose();
+      });
+
+      final registered = manager.emitStream
+          .where((event) => event['event'] == 'registered')
+          .map((event) => event['payload'] as String)
+          .take(2)
+          .toList();
+      await manager.loadPlugin(
+        id: 'overlap-connect.plugin',
+        manifest: testManifest(
+          'overlap-connect.plugin',
+          permissions: const {
+            PluginPermissions.emit,
+            PluginPermissions.networkWebsocket,
+          },
+          drivers: const [
+            PluginDriverDeclaration(
+              id: 'humidity',
+              type: PluginDriverType.sensor,
+            ),
+          ],
+        ),
+        settings: const {},
+        jsCode:
+            '''
+        function createPlugin(host) {
+          function makeHandlers(instanceKey) {
+            let transportHandle;
+            return {
+              async connect() {
+                await new Promise((resolve) => {
+                  globalThis.connectGates[instanceKey] = resolve;
+                });
+                try {
+                  const opened = await host.transport.open({
+                    kind: "websocket",
+                    url: "ws://127.0.0.1:${server.port}/x"
+                  });
+                  transportHandle = opened.handle;
+                  globalThis.connectOutcomes[instanceKey] = "opened";
+                  return {};
+                } catch (error) {
+                  globalThis.connectOutcomes[instanceKey] = "rejected";
+                  throw error;
+                }
+              },
+              disconnect() {
+                const handle = transportHandle;
+                transportHandle = null;
+                globalThis.disconnectCounts[instanceKey] =
+                  (globalThis.disconnectCounts[instanceKey] || 0) + 1;
+                return handle
+                  ? host.transport.close(handle)
+                  : Promise.resolve();
+              },
+              execute() { return {}; }
+            };
+          }
+          return {
+            id: "overlap-connect.plugin",
+            onLoad() {
+              globalThis.connectGates = {};
+              globalThis.connectOutcomes = {};
+              globalThis.disconnectCounts = {};
+              const define = (instanceId) => ({
+                driverId: "humidity",
+                instanceId: instanceId,
+                name: "Humidity " + instanceId,
+                vendor: "Test",
+                dataChannels: [{ key: "relativeHumidity", type: "number" }]
+              });
+              Promise.all([
+                host.devices.register(
+                  define("office"),
+                  makeHandlers("office")
+                ),
+                host.devices.register(define("lab"), makeHandlers("lab"))
+              ]).then((devices) => {
+                globalThis.performUnregister = (key) =>
+                  devices[key === "office" ? 0 : 1].unregister().then(() => {
+                    host.emit(
+                      "unregistered",
+                      devices[key === "office" ? 0 : 1].deviceId
+                    );
+                  });
+                globalThis.performExtraOpen = () =>
+                  host.transport.open({
+                    kind: "websocket",
+                    url: "ws://127.0.0.1:${server.port}/x"
+                  }).then((opened) => {
+                    globalThis.extraHandle = opened.handle;
+                    globalThis.extraOpened = true;
+                  });
+                globalThis.performExtraClose = () =>
+                  host.transport.close(globalThis.extraHandle);
+                host.emit("registered", devices[0].deviceId);
+                host.emit("registered", devices[1].deviceId);
+              });
+            }
+          };
+        }
+      ''',
+      );
+
+      final ids = await registered.timeout(const Duration(seconds: 2));
+      final officeId = ids.firstWhere((id) => id.endsWith(':office'));
+      final labId = ids.firstWhere((id) => id.endsWith(':lab'));
+      final sensors = await deviceService.devices
+          .where((devices) => devices.length == 2)
+          .first;
+      final office =
+          sensors.singleWhere((device) => device.deviceId == officeId)
+              as Sensor;
+      final lab =
+          sensors.singleWhere((device) => device.deviceId == labId) as Sensor;
+      final officeStates = <ConnectionState>[];
+      final officeStatesSubscription = office.connectionState.listen(
+        officeStates.add,
+      );
+      addTearDown(officeStatesSubscription.cancel);
+      final labStates = <ConnectionState>[];
+      final labStatesSubscription = lab.connectionState.listen(labStates.add);
+      addTearDown(labStatesSubscription.cancel);
+      unawaited(office.onConnect().catchError((_) {}));
+      unawaited(lab.onConnect().catchError((_) {}));
+      await office.connectionState
+          .where((state) => state == ConnectionState.connecting)
+          .first
+          .timeout(const Duration(seconds: 2));
+      await lab.connectionState
+          .where((state) => state == ConnectionState.connecting)
+          .first
+          .timeout(const Duration(seconds: 2));
+
+      manager.js.evaluate('globalThis.connectGates.lab();');
+      await lab.connectionState
+          .where((state) => state == ConnectionState.connected)
+          .first
+          .timeout(const Duration(seconds: 2));
+      expect(manager.liveTransportCount, 1);
+      await office.connectionState
+          .where((state) => state == ConnectionState.disconnected)
+          .first
+          .timeout(const Duration(seconds: 2));
+
+      final unregistered = manager.emitStream
+          .where(
+            (event) =>
+                event['event'] == 'unregistered' &&
+                event['payload'] == officeId,
+          )
+          .map((event) => event['payload'] as String)
+          .first;
+      manager.js.evaluate('globalThis.performUnregister("office");');
+      expect(await unregistered.timeout(const Duration(seconds: 2)), officeId);
+      expect(manager.liveTransportCount, 1);
+      expect(
+        manager.js
+            .evaluate('String(globalThis.disconnectCounts.office || 0)')
+            .stringResult,
+        '1',
+      );
+      await deviceService.devices
+          .where(
+            (devices) =>
+                devices.length == 1 && devices.single.deviceId == labId,
+          )
+          .first;
+      expect(labStates, contains(ConnectionState.connected));
+
+      manager.js.evaluate('globalThis.connectGates.office();');
+      var officeRejected = false;
+      for (var i = 0; i < 100 && !officeRejected; i++) {
+        while (manager.js.executePendingJob() > 0) {}
+        final result = manager.js.evaluate(
+          'String(globalThis.connectOutcomes.office || "")',
+        );
+        officeRejected = !result.isError && result.stringResult == 'rejected';
+        if (!officeRejected) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      }
+      expect(officeRejected, isTrue);
+      expect(manager.liveTransportCount, 1);
+      expect(labStates, contains(ConnectionState.connected));
+      expect(
+        manager.js
+            .evaluate('String(globalThis.disconnectCounts.office || 0)')
+            .stringResult,
+        '1',
+      );
+      expect(officeStates, isNot(contains(ConnectionState.connected)));
+
+      manager.js.evaluate('globalThis.performExtraOpen();');
+      var extraOpened = false;
+      for (var i = 0; i < 100 && !extraOpened; i++) {
+        while (manager.js.executePendingJob() > 0) {}
+        final result = manager.js.evaluate(
+          'String(globalThis.extraOpened || false)',
+        );
+        extraOpened = !result.isError && result.stringResult == 'true';
+        if (!extraOpened) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      }
+      expect(extraOpened, isTrue);
+      expect(manager.liveTransportCount, 2);
+      manager.js.evaluate('globalThis.performExtraClose();');
+      for (var i = 0; i < 100 && manager.liveTransportCount != 1; i++) {
+        while (manager.js.executePendingJob() > 0) {}
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(manager.liveTransportCount, 1);
+      expect(labStates, contains(ConnectionState.connected));
     },
   );
 
