@@ -257,7 +257,9 @@ class _PluginSensor implements Sensor {
       StreamController.broadcast();
   Future<void>? _connecting;
   Future<void>? _disconnectCleanup;
+  int? _disconnectCleanupEpoch;
   int _connectionEpoch = 0;
+  int _connectionFence = 0;
   bool _disposed = false;
 
   @override
@@ -289,19 +291,38 @@ class _PluginSensor implements Sensor {
     if (_disposed || _connectionState.value == ConnectionState.connected) {
       return Future.value();
     }
-    return _connecting ??= _connect().whenComplete(() => _connecting = null);
+    return _connecting ??= _connectAfterCleanup().whenComplete(
+      () => _connecting = null,
+    );
+  }
+
+  Future<void> _connectAfterCleanup() async {
+    final cleanup = _disconnectCleanup;
+    final cleanupFence = _connectionFence;
+    if (cleanup != null) {
+      try {
+        await cleanup;
+      } catch (_) {}
+      if (cleanupFence != _connectionFence) return;
+      if (identical(_disconnectCleanup, cleanup)) {
+        _disconnectCleanup = null;
+        _disconnectCleanupEpoch = null;
+      }
+    }
+    await _connect();
   }
 
   Future<void> _connect() async {
-    final epoch = ++_connectionEpoch;
+    ++_connectionEpoch;
+    final fence = ++_connectionFence;
     _connectionState.add(ConnectionState.connecting);
     try {
       await _invoke(PluginDeviceOperation.connect, const {});
-      if (!_disposed && epoch == _connectionEpoch) {
+      if (!_disposed && fence == _connectionFence) {
         _connectionState.add(ConnectionState.connected);
       }
     } catch (_) {
-      if (!_disposed && epoch == _connectionEpoch) {
+      if (!_disposed && fence == _connectionFence) {
         _connectionState.add(ConnectionState.disconnected);
       }
       rethrow;
@@ -311,18 +332,35 @@ class _PluginSensor implements Sensor {
   @override
   Future<void> disconnect() {
     if (_disposed) return Future.value();
-    return _disconnectCleanup ??= _runDisconnectCleanup();
+    final epoch = _connectionEpoch;
+    final existing = _disconnectCleanup;
+    if (existing != null && _disconnectCleanupEpoch == epoch) {
+      if (_connecting != null) _connectionFence += 1;
+      return existing;
+    }
+    final cleanup = _runDisconnectCleanup(epoch);
+    _disconnectCleanup = cleanup;
+    _disconnectCleanupEpoch = epoch;
+    return cleanup;
   }
 
-  Future<void> _runDisconnectCleanup() async {
-    _connectionEpoch += 1;
+  Future<void> _runDisconnectCleanup(int epoch) async {
+    final connecting = _connecting;
+    _connectionFence += 1;
     if (_connectionState.value != ConnectionState.disconnected) {
       _connectionState.add(ConnectionState.disconnecting);
+    }
+    if (connecting != null) {
+      try {
+        await connecting;
+      } catch (_) {}
     }
     try {
       await _invoke(PluginDeviceOperation.disconnect, const {});
     } finally {
-      if (!_disposed) _connectionState.add(ConnectionState.disconnected);
+      if (!_disposed && epoch == _connectionEpoch) {
+        _connectionState.add(ConnectionState.disconnected);
+      }
     }
   }
 
@@ -370,14 +408,14 @@ class _PluginSensor implements Sensor {
 
   void reportDisconnected() {
     if (_disposed) return;
-    _connectionEpoch += 1;
+    _connectionFence += 1;
     _connectionState.add(ConnectionState.disconnected);
   }
 
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
-    _connectionEpoch += 1;
+    _connectionFence += 1;
     await _data.close();
     await _connectionState.close();
   }

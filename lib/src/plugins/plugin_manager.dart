@@ -735,7 +735,7 @@ class PluginManager {
                 bridgeToken: entry.bridgeToken,
                 generation: generation,
                 type: "invocationResult",
-                payload: { invocationId: invocationId, result: result || {} }
+                payload: { invocationId: invocationId, result: result }
               }),
               (error) => __sendDeviceMessage({
                 bridgeToken: entry.bridgeToken,
@@ -1177,7 +1177,10 @@ class PluginManager {
             generation,
             'Plugin device unregistered',
             registrationHandle: registrationHandle,
-            excludeOperation: PluginDeviceOperation.disconnect,
+            excludeOperations: {
+              PluginDeviceOperation.connect,
+              PluginDeviceOperation.disconnect,
+            },
           );
           await deviceService.unregister(
             pluginId: pluginId,
@@ -1290,10 +1293,12 @@ class PluginManager {
       pending.completer.completeError(PluginDeviceException(error.toString()));
       return;
     }
-    final result = payload['result'];
-    if (result == null) {
+    if (pending.operation != PluginDeviceOperation.execute) {
       pending.completer.complete(const {});
-    } else if (result is Map) {
+      return;
+    }
+    final result = payload['result'];
+    if (result is Map) {
       pending.completer.complete(Map<String, dynamic>.from(result));
     } else {
       pending.completer.completeError(
@@ -1309,7 +1314,7 @@ class PluginManager {
     int generation,
     String reason, {
     String? registrationHandle,
-    PluginDeviceOperation? excludeOperation,
+    Set<PluginDeviceOperation>? excludeOperations,
   }) {
     final ids = _pendingDeviceInvocations.entries
         .where(
@@ -1318,8 +1323,8 @@ class PluginManager {
               entry.value.generation == generation &&
               (registrationHandle == null ||
                   entry.value.registrationHandle == registrationHandle) &&
-              (excludeOperation == null ||
-                  entry.value.operation != excludeOperation),
+              (excludeOperations == null ||
+                  !excludeOperations.contains(entry.value.operation)),
         )
         .map((entry) => entry.key)
         .toList();
@@ -1941,6 +1946,7 @@ class PluginManager {
         pluginId,
         retiringGeneration,
         'Plugin unloaded',
+        excludeOperations: const {PluginDeviceOperation.connect},
       ),
     );
     _deviceDisconnectCleanup.add((pluginId, retiringGeneration));
