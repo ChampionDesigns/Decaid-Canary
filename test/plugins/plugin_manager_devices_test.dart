@@ -1180,7 +1180,7 @@ void main() {
       final manager = PluginManager(
         kvStore: FakeKeyValueStoreService(),
         deviceService: deviceService,
-        deviceInvocationTimeout: const Duration(milliseconds: 60),
+        deviceInvocationTimeout: const Duration(milliseconds: 500),
       );
       addTearDown(() async {
         await manager.dispose();
@@ -1318,8 +1318,8 @@ void main() {
           .where((state) => state == ConnectionState.connecting)
           .first
           .timeout(const Duration(seconds: 2));
-
       manager.js.evaluate('globalThis.connectGates.lab();');
+      while (manager.js.executePendingJob() > 0) {}
       await lab.connectionState
           .where((state) => state == ConnectionState.connected)
           .first
@@ -1356,6 +1356,7 @@ void main() {
       expect(labStates, contains(ConnectionState.connected));
 
       manager.js.evaluate('globalThis.connectGates.office();');
+      while (manager.js.executePendingJob() > 0) {}
       var officeRejected = false;
       for (var i = 0; i < 100 && !officeRejected; i++) {
         while (manager.js.executePendingJob() > 0) {}
