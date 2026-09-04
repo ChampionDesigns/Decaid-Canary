@@ -153,7 +153,48 @@ temporary real-hardware tuning builds where debug endpoints must be reachable.
 
 **Fix:** Finite 500ms per-chunk write timeout + bail on zero-progress, `drainWithTimeout` polling `bytesToWrite`.
 
-## Footgun #3: iOS file picker returns unreadable security-scoped folders
+## Bengle EBus tap (hardware verification)
+
+Decaid identifies the tap by VID `0x2e8a`, PID `0x000a`, the exact USB
+product name `Bengle`, and logical USB interface `2`; it never relies on
+unstable device paths. VID/PID are shared Pico SDK identifiers, so the product
+name is required to reject other Pico boards. Interface `0` remains
+the Bengle machine with its existing stable ID. Discovery must not probe or
+write to the tap.
+
+The Sensor behavior contract — raw bytes, DTR, and single-reader ownership —
+lives in [`doc/DeviceManagement.md`](DeviceManagement.md#bengle-ebus-tap).
+
+**Hardware checks not covered by unit tests:**
+
+1. The machine and tap appear with distinct IDs and connect concurrently.
+2. Unplug removes only the detached physical device's logical entries; replug
+   rediscovers them.
+3. Android opens bulk-data interface `3` for logical interface `2`; devices
+   with duplicate USB descriptors receive distinct session IDs.
+4. Raw Sensor snapshots remain byte-exact and discovery performs no writes.
+
+Platform results must be observed independently on each claimed platform.
+
+## Footgun #3: `codesign --deep` destroys Sparkle's Installer XPC
+
+**Symptom:** After a signed/notarized update, Sparkle's "Update failed" alert or a silent failure to relaunch. The app builds and notarizes fine.
+
+**Root cause:** `codesign --deep --force --entitlements <host.plist>` re-signs every nested binary (Sparkle.framework, Installer.xpc, Updater.app, Autoupdate) with the HOST's entitlements. The sandboxed Installer XPC service needs its own embedded entitlements; clobbering them breaks the sandbox escape that replaces the app in `/Applications`. Sparkle explicitly warns against `--deep`.
+
+**Fix:** `scripts/sign_macos_deepest_first.sh` signs Sparkle's nested helpers deepest-first (`Installer.xpc` → `Downloader.xpc` → `Updater.app` → `Autoupdate` → framework → host), each without `--entitlements` so existing embedded entitlements survive; only the host app gets `Release.entitlements`. Gates in `scripts/verify_macos_signature.sh` (Team ID, Hardened Runtime, mach-lookup names, no `get-task-allow`) run before and after notarization.
+
+## Footgun #4: `codesign` does not expand `$(PRODUCT_BUNDLE_IDENTIFIER)`
+
+**Symptom:** The signed app's entitlements contain the literal string `$(PRODUCT_BUNDLE_IDENTIFIER)-spks`, so Sparkle's XPC lookup fails (the XPC registers as `net.tadel.reaprime-spks`).
+
+**Root cause:** `codesign --entitlements` takes the file as-is; Xcode build-variable expansion happens only in Xcode's own signing step. The signing script sed-expands the bundle id before signing (see `scripts/sign_macos_deepest_first.sh`).
+
+**Fix:** Never hand `Release.entitlements` to `codesign` unexpanded. The verification script also greps for the unexpanded variable.
+
+**Note (App Store):** `com.apple.security.temporary-exception.mach-lookup.global-name` is not permitted in Mac App Store builds. Any future `APP_STORE=true` macOS build must drop the Sparkle keys/entitlements and keep self-update disabled.
+
+## Footgun #5: iOS file picker returns unreadable security-scoped folders
 
 **Symptom:** On iOS, installing a plugin (or importing a de1app folder, skin live-edit, data restore) via the file picker fails with `PathAccessException: Directory listing failed ... (OS Error: Operation not permitted, errno = 1)`. The picked path lives under `Mobile Documents/com~apple~CloudDocs/...` (iCloud Drive) or another app's sandbox — outside our container.
 

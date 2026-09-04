@@ -32,6 +32,12 @@ A Decaid plugin consists of two required files:
     "pluginStorage",
     "events.machine"
   ],
+  "drivers": [
+    {
+      "id": "humidity",
+      "type": "sensor"
+    }
+  ],
   "settings": {
     "SettingName": {
       "type": "string",
@@ -74,6 +80,10 @@ A Decaid plugin consists of two required files:
   - `events.shots`: Receive `shotStored` and `shotUpdated`
   - `proxy.decent_api`: Send read requests through `host.decentProxy`
   - `proxy.decent_api.write`: Send allowlisted write requests through `host.decentProxy`
+  - `network.websocket`: Open outbound WebSocket connections (`ws://` and `wss://`) through `host.transport`
+  - `network.tcp`: Open outbound raw TCP connections through `host.transport`
+  - `network.tls`: Open outbound TLS connections (platform trust store) through `host.transport`
+- **drivers**: Device classes the plugin may register. Each declaration has a plugin-local `id` and a `type`. The only currently supported type is `sensor`. A manifest may declare at most 8 drivers. Driver declarations authorize registration; they do not grant transport access. For example, a WebSocket-backed sensor also needs `network.websocket`.
 - **settings**: User-configurable options with `type` (`string`, `number`, `boolean`, `enum`), an optional `label` giving the setting a human-friendly name, an optional `description` explaining what the setting does, an optional `default`, and an optional `secure` flag for credentials such as passwords. Enum `values` are a JSON array of strings. Secure values use platform credential storage, are supplied in memory to `onLoad(settings)`, and are never returned by the REST API.
 
   `GET /api/v1/plugins` returns this schema verbatim under `settings`, so a skin can render a settings form — labels, help text and defaults included — without reading the plugin's repository. `GET /api/v1/plugins/:id/settings` returns the stored values only.
@@ -351,6 +361,312 @@ subject; accept a `return` parameter for the way back.
 Treat every parameter as untrusted input: use it as a lookup key against the
 REST API, never interpolate it into generated HTML unescaped, and fall back to
 the page's normal empty state when the value names nothing.
+## Network Transports (`host.transport`)
+
+`host.transport` exposes permission-gated outbound network transports: WebSocket
+(`ws://` / `wss://`), raw TCP and raw TLS. Decaid owns connection lifecycle,
+permission enforcement, resource bounds and native cleanup; plugins and bundled
+JavaScript libraries implement higher-level protocols such as MQTT on top of
+these primitives.
+
+Each transport requires its own manifest permission:
+
+| `kind` | Permission | Notes |
+|--------|------------|-------|
+| `websocket` | `network.websocket` | `ws://` and `wss://`; `wss://` uses normal platform certificate validation and does **not** require `network.tls` |
+| `tcp` | `network.tcp` | raw byte stream |
+| `tls` | `network.tls` | raw byte stream over TLS using the platform trust store only |
+
+Permission failure rejects the `open()` call with a `PluginPermissionError`
+before any DNS lookup or connection attempt. No unrestricted global `WebSocket`
+or socket object exists in the JavaScript runtime; all network access goes
+through `host.transport`.
+
+### `host.transport.open(options)`
+
+Resolves once the connection is established, with `{ handle, protocol }`. The
+`handle` is an opaque string owned by the plugin id + generation that opened it.
+`protocol` is present for WebSocket only, when a subprotocol was negotiated.
+
+```js
+const opened = await host.transport.open({
+  kind: "websocket",
+  url: "wss://broker.example/mqtt",
+  protocols: ["mqtt"]          // optional WebSocket subprotocols
+});
+const handle = opened.handle;
+
+const { handle: tcpHandle } = await host.transport.open({
+  kind: "tcp",
+  host: "192.168.1.10",
+  port: 1883
+});
+
+const { handle: tlsHandle } = await host.transport.open({
+  kind: "tls",
+  host: "broker.example",
+  port: 8883
+});
+```
+
+WebSocket options: `kind: "websocket"`, `url` (required, `ws://` or `wss://`),
+`protocols` (optional array of subprotocol strings). Arbitrary custom WebSocket
+headers are not supported.
+
+TCP/TLS options: `kind: "tcp"`/`"tls"`, `host` (required hostname/IP),
+`port` (required integer 1..65535). Custom CA material and client
+certificates are out of scope; TLS uses the platform trust store only.
+
+Connection failures before establishment reject the `open()` Promise.
+
+### `host.transport.onEvent(handle, callback)`
+
+Registers the single event listener for a handle. Calling it again replaces the
+previous listener. Events that arrive after `open()` resolves but before a
+listener is registered are retained in the bounded inbound queue and delivered
+in order once the listener is registered.
+
+Data events:
+
+```js
+// WebSocket text frame
+{ type: "data", dataType: "text", data: "plain text payload" }
+
+// WebSocket binary frame, TCP bytes or TLS bytes (base64)
+{ type: "data", dataType: "binary", data: "<base64>" }
+```
+
+TCP and TLS are byte streams and only emit `dataType: "binary"`. Text encoding,
+line framing and request/response semantics belong to plugin/library adapters.
+
+Error events (failures after the connection opened):
+
+```js
+{ type: "error", code: "transport_error", message: "human-readable description" }
+```
+
+Resource-limit failures use `code: "transport_resource_limit"`. A terminal
+transport error is followed by deterministic cleanup; a close event may follow.
+
+Close events:
+
+```js
+{ type: "close", code: 1000, reason: "..." }  // code/reason omitted when unavailable
+```
+
+Successful `open()` resolution is the connection-open notification; there is no
+separate `open` event.
+
+### `host.transport.send(handle, payload)`
+
+Returns a Promise. WebSocket text send:
+
+```js
+await host.transport.send(handle, { type: "text", data: "hello" });
+```
+
+WebSocket binary, TCP and TLS send:
+
+```js
+await host.transport.send(handle, { type: "binary", data: "<base64>" });
+```
+
+For TCP/TLS, `type: "text"` is invalid; adapters must encode text to bytes
+themselves. Binary data crosses the JS/Dart bridge as base64; WebSocket text
+frames remain plain strings and are never base64 encoded.
+
+The Promise resolves once the complete payload is accepted into the native
+transport's bounded outbound write path. It does **not** mean the remote peer
+received the payload. A send is atomic with respect to the queue limit: if
+accepting the whole payload would exceed the outbound limit, the complete send
+rejects with `error.code === "transport_resource_limit"`; nothing is partially
+enqueued or silently dropped.
+
+### `host.transport.close(handle)`
+
+Returns a Promise that resolves after the native transport is closed and the
+handle has been released. Already-accepted outbound frames are written before
+the connection is closed; new sends after `close()` reject. Closing an
+already-closed or stale handle may reject with a normal transport error; it
+never affects another plugin or another generation of the same plugin.
+
+### Resource bounds
+
+- Maximum **8 live transports per plugin generation** (connecting, open and
+  closing all count; a transport closed by the peer before `onEvent()` was
+  registered also counts until its queued events are delivered). Opening one
+  more rejects with `transport_resource_limit`.
+- Maximum **1 MiB pending outbound data per transport**. A send that would
+  exceed this rejects atomically with `transport_resource_limit`.
+- Maximum **1 MiB queued inbound data per transport** waiting for JS delivery.
+  Exceeding it closes that transport with a `transport_resource_limit` error;
+  data is never silently discarded to stay under the bound.
+
+### Lifecycle and ownership
+
+Every handle is owned by the plugin id + plugin generation that opened it: a
+handle cannot be used by another plugin, and cannot be reused by a newer
+generation after a plugin reload. Stale native events from retired generations
+are dropped. Plugin unload closes all transports owned by that generation even
+if the plugin's `onUnload()` throws or never closes its connections, and
+`PluginManager` disposal closes everything remaining. Localhost, LAN and
+private-address destinations are allowed; there is no hostname/CIDR allow-list.
+
+### Examples
+
+WebSocket text echo:
+
+```js
+const opened = await host.transport.open({
+  kind: "websocket",
+  url: "ws://broker.example/echo"
+});
+host.transport.onEvent(opened.handle, (event) => {
+  if (event.type === "data") {
+    // event: { type: "data", dataType: "text", data: "..." }
+  }
+});
+await host.transport.send(opened.handle, { type: "text", data: "hello" });
+```
+
+WebSocket binary echo:
+
+```js
+const opened = await host.transport.open({
+  kind: "websocket",
+  url: "ws://broker.example/echo"
+});
+host.transport.onEvent(opened.handle, (event) => {
+  if (event.type === "data" && event.dataType === "binary") {
+    // event.data is base64; decode it with your library of choice
+  }
+});
+await host.transport.send(opened.handle, { type: "binary", data: btoa("bytes") });
+```
+
+TCP binary echo:
+
+```js
+const opened = await host.transport.open({
+  kind: "tcp",
+  host: "192.168.1.10",
+  port: 1883
+});
+host.transport.onEvent(opened.handle, (event) => {
+  if (event.type === "data") {
+    // event: { type: "data", dataType: "binary", data: "<base64>" }
+  }
+});
+await host.transport.send(opened.handle, { type: "binary", data: btoa("\x00\x01\x02") });
+```
+
+## Device Registration (`host.devices`)
+
+A plugin with a declared sensor driver can register runtime sensor instances.
+Registered sensors join Decaid's normal device inventory and sensor registry; no
+plugin-specific endpoint is created. They are available through:
+
+- `GET /api/v1/devices`
+- `GET /api/v1/sensors`
+- `GET /api/v1/sensors/:id`
+- `POST /api/v1/sensors/:id/execute`
+- `/ws/v1/sensors/:id/snapshot`
+
+Registration and transport authorization are independent. The manifest below
+allows a sensor registration and an outbound WebSocket connection:
+
+```json
+{
+  "drivers": [{ "id": "humidity", "type": "sensor" }],
+  "permissions": ["network.websocket"]
+}
+```
+
+Register the sensor from `onLoad()`:
+
+```js
+let sensor;
+let transportHandle;
+
+async function registerSensor() {
+  sensor = await host.devices.register({
+    driverId: "humidity",
+    instanceId: "office",
+    name: "Office humidity",
+    vendor: "Example",
+    dataChannels: [
+      { key: "relativeHumidity", type: "number", unit: "%RH" }
+    ],
+    commands: [
+      {
+        id: "sampleNow",
+        name: "Sample now",
+        paramsSchema: { type: "object" },
+        resultsSchema: {
+          type: "object",
+          properties: { relativeHumidity: { type: "number" } }
+        }
+      }
+    ]
+  }, {
+    async connect(transport) {
+      const opened = await transport.open({
+        kind: "websocket",
+        url: "ws://sensor.local/readings"
+      });
+      transportHandle = opened.handle;
+    },
+    async disconnect() {
+      if (transportHandle) await host.transport.close(transportHandle);
+    },
+    async execute(command) {
+      if (command.commandId === "sampleNow") {
+        return { relativeHumidity: 52.4 };
+      }
+      throw new Error("unknown command");
+    }
+  });
+
+  await sensor.publish({ relativeHumidity: 52.4 });
+}
+```
+
+Call `registerSensor()` from the plugin's `onLoad()` method.
+
+`host.devices.register(definition, handlers)` returns a Promise for a device
+handle with:
+
+- `deviceId`: stable public identity derived from plugin id, driver id, and
+  instance id; plugin generation is not part of the identity.
+- `publish(snapshot)`: publishes one complete snapshot. Every declared channel
+  must be present, values must match their declared JSON type, and undeclared
+  channels are rejected.
+- `reportDisconnected()`: marks the sensor disconnected after an unexpected
+  transport or protocol failure.
+- `unregister()`: removes the sensor from the device inventory.
+
+All three handlers are required. Decaid calls `connect(transport)` when the
+sensor joins the sensor registry. The invocation-bound `transport` has the same
+methods as `host.transport`; connections opened through it belong to that
+connect attempt across Promise continuations. Resolving means the driver is
+ready to serve commands, not merely that its transport opened. `disconnect()`
+performs normal driver cleanup
+and is run before a device is removed: on explicit `unregister()` and on plugin
+unload, so the driver can release its transport or other resources. A failing or
+timed-out `disconnect()` still removes the device and rejects in-flight
+commands; the failure is surfaced to the caller.
+`execute({ commandId, params })` handles a declared command and returns an
+object. Handler failures propagate through the existing sensor command API.
+Calls time out after 10 seconds.
+
+Definitions, snapshots, command parameters and command results are limited to
+64 KiB of JSON. A plugin generation can register at most 8 devices. Registration
+is not remembered across app restarts. On plugin unload, Decaid runs each
+device's `disconnect()` handler, removes every device, and rejects in-flight
+commands owned by the retiring generation, even if `onUnload()` fails. Late
+publications and command results from older generations
+are ignored. BLE-backed drivers, discovery, probing and grinder registration are
+not supported by this first sensor registration contract.
 
 ## Plugin Lifecycle
 
@@ -499,6 +815,7 @@ it in Decaid UI.
 - **Global Functions**: `fetch()`, `btoa()`, `setTimeout()`, `clearTimeout()`
 - **Objects**: `Promise`, `JSON`, `Math`, `Date`, `Array`, `Object`
 - **Constants**: `undefined`, `null`, `Infinity`, `NaN`
+- **Host API**: `host.log()`, `host.emit()`, `host.storage()`, `host.decentProxy()`, `host.transport`, `host.devices`
 
 ### Not Available
 
@@ -511,9 +828,17 @@ it in Decaid UI.
 
 - Plugins run in a sandboxed JavaScript environment
 - HTTP requests are proxied through Flutter (respects system proxy settings)
+- Outbound WebSocket/TCP/TLS connections go through `host.transport`, which
+  requires the matching `network.websocket` / `network.tcp` / `network.tls`
+  permission, enforces per-plugin connection and byte limits, and closes all
+  connections on plugin unload or app shutdown. There is no unrestricted
+  global `WebSocket` or socket API in the plugin runtime.
+- TLS uses the platform trust store only; custom CA material and client
+  certificates are not supported
 - Storage is isolated per plugin
 - No filesystem access beyond the plugin's own directory
-- No network access to localhost/private IPs (except for Decaid API)
+- HTTP/fetch cannot reach localhost or private IPs (except for the Decaid
+  API); `host.transport` has no such restriction
 
 ## Bundled Weather Plugin
 
@@ -551,7 +876,7 @@ true age, and the client decides when it is too old to show.
 
 ## External First-Party Plugins
 
-DYE2 ships from [decentespresso/dye2](https://github.com/decentespresso/dye2), and the Decent shot upload plugin ships from [decentespresso/shot-upload](https://github.com/decentespresso/shot-upload). Each repository publishes a `.reaplugin` directory as a release ZIP. CI and local setup run `scripts/fetch_dye2_plugin.sh` and `scripts/fetch_shot_upload_plugin.sh` to download pinned releases, verify their checksums and manifest contracts, and unpack them into `assets/plugins/`. Bump a plugin's pinned version and checksum in a normal PR when its repository publishes a new release.
+DYE2 ships from [decentespresso/dye2](https://github.com/decentespresso/dye2), the Decent shot upload plugin ships from [decentespresso/shot-upload](https://github.com/decentespresso/shot-upload), and the dcamp community plugin ships from [decentespresso/decaid-dcamp-plugin](https://github.com/decentespresso/decaid-dcamp-plugin). Each repository publishes a `.reaplugin` directory as a release ZIP. CI and local setup run `scripts/fetch_dye2_plugin.sh`, `scripts/fetch_shot_upload_plugin.sh`, and `scripts/fetch_dcamp_plugin.sh` to download pinned releases, verify their checksums and manifest contracts, and unpack them into `assets/plugins/`. Bump a plugin's pinned version and checksum in a normal PR when its repository publishes a new release.
 
 `packages/dye2-plugin/` still holds the DYE2 plugin's original TypeScript + Vite source and is useful as a reference for advanced patterns (REST API client, HTML template rendering, Vite dev server — see `packages/dye2-plugin/README.md`), but it is **not** built or bundled by Decaid anymore and is not authoritative for what ships. Treat the external repositories as the source of truth; update the in-tree DYE2 copy only if it is being kept in sync deliberately.
 
@@ -633,8 +958,8 @@ floor: a newer bundled version replaces an older installed copy, an equal or
 older one does not.
 
 Bundled plugins published from a GitHub repo also take part in normal update
-checks. `bundledPluginRepos` in `plugin_source_service.dart` maps DYE2 and shot
-upload to their canonical repositories. The first update check or visit to the
+checks. `bundledPluginRepos` in `plugin_source_service.dart` maps DYE2, shot
+upload, and dcamp to their canonical repositories. The first update check or visit to the
 Plugins screen seeds `.rea_source.json` as a `github_release` source tagged with
 the installed manifest version. Existing installs from before source tracking
 are seeded the same way, so both plugins start receiving releases without a

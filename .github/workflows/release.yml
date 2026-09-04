@@ -75,6 +75,7 @@ jobs:
         run: |
           ./scripts/fetch_dye2_plugin.sh
           ./scripts/fetch_shot_upload_plugin.sh
+          ./scripts/fetch_dcamp_plugin.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -135,6 +136,7 @@ jobs:
         run: |
           ./scripts/fetch_dye2_plugin.sh
           ./scripts/fetch_shot_upload_plugin.sh
+          ./scripts/fetch_dcamp_plugin.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -216,6 +218,7 @@ jobs:
         run: |
           ./scripts/fetch_dye2_plugin.sh
           ./scripts/fetch_shot_upload_plugin.sh
+          ./scripts/fetch_dcamp_plugin.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -281,6 +284,7 @@ jobs:
         run: |
           ./scripts/fetch_dye2_plugin.sh
           ./scripts/fetch_shot_upload_plugin.sh
+          ./scripts/fetch_dcamp_plugin.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -344,6 +348,7 @@ jobs:
         run: |
           ./scripts/fetch_dye2_plugin.sh
           ./scripts/fetch_shot_upload_plugin.sh
+          ./scripts/fetch_dcamp_plugin.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -417,6 +422,7 @@ jobs:
         run: |
           ./scripts/fetch_dye2_plugin.sh
           ./scripts/fetch_shot_upload_plugin.sh
+          ./scripts/fetch_dcamp_plugin.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

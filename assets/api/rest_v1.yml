@@ -1742,7 +1742,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ShotRecord"
+              $ref: "#/components/schemas/ShotUpdateRequest"
             examples:
               updateNotes:
                 summary: Update only espresso notes
@@ -1764,7 +1764,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ShotRecord"
         "400":
-          description: Bad Request (ID mismatch)
+          description: |
+            Bad Request. Covers an ID in the body that does not match the
+            path ID, a body containing `measurements`, and a body containing
+            the system-managed fields `createdAt` or `updatedAt`.
           content:
             application/json:
               schema:
@@ -4943,6 +4946,22 @@ paths:
                   - appStore
                   - fullVersion
                   - localIp
+  /api/v1/diagnostics/ble:
+    get:
+      summary: Read-only BLE reconnect diagnostics
+      description: >
+        Returns adapter, native scan ownership, background watch, reconnect
+        policy, discovery cache, advertisement, and scan-failure state. This
+        endpoint does not start, stop, or otherwise mutate BLE operations.
+      tags: [System]
+      responses:
+        "200":
+          description: Current BLE diagnostics snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BleDiagnosticsSnapshot"
+
   /api/v1/update:
     get:
       summary: Get app update state
@@ -5524,6 +5543,21 @@ paths:
 
 components:
   schemas:
+    BleDiagnosticsSnapshot:
+      type: object
+      required: [timestamp, ble, connection]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        ble:
+          type: object
+          additionalProperties: true
+        connection:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
     FlowSmoothingConfig:
       type: object
       required: [windowMs, movingAverageSamples]
@@ -6893,7 +6927,7 @@ components:
                 type: string
                 enum: ["quick", "full"]
             required: ["mode"]
-        resultSchema:
+        resultsSchema:
           type: object
           additionalProperties: true
           example:
@@ -7127,6 +7161,25 @@ components:
           type: string
         timestamp:
           type: string
+        createdAt:
+          type: string
+          format: date-time
+          description: |
+            ISO-8601 UTC instant when the shot entered local storage
+            (always ends in `Z`). System-managed: rejected with 400 if
+            supplied to PUT /api/v1/shots/{id}. Falls back to `timestamp`
+            for legacy records that predate the field.
+        updatedAt:
+          type: string
+          format: date-time
+          description: |
+            ISO-8601 UTC instant of the last meaningful content change
+            (always ends in `Z`). System-managed: rejected with 400 if
+            supplied to PUT /api/v1/shots/{id}. Does not advance for writes
+            confined to the bookkeeping keys `uploaded_to_decent`,
+            `decent_upload_rejected`, and `visualizerId` inside
+            annotations.extras. Falls back to
+            `createdAt`, then `timestamp`, for legacy records.
         measurements:
           type: array
           items:
@@ -7160,6 +7213,35 @@ components:
           deprecated: true
           description: "Deprecated request alias for annotations.extras; response value mirrors the canonical field"
 
+    ShotUpdateRequest:
+      type: object
+      description: |
+        Partial-update payload for PUT /api/v1/shots/{id}. Only the fields
+        included in the body are changed; all other fields are preserved from
+        the existing record. `measurements`, `createdAt`, and `updatedAt` are
+        not editable and are rejected with 400. The `uploaded_to_decent`,
+        `decent_upload_rejected`, and `visualizerId` keys inside
+        annotations.extras are reserved bookkeeping:
+        writes confined to them persist without advancing `updatedAt`.
+      properties:
+        annotations:
+          $ref: "#/components/schemas/ShotAnnotations"
+        stopReason:
+          type: string
+          nullable: true
+          description: Why the shot ended (open set — tolerate unknown values). See ShotRecord.stopReason.
+        shotNotes:
+          type: string
+          nullable: true
+          deprecated: true
+          description: "Deprecated request alias for annotations.espressoNotes; response value mirrors the canonical field"
+        metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+          deprecated: true
+          description: "Deprecated request alias for annotations.extras; response value mirrors the canonical field"
+
     ShotRecordSummary:
       type: object
       description: |
@@ -7170,6 +7252,18 @@ components:
           type: string
         timestamp:
           type: string
+        createdAt:
+          type: string
+          format: date-time
+          description: |
+            ISO-8601 UTC instant when the shot entered local storage
+            (always ends in `Z`). See ShotRecord.createdAt.
+        updatedAt:
+          type: string
+          format: date-time
+          description: |
+            ISO-8601 UTC instant of the last meaningful content change
+            (always ends in `Z`). See ShotRecord.updatedAt.
         workflow:
           $ref: "#/components/schemas/WorkflowRequest"
         annotations:
@@ -7285,7 +7379,21 @@ components:
           type: array
           items:
             type: string
-            enum: [log, api, emit, pluginStorage, events.machine, events.shots, proxy.decent_api, proxy.decent_api.write]
+            enum: [log, api, emit, pluginStorage, events.machine, events.shots, proxy.decent_api, proxy.decent_api.write, network.websocket, network.tcp, network.tls]
+        drivers:
+          type: array
+          maxItems: 8
+          description: Device classes this plugin may register. Driver declarations do not grant transport permissions.
+          items:
+            type: object
+            required: [id, type]
+            properties:
+              id:
+                type: string
+                pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+              type:
+                type: string
+                enum: [sensor]
         settings:
           type: object
           description: >
@@ -7835,6 +7943,16 @@ components:
           nullable: true
           description: Target output weight in grams (beverage)
           example: 36.0
+        targetWaterVolume:
+          type: number
+          format: double
+          nullable: true
+          description: |
+            DE1-integrated machine water volume in milliliters. Overrides the
+            profile targetVolume only for the existing volumetric fallback when
+            no usable scale stop is available. Null inherits the profile target;
+            0 disables volumetric stopping for this workflow.
+          example: 55.0
         grinderId:
           type: string
           nullable: true

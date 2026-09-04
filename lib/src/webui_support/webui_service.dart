@@ -117,6 +117,7 @@ class WebUIService {
   final Future<List<String>> Function() _listLocalAddresses;
   final Future<Map<String, int>> Function()? _loadSkinPortAssignments;
   final Future<void> Function(Map<String, int>)? _saveSkinPortAssignments;
+  final Duration _wifiIpResolutionTimeout;
   HttpServer? _server;
   HttpServer? _entryServer;
   Map<String, int>? _skinPortAssignments;
@@ -152,13 +153,15 @@ class WebUIService {
     Future<List<String>> Function()? listLocalAddresses,
     Future<Map<String, int>> Function()? loadSkinPortAssignments,
     Future<void> Function(Map<String, int>)? saveSkinPortAssignments,
+    Duration wifiIpResolutionTimeout = const Duration(seconds: 2),
   }) : _listLocalAddresses = listLocalAddresses ?? _listDeviceAddresses,
        _loadSkinPortAssignments = loadSkinPortAssignments,
-       _saveSkinPortAssignments = saveSkinPortAssignments;
+       _saveSkinPortAssignments = saveSkinPortAssignments,
+       _wifiIpResolutionTimeout = wifiIpResolutionTimeout;
 
   Future<String> _resolveLocalIP() async {
     try {
-      final ip = await resolveWifiIP();
+      final ip = await resolveWifiIP().timeout(_wifiIpResolutionTimeout);
       if (ip != null && ip.isNotEmpty) return ip;
     } catch (e) {
       _log.warning('Failed to resolve WiFi IP, falling back to localhost', e);
@@ -237,7 +240,7 @@ class WebUIService {
     _resolvedHosts.clear();
     final tokenProvider = skinProxyTokenProvider;
     if (tokenProvider != null) _revokeSkinProxyToken();
-    _localIP ??= await _resolveLocalIP();
+    _localIP = await _resolveLocalIP();
 
     final webUI = createStaticHandler(
       path,

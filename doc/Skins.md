@@ -64,6 +64,14 @@ backgrounded. After ten minutes in the background, it unloads the page and
 reloads the selected skin when the app returns. Skin state that must survive
 this reload should be persisted through the Decaid API or browser storage.
 
+### Offline Operation
+
+Decaid serves installed skins from `localhost`, so Wi-Fi and internet access
+are not required for machine control or the embedded skin itself. Release
+builds include a bundled skin for first-run offline use. Account features, skin
+downloads and updates, and any external resources requested by a skin remain
+unavailable until internet access returns.
+
 ---
 
 ## Getting Started
@@ -134,6 +142,15 @@ The snapshot WebSocket sends complete machine state at regular intervals:
 ```
 
 ---
+
+## BLE Reconnect Diagnostics
+
+Diagnostic builds (`--dart-define=diagnostics=true`) bundle the temporary
+`ble-reconnect-diagnostics` skin. It samples `/api/v1/diagnostics/ble`, listens
+to `/ws/v1/devices` and `/ws/v1/machine/snapshot`, guides the sleep and
+scale-power sequence, and exports a timestamped JSON report. The diagnostics
+endpoint is read-only; discovery probes are explicit calls to
+`/api/v1/devices/scan?connect=false` or `connect=true`.
 
 ## Core API Endpoints
 
