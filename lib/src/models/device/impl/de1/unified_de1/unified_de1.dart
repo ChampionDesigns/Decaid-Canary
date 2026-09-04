@@ -133,6 +133,12 @@ class UnifiedDe1 implements De1Interface {
   TransportType get transportType => _transport.transportType;
 
   MachineInfo? _info;
+  MachineInfo? _rawInfo;
+
+  MachineInfo get rawMachineInfo => _rawInfo ?? machineInfo;
+
+  int? get rawModelValue => _connectedModelValue;
+
   @override
   MachineInfo get machineInfo =>
       _info ??
@@ -143,6 +149,24 @@ class UnifiedDe1 implements De1Interface {
         groupHeadControllerPresent: false,
         extra: {},
       );
+
+  void applyEffectiveIdentity({required String serial, required String model}) {
+    final info = _info;
+    if (info == null) return;
+    _rawInfo ??= info;
+    _info = MachineInfo(
+      version: info.version,
+      model: model,
+      serialNumber: serial,
+      groupHeadControllerPresent: info.groupHeadControllerPresent,
+      extra: info.extra,
+    );
+  }
+
+  void clearEffectiveIdentity() {
+    _info = _rawInfo ?? _info;
+    _rawInfo = null;
+  }
 
   @override
   Future<void> disconnect() async {
@@ -255,6 +279,7 @@ class UnifiedDe1 implements De1Interface {
     await _transport.connect();
 
     _currentProfile = null;
+    clearEffectiveIdentity();
 
     if (_info != null) {
       return;

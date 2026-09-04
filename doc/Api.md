@@ -6,6 +6,27 @@ For skin development, see [`doc/Skins.md`](Skins.md). For plugin development, se
 
 ---
 
+## Admission control
+
+Decaid rejects excess local API work rather than queueing it. `/api/` requests
+allow 128 concurrent globally and 32 per client, with fixed one-second accepted
+request limits of 1024 globally and 256 per client. Per-client rejection is `429`;
+global rejection is `503`. Both include `Retry-After: 1`. `OPTIONS`, static/WebUI,
+and `/ws/` requests do not use these API slots.
+
+WebSocket admission is separate: 128 open connections globally, 32 per client,
+and one-second upgrade limits of 128 globally and 32 per client. Rejected upgrades
+use the same `429`/`503` and `Retry-After: 1` contract. Closing a socket releases its
+connection slot.
+
+Endpoints that buffer request bodies enforce byte and read-time limits. Small
+control payloads use 64 KiB and 10 seconds, ordinary JSON payloads use 1 MiB and
+30 seconds. Oversized bodies return `413`; bodies that miss their read deadline
+return `408`. Firmware, workflow, and data-transfer endpoints retain their
+documented limits.
+
+---
+
 ## Conditional GETs (ETag / If-None-Match)
 
 The following list endpoints set a strong `ETag` on every `200 OK` response and honour `If-None-Match` with `304 Not Modified` (empty body) when the client's tag matches:
@@ -86,11 +107,11 @@ omitted from the payload entirely rather than sent as `null`. A client must read
 
 The catalog endpoint is available offline and without a connected machine. It returns bundled artifact metadata, compatibility and version eligibility, the recommended artifact, tri-state `updateAvailable`, and the shared machine operation state. The bundled Phase 1 artifact is official DE1 firmware build 1352 for `DE1Pro`, `DE1XL`, `DE1XXL`, and `DE1XXXL`.
 
-Managed apply accepts `{"artifactId":"de1-1352","force":false}`. The complete image is checked against its manifest, SHA-256 digest, canonical DE1 header, and connected model before erase. `force` permits reinstall or downgrade, including when the installed build is unknown, but never bypasses integrity or model checks. The raw endpoint retains its developer/recovery role and accepts `application/octet-stream`.
+Managed apply accepts `{"artifactId":"de1-1352","force":false}` with a 64 KiB body limit and a 10-second body-read timeout. The complete image is checked against its manifest, SHA-256 digest, canonical DE1 header, and connected model before erase. `force` permits reinstall or downgrade, including when the installed build is unknown, but never bypasses integrity or model checks. The raw endpoint retains its developer/recovery role and accepts `application/octet-stream`, capped at 16 MiB with a 60-second body-read timeout.
 
-Raw and managed updates return `application/x-ndjson`. Events are ordered `erasing`, zero or more `uploading`, then `done`; failures after streaming starts terminate with `error`. Upload progress is emitted in approximately one-percent increments. The stream remains open during final machine verification, and `done` is sent only after the DE1 reports `FF FF FD`. Client disconnect and `DELETE` request cancellation through the shared machine operation.
+Raw and managed updates return `application/x-ndjson`. Events are ordered `erasing`, zero or more `uploading`, then `done`; failures after streaming starts terminate with `error`. Upload progress is emitted in approximately one-percent increments. The stream remains open during final machine verification, and `done` is sent only after the DE1 reports `FF FF FD`. Client disconnect and `DELETE` cancel a pending update before it starts or forward cancellation to an active update.
 
-Pre-stream responses are `400` for malformed input, `404` for an unknown artifact, `409` for an active update, `422` for validation or policy rejection, and `503` when apply requires a machine. Idempotent cancellation returns `202` with `{"operation":{"state":"idle"}}` when no update remains active.
+Pre-stream responses are `400` for malformed input, `404` for an unknown artifact, `408` when a request body stalls, `409` for an active update, `413` when a raw upload exceeds 16 MiB or a managed request exceeds 64 KiB, `422` for validation or policy rejection, and `503` when apply requires a machine or the machine write queue is full. Idempotent cancellation returns `202` with `{"operation":{"state":"idle"}}` when no update remains active.
 
 ### Scale
 
@@ -166,6 +187,30 @@ Newly recorded shots snapshot `serialNumber`, `model`, `firmwareVersion`, and
 fields. Consumers must not infer missing capture-time identity from the machine
 that happens to be connected when a record is read.
 
+**Modification tracking.** Every shot carries `createdAt` and `updatedAt`
+(ISO-8601 UTC, always serialized with a trailing `Z`). `createdAt` is set
+when the shot enters local storage; the extraction `timestamp` is the fallback
+for legacy records that predate the field. Both fields are system-managed: a
+`PUT /api/v1/shots/:id` body containing either is rejected with 400, so
+clients cannot spoof revision metadata. `updatedAt` advances only when shot
+*content* changes: `PUT /api/v1/shots/:id` bumps it iff the merged record
+differs outside the bookkeeping keys. The bookkeeping keys are
+`uploaded_to_decent`, `decent_upload_rejected`, and `visualizerId` inside
+`annotations.extras` (the reserved scratch space for plugin sync state).
+Writes confined to those keys persist without touching `updatedAt`, so
+consumers can reconcile edits by comparing `updatedAt` against their own sync
+marker without feedback loops.
+An `extras` map emptied by that exclusion compares equal to no `extras`, and
+an `annotations` map emptied by it compares equal to no `annotations`, so the
+first-ever sync marker on a clean shot does not dirty it. All other `extras`
+keys count as content. `measurements` is not editable through this endpoint:
+a PUT body containing it is rejected with 400. Sync import with
+`onConflict: overwrite` replaces the whole record, so its comparison
+includes `measurements` (which overwrite can change, unlike PUT): the
+existing `createdAt` is preserved, and `updatedAt` advances whenever the
+imported record differs from the stored one, so a no-op re-import cannot
+move a consumer's cursor backwards.
+
 ### Steams
 
 Recorded milk-steaming sessions. Each record is opened when the machine
@@ -225,11 +270,14 @@ than 30 seconds for execution return `503` without being applied. Machine-write 
 return an error before the controller workflow is committed. Multi-step machine writes may
 be partially applied, and retrying the same request re-attempts the requested settings.
 Request bodies have a 30-second read timeout; body-read failures return `408`
-without poisoning later queued mutations. If the machine disconnects while a
-workflow device write is in flight, the write is retried once on the replacement
-machine (waiting up to 10 seconds for one to appear); if no replacement arrives the
-request returns `503` and the workflow is not committed. A `stopAtTemperature`-only
-workflow change never touches the DE1 directly — the Bengle bridge applies it
+without poisoning later queued mutations. DE1 writes allow one active operation and
+32 pending operations; a full device queue returns `503`. Pending rinse, steam, and
+hot-water settings coalesce by component, and a superseded workflow request returns
+`409`. A replaceable setting may reconcile after reconnect only when the machine
+identity matches; failure to reconnect within the bounded wait returns `503`.
+Imperative writes are not replayed after a disconnect. In each failure case, the
+workflow is not committed. A `stopAtTemperature`-only workflow change never touches
+the DE1 directly — the Bengle bridge applies it
 asynchronously — so it commits even while no machine is connected.
 
 ### Beans
@@ -375,6 +423,49 @@ detector channels, and `hydraulicPowerMeasured` (W, firmware rev 3 and later), p
 but computed from the flow through the puck instead of the reported group flow. Prefer the measured
 channel when the machine offers it. The two sources gate differently, so they go absent at different
 moments in a shot, and a client that switches source mid-shot sees the gaps move.
+Plugin-backed sensors registered through `host.devices` use this same API and
+the device inventory. Their stable IDs have the form
+`plugin:<pluginId>:<driverId>:<instanceId>`. Sensor manifests expose command
+result schemas as `resultsSchema`. See `Plugins.md` for registration and
+lifecycle rules.
+
+#### `Bengle EBus Tap` sensor
+
+The Bengle EBus tap (USB interface `2` of a composite Bengle, VID `0x2e8a` /
+PID `0x000a`) is exposed through the generic Sensors surface — no new REST
+path. Manifest:
+
+```json
+{
+  "name": "Bengle EBus Tap",
+  "vendor": "Decent Espresso",
+  "data": [{"key": "bytes", "type": "string", "unit": "base64"}],
+  "commands": [{"id": "write", "paramsSchema": {"bytes": "string"}}]
+}
+```
+
+`GET /api/v1/sensors` lists the tap under its stable ID
+`usb-2e8a-a-<serial>-if02`. Each frame on `/ws/v1/sensors/<id>/snapshot` is one
+serial read chunk:
+
+```json
+{"timestamp": "2026-08-31T12:34:56.789Z", "bytes": "tp4..."}
+```
+
+`bytes` is standard base64; concatenating decoded chunks reproduces the exact
+serial byte stream. Chunk boundaries carry no protocol meaning.
+
+Raw write base64-decodes `bytes`, writes exactly those bytes to the tap, and
+returns the byte count written:
+
+```text
+POST /api/v1/sensors/usb-2e8a-a-<serial>-if02/execute
+{"commandId": "write", "params": {"bytes": "AO4A"}}
+→ {"status": "ok", "result": {"bytesWritten": 3}}
+```
+
+Malformed or missing base64 is rejected before any write. The tap is
+single-owner: no other reader may hold the port while Decaid owns it.
 
 ### Key-Value Store
 
@@ -448,7 +539,8 @@ returns an error and no partial ZIP.
 one selected entry at a time to a bounded temporary JSON file for incremental
 parsing. Every selected entry is structurally validated before the record-import
 pass begins. ZIP bombs, duplicate names, encrypted/unsupported entries, CRC
-failures, truncation, Zip64, and malformed JSON all fail safely.
+failures, truncation, Zip64, and malformed JSON all fail safely. A 30-second
+idle request body is cancelled with `408`.
 - **Sync** pulls stream the remote response into a temporary ZIP; pushes
 export locally and stream the file with a known content length.
 - **Native transfer** downloads the localhost export into a temporary file
@@ -459,8 +551,8 @@ picked files into the import request.
 Limits (documented in `assets/api/rest_v1.yml`): request body 2 GiB, entry
 count 4096, per-entry uncompressed 1 GiB, total uncompressed 2 GiB,
 metadata 64 KiB, per-record 64 MiB (measured in UTF-8 bytes), ZIP header
-fields 256 B/64 KiB/64 KiB; sync request body 1 MiB, target response
-8 MiB; connection 10 s (TCP establishment only — server-side
+fields 256 B/64 KiB/64 KiB; sync request body 1 MiB with a 30-second read
+deadline, target response 8 MiB; connection 10 s (TCP establishment only — server-side
 export/import processing is not counted against it), idle 30 s, and one
 deadline (10 min) per phase covering the network stages (upload/download
 and response). Timeouts abort the request at the transport level: a
@@ -491,6 +583,7 @@ The **proxy** lets clients *use* the account without ever seeing the credentials
 | Method | Path | Description | Handler |
 |--------|------|-------------|---------|
 | GET | `/api/v1/info` | Build metadata (version, commit, branch) + gateway LAN IP (`localIp`) | `info_handler.dart` |
+| GET | `/api/v1/diagnostics/ble` | Read-only BLE adapter, scan/watch ownership, reconnect policy, cache, and advertisement diagnostics | `ble_diagnostics_handler.dart` |
 | GET | `/api/v1/update` | App-update state snapshot (`phase`, `latestVersion`, `releaseNotes`, `releaseUrl`, `installable`). Pure read — no network call; force a re-check via `/ws/v1/update`. | `update_handler.dart` |
 | POST | `/api/v1/feedback` | Submit feedback (creates GitHub issue) | `feedback_handler.dart` |
 | GET | `/api/v1/logs` | Recent log entries, newest first. Live log + rotated files `log.txt.1..N` are always stitched chronologically; response is a size-bounded tail window (`?kb=N`, default 1024 KB, clamped to 4096 KB). `?order=asc` for original chronological order | `logs_handler.dart` |
