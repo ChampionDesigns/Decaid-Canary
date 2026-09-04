@@ -325,6 +325,7 @@ class _PluginSensor implements Sensor {
       if (!_disposed && fence == _connectionFence) {
         _connectionState.add(ConnectionState.disconnected);
       }
+      if (_disposed || fence != _connectionFence) return;
       rethrow;
     }
   }

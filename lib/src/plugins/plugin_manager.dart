@@ -108,6 +108,12 @@ class PluginManager {
   final Map<(String, int), Set<Future<void>>> _pluginStorageOperations = {};
   late final PluginTransportService _transportService;
   final Map<String, _PendingDeviceInvocation> _pendingDeviceInvocations = {};
+  final Map<
+    String,
+    ({String pluginId, int generation, String registrationHandle})
+  >
+  _deviceConnectAttempts = {};
+  final Map<(String, int, String), Set<String>> _timedOutDeviceConnects = {};
   int _deviceInvocationSequence = 0;
 
   final Set<(String, int)> _deviceDisconnectCleanup = {};
@@ -219,6 +225,8 @@ class PluginManager {
       _pluginGenerations.clear();
       _retiringPluginGenerations.clear();
       _deviceDisconnectCleanup.clear();
+      _deviceConnectAttempts.clear();
+      _timedOutDeviceConnects.clear();
       _pluginStorageOperations.clear();
       _pluginBridgeTokens.clear();
       _pluginIdsByBridgeToken.clear();
@@ -603,6 +611,7 @@ class PluginManager {
 
         const __transportListeners = new Map();
         const __transportPending = new Map();
+        let __activeDeviceConnect = null;
         function __sendTransportMessage(message) {
           __nativeSendMessage("transport", __nativeJsonStringify(message));
         }
@@ -616,13 +625,19 @@ class PluginManager {
           });
         };
         __frozenTransportGlobal("__transportRequest", function (bridgeToken, generation, requestId, type, payload) {
-          __sendTransportMessage({
+          const message = {
             bridgeToken: bridgeToken,
             generation: generation,
             requestId: requestId,
             type: type,
             payload: payload
-          });
+          };
+          if (__activeDeviceConnect) {
+            message.deviceRegistrationHandle =
+              __activeDeviceConnect.registrationHandle;
+            message.deviceInvocationId = __activeDeviceConnect.invocationId;
+          }
+          __sendTransportMessage(message);
         });
         __frozenTransportGlobal("__transportRegister", function (requestId, entry) {
           __mapSet(__transportPending, requestId, entry);
@@ -725,10 +740,20 @@ class PluginManager {
             return;
           }
           try {
+            const previousDeviceConnect = __activeDeviceConnect;
+            let handlerResult;
+            try {
+              __activeDeviceConnect = operation === "connect"
+                ? { registrationHandle: handle, invocationId: invocationId }
+                : null;
+              handlerResult = handler(payload);
+            } finally {
+              __activeDeviceConnect = previousDeviceConnect;
+            }
             const promise = __nativeReflectApply(
               __nativePromiseResolve,
               __NativePromise,
-              [handler(payload)]
+              [handlerResult]
             );
             __nativeReflectApply(__nativePromiseThen, promise, [
               (result) => __sendDeviceMessage({
@@ -1084,17 +1109,19 @@ class PluginManager {
     final pending = invocationId is String
         ? _pendingDeviceInvocations[invocationId]
         : null;
-    final cleanupDisconnect =
+    final cleanupInvocation =
         type == 'invocationResult' &&
-        pending?.operation == PluginDeviceOperation.disconnect &&
+        pending != null &&
+        (pending.operation == PluginDeviceOperation.connect ||
+            pending.operation == PluginDeviceOperation.disconnect) &&
         _isDeviceDisconnectCleanup(pluginId, generation);
-    if (_lifecycle != PluginManagerLifecycle.active && !cleanupDisconnect) {
+    if (_lifecycle != PluginManagerLifecycle.active && !cleanupInvocation) {
       return;
     }
     if (type == 'invocationResult') {
       if ((generation != _pluginGenerations[pluginId] ||
               _plugins[pluginId]?.isAlive != true) &&
-          !cleanupDisconnect) {
+          !cleanupInvocation) {
         return;
       }
       _completeDeviceInvocation(pluginId, generation, data);
@@ -1240,11 +1267,36 @@ class PluginManager {
         const PluginDeviceException('Plugin generation changed'),
       );
     }
+    final retiredConnectInvocations = <String>[];
+    if (operation == PluginDeviceOperation.disconnect) {
+      final key = (pluginId, generation, registrationHandle);
+      retiredConnectInvocations.addAll(
+        _timedOutDeviceConnects.remove(key) ?? const <String>{},
+      );
+      for (final connectInvocationId in retiredConnectInvocations) {
+        _transportService.retireDeviceConnect(
+          pluginId,
+          generation,
+          registrationHandle,
+          connectInvocationId,
+        );
+      }
+    }
     final invocationId =
         '${pluginId}_${generation}_device_${++_deviceInvocationSequence}';
     final completer = Completer<Map<String, dynamic>>();
     final timer = Timer(deviceInvocationTimeout, () {
       final pending = _pendingDeviceInvocations.remove(invocationId);
+      if (pending?.operation == PluginDeviceOperation.connect) {
+        final key = (
+          pending!.pluginId,
+          pending.generation,
+          pending.registrationHandle,
+        );
+        _timedOutDeviceConnects
+            .putIfAbsent(key, () => <String>{})
+            .add(invocationId);
+      }
       pending?.completer.completeError(
         const PluginDeviceException('Plugin device invocation timed out'),
       );
@@ -1257,6 +1309,13 @@ class PluginManager {
       completer: completer,
       timer: timer,
     );
+    if (operation == PluginDeviceOperation.connect) {
+      _deviceConnectAttempts[invocationId] = (
+        pluginId: pluginId,
+        generation: generation,
+        registrationHandle: registrationHandle,
+      );
+    }
     try {
       js.evaluate(
         'globalThis.__dispatchDeviceInvocation('
@@ -1268,9 +1327,49 @@ class PluginManager {
     } catch (error) {
       final pending = _pendingDeviceInvocations.remove(invocationId);
       pending?.timer.cancel();
+      if (operation == PluginDeviceOperation.connect) {
+        _deviceConnectAttempts.remove(invocationId);
+      }
       pending?.completer.completeError(error);
     }
-    return completer.future;
+    if (retiredConnectInvocations.isEmpty) return completer.future;
+    return _awaitRetiredDeviceConnects(
+      completer.future,
+      pluginId,
+      generation,
+      registrationHandle,
+      retiredConnectInvocations,
+    );
+  }
+
+  Future<Map<String, dynamic>> _awaitRetiredDeviceConnects(
+    Future<Map<String, dynamic>> invocation,
+    String pluginId,
+    int generation,
+    String registrationHandle,
+    List<String> invocationIds,
+  ) async {
+    Future<void> closeTransports() => Future.wait(
+      invocationIds.map(
+        (invocationId) => _transportService.closeDeviceConnect(
+          pluginId,
+          generation,
+          registrationHandle,
+          invocationId,
+        ),
+      ),
+    );
+
+    try {
+      final result = await invocation;
+      await closeTransports();
+      return result;
+    } catch (error, stackTrace) {
+      try {
+        await closeTransports();
+      } catch (_) {}
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   void _completeDeviceInvocation(
@@ -1288,6 +1387,9 @@ class PluginManager {
     }
     _pendingDeviceInvocations.remove(invocationId);
     pending.timer.cancel();
+    if (pending.operation == PluginDeviceOperation.connect) {
+      _deviceConnectAttempts.remove(invocationId);
+    }
     final error = payload['error'];
     if (error != null) {
       pending.completer.completeError(PluginDeviceException(error.toString()));
@@ -1351,6 +1453,18 @@ class PluginManager {
         ? (msg['generation'] as num).toInt()
         : 0;
     final type = msg['type'];
+    final deviceRegistrationHandle = msg['deviceRegistrationHandle'];
+    final deviceInvocationId = msg['deviceInvocationId'];
+    final connectAttempt = deviceInvocationId is String
+        ? _deviceConnectAttempts[deviceInvocationId]
+        : null;
+    final ownsDeviceConnect =
+        type == 'open' &&
+        deviceRegistrationHandle is String &&
+        deviceInvocationId is String &&
+        connectAttempt?.pluginId == pluginId &&
+        connectAttempt?.generation == generation &&
+        connectAttempt?.registrationHandle == deviceRegistrationHandle;
     final current =
         generation == _pluginGenerations[pluginId] &&
         _plugins[pluginId]?.isAlive == true;
@@ -1405,6 +1519,10 @@ class PluginManager {
             pluginId: pluginId,
             generation: generation,
             options: Map<String, dynamic>.from(payload),
+            deviceRegistrationHandle: ownsDeviceConnect
+                ? deviceRegistrationHandle
+                : null,
+            deviceInvocationId: ownsDeviceConnect ? deviceInvocationId : null,
           );
           if (!_isCurrentPluginMessage(pluginId, {'generation': generation})) {
             unawaited(
@@ -1894,6 +2012,13 @@ class PluginManager {
       runtime.markDisposed();
       _plugins.remove(id);
       _closingPluginPermissions.remove(id);
+      _deviceConnectAttempts.removeWhere(
+        (_, attempt) =>
+            attempt.pluginId == id && attempt.generation == retiringGeneration,
+      );
+      _timedOutDeviceConnects.removeWhere(
+        (key, _) => key.$1 == id && key.$2 == retiringGeneration,
+      );
       _removePluginBridgeToken(id);
       _log.info("unloaded: $id");
     }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -706,6 +707,304 @@ void main() {
       expect(deviceController.devices, isEmpty);
     },
   );
+
+  test(
+    'unload settles a retiring connect invocation before its timeout',
+    () async {
+      final server = await _startWsServer((ws) {
+        ws.listen((data) {});
+      });
+      final deviceService = PluginDeviceService();
+      final deviceController = DeviceController([deviceService]);
+      await deviceController.initialize();
+      final sensorController = SensorController(controller: deviceController);
+      final manager = PluginManager(
+        kvStore: FakeKeyValueStoreService(),
+        deviceService: deviceService,
+        deviceInvocationTimeout: const Duration(seconds: 20),
+      );
+      addTearDown(() async {
+        await manager.dispose();
+        sensorController.dispose();
+        deviceController.dispose();
+      });
+
+      final registered = manager.emitStream
+          .where((event) => event['event'] == 'registered')
+          .map((event) => event['payload'] as String)
+          .first;
+      await manager.loadPlugin(
+        id: 'unload-delayed-connect.plugin',
+        manifest: testManifest(
+          'unload-delayed-connect.plugin',
+          permissions: const {
+            PluginPermissions.emit,
+            PluginPermissions.networkWebsocket,
+          },
+          drivers: const [
+            PluginDriverDeclaration(
+              id: 'humidity',
+              type: PluginDriverType.sensor,
+            ),
+          ],
+        ),
+        settings: const {},
+        jsCode:
+            '''
+        function createPlugin(host) {
+          let transportHandle;
+          return {
+            id: "unload-delayed-connect.plugin",
+            onLoad() {
+              host.devices.register({
+                driverId: "humidity",
+                instanceId: "office",
+                name: "Office humidity",
+                vendor: "Test",
+                dataChannels: [{ key: "relativeHumidity", type: "number" }]
+              }, {
+                connect() {
+                  globalThis.connectStarted = true;
+                  return new Promise((resolve, reject) => {
+                    globalThis.releaseConnect = () => {
+                      host.transport.open({
+                        kind: "websocket",
+                        url: "ws://127.0.0.1:${server.port}/x"
+                      }).then((opened) => {
+                        transportHandle = opened.handle;
+                        globalThis.openAllowed = true;
+                        resolve({});
+                      }, (error) => {
+                        globalThis.openRejected = true;
+                        reject(error);
+                      });
+                    };
+                  });
+                },
+                disconnect() {
+                  const handle = transportHandle;
+                  transportHandle = null;
+                  globalThis.disconnectCalls =
+                    (globalThis.disconnectCalls || 0) + 1;
+                  return handle
+                    ? host.transport.close(handle)
+                    : Promise.resolve();
+                },
+                execute() { return {}; }
+              }).then((device) => host.emit("registered", device.deviceId));
+            },
+            onUnload() {
+              globalThis.unloadStarted = true;
+            }
+          };
+        }
+      ''',
+      );
+
+      final deviceId = await registered.timeout(const Duration(seconds: 2));
+      final sensor = await sensorController.sensorRegistry
+          .map((sensors) => sensors[deviceId])
+          .where((sensor) => sensor != null)
+          .cast<Sensor>()
+          .first;
+      await sensor.connectionState
+          .where((state) => state == ConnectionState.connecting)
+          .first
+          .timeout(const Duration(seconds: 2));
+
+      final unloading = manager.unloadPlugin('unload-delayed-connect.plugin');
+      var unloadStarted = false;
+      for (
+        var i = 0;
+        i < 100 && manager.lifecycle == PluginManagerLifecycle.active;
+        i++
+      ) {
+        final result = manager.js.evaluate(
+          'String(globalThis.unloadStarted || false)',
+        );
+        if (!result.isError && result.stringResult == 'true') {
+          unloadStarted = true;
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(unloadStarted, isTrue);
+
+      manager.js.evaluate('globalThis.releaseConnect();');
+      while (manager.js.executePendingJob() > 0) {}
+      await expectLater(
+        unloading.timeout(const Duration(seconds: 2)),
+        completes,
+      );
+      expect(
+        manager.js
+            .evaluate('String(globalThis.openRejected || false)')
+            .stringResult,
+        'true',
+      );
+      expect(
+        manager.js
+            .evaluate('String(globalThis.openAllowed || false)')
+            .stringResult,
+        'false',
+      );
+      expect(
+        manager.js
+            .evaluate('String(globalThis.disconnectCalls || 0)')
+            .stringResult,
+        '1',
+      );
+      expect(manager.liveTransportCount, 0);
+      await sensorController.sensorRegistry
+          .where((sensors) => !sensors.containsKey(deviceId))
+          .first;
+      expect(deviceController.devices, isEmpty);
+    },
+  );
+
+  test('direct unregister retires a timed-out connect transport', () async {
+    final server = await _startWsServer((ws) {
+      ws.listen((data) {});
+    });
+    final nativeOpen = Completer<WebSocket>();
+    final connectorStarted = Completer<void>();
+    final deviceService = PluginDeviceService();
+    final deviceController = DeviceController([deviceService]);
+    await deviceController.initialize();
+    final sensorController = SensorController(controller: deviceController);
+    final manager = PluginManager(
+      kvStore: FakeKeyValueStoreService(),
+      deviceService: deviceService,
+      deviceInvocationTimeout: const Duration(milliseconds: 30),
+      connectWebSocket: (url, {protocols}) {
+        if (!connectorStarted.isCompleted) connectorStarted.complete();
+        return nativeOpen.future;
+      },
+    );
+    addTearDown(() async {
+      await manager.dispose();
+      sensorController.dispose();
+      deviceController.dispose();
+    });
+
+    final registered = manager.emitStream
+        .where((event) => event['event'] == 'registered')
+        .map((event) => event['payload'] as String)
+        .first;
+    await manager.loadPlugin(
+      id: 'timeout-connect.plugin',
+      manifest: testManifest(
+        'timeout-connect.plugin',
+        permissions: const {
+          PluginPermissions.emit,
+          PluginPermissions.networkWebsocket,
+        },
+        drivers: const [
+          PluginDriverDeclaration(
+            id: 'humidity',
+            type: PluginDriverType.sensor,
+          ),
+        ],
+      ),
+      settings: const {},
+      jsCode:
+          '''
+        function createPlugin(host) {
+          let transportHandle;
+          return {
+            id: "timeout-connect.plugin",
+            onLoad() {
+              host.devices.register({
+                driverId: "humidity",
+                instanceId: "office",
+                name: "Office humidity",
+                vendor: "Test",
+                dataChannels: [{ key: "relativeHumidity", type: "number" }]
+              }, {
+                connect() {
+                  return host.transport.open({
+                    kind: "websocket",
+                    url: "ws://127.0.0.1:${server.port}/x"
+                  }).then((opened) => {
+                    transportHandle = opened.handle;
+                    globalThis.connectCompleted = true;
+                    return {};
+                  }, (error) => {
+                    globalThis.connectRejected = true;
+                    throw error;
+                  });
+                },
+                disconnect() {
+                  const handle = transportHandle;
+                  transportHandle = null;
+                  globalThis.disconnectCalls =
+                    (globalThis.disconnectCalls || 0) + 1;
+                  return handle
+                    ? host.transport.close(handle)
+                    : Promise.resolve();
+                },
+                execute() { return {}; }
+              }).then((device) => {
+                globalThis.timeoutDevice = device;
+                globalThis.performUnregister = () =>
+                  device.unregister().then(() => {
+                    host.emit("unregistered", device.deviceId);
+                  });
+                host.emit("registered", device.deviceId);
+              });
+            }
+          };
+        }
+      ''',
+    );
+
+    final deviceId = await registered.timeout(const Duration(seconds: 2));
+    final sensor = await sensorController.sensorRegistry
+        .map((sensors) => sensors[deviceId])
+        .where((sensor) => sensor != null)
+        .cast<Sensor>()
+        .first;
+    await sensor.connectionState
+        .where((state) => state == ConnectionState.connecting)
+        .first
+        .timeout(const Duration(seconds: 2));
+    await connectorStarted.future.timeout(const Duration(seconds: 2));
+    final states = <ConnectionState>[];
+    final stateSubscription = sensor.connectionState.listen(states.add);
+    addTearDown(stateSubscription.cancel);
+
+    final unregistered = manager.emitStream
+        .where((event) => event['event'] == 'unregistered')
+        .map((event) => event['payload'] as String)
+        .first;
+    manager.js.evaluate('globalThis.performUnregister();');
+    expect(await unregistered.timeout(const Duration(seconds: 2)), deviceId);
+    expect(manager.liveTransportCount, 0);
+    expect(
+      manager.js
+          .evaluate('String(globalThis.disconnectCalls || 0)')
+          .stringResult,
+      '1',
+    );
+    await sensorController.sensorRegistry
+        .where((sensors) => !sensors.containsKey(deviceId))
+        .first;
+    expect(deviceController.devices, isEmpty);
+    expect(states, isNot(contains(ConnectionState.connected)));
+
+    final socket = await WebSocket.connect('ws://127.0.0.1:${server.port}/x');
+    nativeOpen.complete(socket);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    while (manager.js.executePendingJob() > 0) {}
+    expect(manager.liveTransportCount, 0);
+    expect(
+      manager.js
+          .evaluate('String(globalThis.connectRejected || false)')
+          .stringResult,
+      'true',
+    );
+    expect(states, isNot(contains(ConnectionState.connected)));
+  });
 
   test('device disconnect cleanup runs again after reconnect', () async {
     final server = await _startWsServer((ws) {
