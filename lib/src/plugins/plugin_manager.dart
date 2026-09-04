@@ -739,15 +739,23 @@ class PluginManager {
             });
             return;
           }
+          const previousDeviceConnect = __activeDeviceConnect;
+          const connectContext = operation === "connect"
+            ? { registrationHandle: handle, invocationId: invocationId }
+            : null;
           try {
-            const previousDeviceConnect = __activeDeviceConnect;
             let handlerResult;
             try {
-              __activeDeviceConnect = operation === "connect"
-                ? { registrationHandle: handle, invocationId: invocationId }
-                : null;
+              __activeDeviceConnect = connectContext;
               handlerResult = handler(payload);
-            } finally {
+            } catch (error) {
+              __activeDeviceConnect = previousDeviceConnect;
+              throw error;
+            }
+            const keepsDeviceConnectContext =
+              connectContext && handlerResult &&
+              typeof handlerResult.then === "function";
+            if (!keepsDeviceConnectContext) {
               __activeDeviceConnect = previousDeviceConnect;
             }
             const promise = __nativeReflectApply(
@@ -756,20 +764,36 @@ class PluginManager {
               [handlerResult]
             );
             __nativeReflectApply(__nativePromiseThen, promise, [
-              (result) => __sendDeviceMessage({
-                bridgeToken: entry.bridgeToken,
-                generation: generation,
-                type: "invocationResult",
-                payload: { invocationId: invocationId, result: result }
-              }),
-              (error) => __sendDeviceMessage({
-                bridgeToken: entry.bridgeToken,
-                generation: generation,
-                type: "invocationResult",
-                payload: { invocationId: invocationId, error: String(error) }
-              })
+              (result) => {
+                if (keepsDeviceConnectContext &&
+                    __activeDeviceConnect === connectContext) {
+                  __activeDeviceConnect = previousDeviceConnect;
+                }
+                __sendDeviceMessage({
+                  bridgeToken: entry.bridgeToken,
+                  generation: generation,
+                  type: "invocationResult",
+                  payload: { invocationId: invocationId, result: result }
+                });
+              },
+              (error) => {
+                if (keepsDeviceConnectContext &&
+                    __activeDeviceConnect === connectContext) {
+                  __activeDeviceConnect = previousDeviceConnect;
+                }
+                __sendDeviceMessage({
+                  bridgeToken: entry.bridgeToken,
+                  generation: generation,
+                  type: "invocationResult",
+                  payload: { invocationId: invocationId, error: String(error) }
+                });
+              }
             ]);
+            return;
           } catch (error) {
+            if (__activeDeviceConnect === connectContext) {
+              __activeDeviceConnect = previousDeviceConnect;
+            }
             __sendDeviceMessage({
               bridgeToken: entry.bridgeToken,
               generation: generation,
