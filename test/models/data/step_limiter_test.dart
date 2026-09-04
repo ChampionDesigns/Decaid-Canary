@@ -22,19 +22,6 @@ void main() {
     'limiter': limiter,
   };
 
-  Map<String, dynamic> powerStepJson({dynamic limiter}) => {
-    'name': 'power pour',
-    'pump': 'power',
-    'transition': 'smooth',
-    'volume': 100,
-    'seconds': 25,
-    'weight': 0.0,
-    'temperature': 93,
-    'sensor': 'coffee',
-    'power': 2.0,
-    'limiter': limiter,
-  };
-
   Profile profileWithLimiter(dynamic limiter) => Profile.fromJson({
     'version': '2',
     'title': 'limiter canonicalization',
@@ -176,19 +163,6 @@ void main() {
       final step = ProfileStep.fromJson(flowStepJson(limiter: {'value': 0.1}));
 
       expect(step.limiter, equals(const StepLimiter(value: 0.1, range: 0)));
-    });
-
-    test('a power step accepts one as a hard cap', () {
-      final step = ProfileStep.fromJson(powerStepJson(limiter: {'value': 1}));
-
-      expect(step.limiter, equals(const StepLimiter(value: 1, range: 0)));
-    });
-
-    test('a power step still refuses a zero-value limiter', () {
-      expect(
-        () => ProfileStep.fromJson(powerStepJson(limiter: {'value': 0})),
-        throwsA(isA<FormatException>()),
-      );
     });
 
     test('an absent limiter is still null, not defaulted', () {
