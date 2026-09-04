@@ -219,7 +219,10 @@ Detach and unknown USB actions do not emit attach hints.
 `DeviceController` aggregates notifier streams without adding attach events to
 the required `DeviceScanner` interface. A scanner exposes attach hints only when
 it also implements `DeviceAttachNotifier`, so BLE, Wi-Fi, and simulated scanners
-remain unchanged.
+remain unchanged. It subscribes to each service's attach stream before awaiting
+that service's `initialize()`, so an attach hint emitted from inside
+initialization (such as the serial service's startup enumeration hint) is not
+lost.
 
 `AttachReconnectCoordinator` owns the attach subscription, configurable 500 ms
 settle timer, burst coalescing, in-flight guard, and disposal. Disposal waits
@@ -247,13 +250,28 @@ adopts the connected machine, and persists its USB device id as the preferred
 machine. A stale BLE preference, a different preferred USB machine, a
 simulated preference, or no preference at all are all overridden by the
 physically attached machine; no BLE scan runs and no machine picker opens.
+
+USB intent is latched as soon as the attach event is received, not at settle
+expiry. `AttachReconnectCoordinator.onLatched` arms while `ConnectionManager`
+pauses passive automatic selection: the machine reconnect timer is cancelled,
+and an in-flight automatic/adapter-recovery attempt is superseded through the
+scan-generation mechanism and `stopScan()`. While latched, automatic machine
+connects are refused at `connectMachine()` and deferred at `_executeConnect`;
+explicit direct connects, explicit scans, and scale-only work are not
+interrupted. A machine that an already-superseded automatic attempt connects
+inside the settle window is released through the intentional disconnect path
+before the queued probe runs, so the USB machine cannot lose the race to a BLE
+connection that completes mid-window.
 An attached machine that fails to connect preserves the previous preference
 and returns control to the existing preferred-machine recovery policy (or
 surfaces the normal machine-connection failure when no preference exists).
 Unsupported or uncorrelated attachments change nothing — no scan, no picker,
 no preference update, and an already scheduled recovery attempt is left
 alone. A machine that is already connected is never replaced; the attach
-attempt re-checks before executing.
+attempt re-checks before executing. When the latch pauses an interrupted
+automatic connect or recovery attempt and the probe does not adopt a machine,
+the interrupted automatic policy resumes (recovery re-arms its reconnect
+timer, or the deferred automatic connect replays) once the latch clears.
 
 When the probe capability is unavailable (a notifier-only scanner, or a
 `DeviceController` whose originating service cannot probe), the original
@@ -268,6 +286,16 @@ is superseded through the existing scan-generation mechanism, while explicit
 user scans and scale-only connects are waited out. The queued probe runs
 before other drained work, re-checks that no machine connected meanwhile, and
 never runs in parallel with another connect.
+
+At startup, `SerialServiceAndroid.initialize()` subscribes to the platform USB
+event stream before enumerating (closing the list-versus-listener gap) and,
+when enumeration finds devices, emits one metadata-free startup attach hint.
+The hint reuses the latch → settle → probe → adopt path, so a supported USB
+DE1 already attached before Decaid starts takes priority over a saved BLE
+preference. One generic hint is deliberate: the coordinator keeps only the
+latest burst event, and a null-id event makes the probe inspect all not-yet-
+known USB devices; an unrelated keyboard or scale still resolves to
+"unsupported" and the normal policy continues.
 
 The original incident showed 20.3 seconds between USB enumeration and connection
 because recovery was waiting for its backoff timer; the existing backoff can
@@ -457,11 +485,18 @@ so a full scan that ran to completion never triggers one.
 - `connectMachine(De1Interface)` / `connectScale(Scale)` — Deliberate direct connection
 - `selectMachine(De1Interface)` / `selectScale(Scale)` — Continue the active selection session; stale choices are rejected
 - `disconnectMachine()` / `disconnectScale()` — Explicit disconnects
+- `shutdown()` — Terminal, idempotent connection teardown
 
 The deliberate connect and selection methods return `ConnectionResult` with a
 connected, already-connected, conflict, failed, or timed-out outcome. REST and
 WebSocket connect handlers preserve that result instead of inferring success
 from normal completion.
+
+`shutdown()` permanently rejects new connection requests, stops active discovery,
+adapter and USB-attach recovery, scale watch, and reconnect timers, releases
+queued requests, and waits for in-flight connection work. It then disconnects
+the machine before the scale while isolating each cleanup failure. Flutter
+`detached` and requested desktop exit use this path; `paused` and `hidden` do not.
 
 ### Disconnect Handling
 
@@ -708,6 +743,42 @@ sensor is connected, skins can call the `measure` command through the existing
 Sensors API and read TDS, temperature, refractive index, and status values from
 the sensor data stream.
 
+`PluginDeviceService` is a `DeviceDiscoveryService` that contributes sensors
+registered by plugin generations. This keeps plugin-backed sensors on the same
+`DeviceController` → `SensorController` path as native sensors. Public identity
+comes from plugin id, declared driver id, and plugin-local instance id; unload
+removes the retiring generation without changing that identity for a later
+reload. Plugin connection handlers must complete protocol initialization before
+the sensor reports `connected`. Registrations are runtime-only and are not added
+to remembered-device selection.
+
+### Bengle EBus tap
+
+Bengle composite devices (VID `0x2e8a`, PID `0x000a`) may expose a second CDC
+function as the `Bengle EBus Tap` Sensor
+(`lib/src/models/device/impl/sensor/bengle_debug_port.dart`).
+
+- **Identity.** The tap is identified by VID/PID, the exact USB product name
+  `Bengle`, and logical USB interface `2`, never by unstable device paths.
+  VID/PID alone are shared Pico SDK identifiers, so the product name is
+  required to reject other Pico boards. Its ID appends `-if02` to the
+  machine's USB stable ID; interface `0` retains the existing machine ID. Android opens the
+  paired bulk-data interface `3` while preserving logical `if02` identity.
+- **Duplicate descriptors.** When multiple physical Bengle devices report the
+  same USB descriptors, Android appends `UsbDevice.deviceId` to each tap ID for
+  session-level disambiguation and emits at most one machine for the shared
+  stable ID.
+- **Raw tunnel.** Each serial read chunk becomes one snapshot with `bytes`
+  encoded as base64. Decoded chunks reproduce the serial stream exactly;
+  `write` sends the decoded bytes unchanged. ReaPrime adds no framing,
+  capture, compression, or upload behavior.
+- **Transport ownership.** The tap transport asserts DTR and permits one reader.
+  Transport errors leave the Sensor disconnected rather than reconnecting it
+  internally. Other serial-device DTR defaults are unchanged.
+
+Hardware verification steps:
+[`doc/AI_BUILD_NOTES.md`](AI_BUILD_NOTES.md#bengle-ebus-tap-hardware-verification).
+
 ### RememberedDevicesController
 
 **File:** `lib/src/controllers/remembered_devices_controller.dart`
@@ -830,6 +901,10 @@ attach recovery"). Explicit native, REST, and WebSocket scans call
 `idle → connectingMachine → ready` on success. On failure:
 `connectingMachine` is published before the attempt, then phase falls
 through to `scanning` (existing scan path).
+
+Android serial discovery replaces a registry entry when quick-connect detects
+a new device instance with the same `deviceId`, so REST and WebSocket inventory
+never retain the disconnected instance beside its connected replacement.
 
 ### Initial App Startup
 
@@ -962,6 +1037,47 @@ De1StateManager({
 - `_handleSnapshot(MachineSnapshot)`: Processes all machine state updates
 - `_handleScalePowerManagement(MachineState)`: Manages scale sleep/wake/scan
 - `_triggerScaleScan()`: Initiates device scan with 30s timeout
+
+### Legacy DE1 identity resolution (post-connect)
+
+Early DE1-family machines (notably v1.3 and earlier) can report `0` for
+`SerialN` and/or `v13Model`. When a legacy `DeviceImplementation.unifiedDe1`
+machine connects, `De1StateManager` resolves its effective serial/model from
+the linked Decent account's registered machines (`/support/api/sn` with
+`onlyespressomachines=1&withskus=1`) before any serial-ownership check runs.
+
+Resolution order:
+
+1. A nonzero raw serial resolves only on an exact match against a non-Bengle
+   registered record. A recognized API SKU model overrides a conflicting raw
+   `v13Model`; an unrecognized SKU retains the raw machine model.
+2. For raw serial `0`, a persisted mapping keyed by normalized account email +
+   `transportType.name` + opaque `deviceId` is used when its serial is still in
+   the current account list.
+3. Otherwise a single known legacy DE1-family candidate resolves automatically;
+   a nonzero raw `v13Model` may narrow multiple candidates to one.
+4. Still ambiguous candidates show a native dialog (serial + friendly model +
+   raw SKU). A manual choice is persisted as the mapping above.
+
+When the machine reports serial `0` (or raw model `0`) and no linked account /
+usable cache exists, a non-blocking dialog offers to open the account page;
+dismissing it leaves the machine fully usable with its raw identity.
+
+Constraints:
+
+- Resolved serial/model are applied only as an in-memory effective
+  `MachineInfo` override (`UnifiedDe1.applyEffectiveIdentity`). `SerialN`,
+  `v13Model`, and legacy `Model` are never written to the machine; raw MMR
+  identity stays available via `rawMachineInfo` for diagnostics.
+- Bengle (`>= 128`) and unknown-SKU records are never candidates for serial-0
+  auto/manual selection; Bengle records are not selected by the legacy DE1
+  resolver at all.
+- Existing serial-mismatch email reporting still runs for a real nonzero raw
+  serial that is not on the linked account, after resolution finishes.
+- A definitively rejected account session is not used as identity authority
+  (persisted recovery data is retained but unusable until re-auth); explicit
+  logout or successful account replacement clears the account's cached machine
+  list and mappings.
 
 ### Hot water stop-at-weight
 
