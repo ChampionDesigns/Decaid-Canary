@@ -121,8 +121,6 @@ void main() {
           .where((sensors) => !sensors.containsKey(deviceId))
           .first;
       expect(deviceController.devices, isEmpty);
-      // Unload runs the disconnect handler exactly once even though onUnload
-      // threw, then removes the device.
       expect(
         manager.js.evaluate('globalThis.disconnectCalls').stringResult,
         '1',
@@ -456,7 +454,6 @@ void main() {
           .stringResult,
       '1',
     );
-    // The disconnect failure does not leave a half-registered device behind.
     await sensorController.sensorRegistry
         .where((sensors) => !sensors.containsKey(deviceId))
         .first;
@@ -694,6 +691,121 @@ void main() {
       expect(deviceController.devices, isEmpty);
     },
   );
+
+  test('dispose runs plugin device disconnect cleanup', () async {
+    final deviceService = PluginDeviceService();
+    final deviceController = DeviceController([deviceService]);
+    await deviceController.initialize();
+    final sensorController = SensorController(controller: deviceController);
+    final manager = PluginManager(
+      kvStore: FakeKeyValueStoreService(),
+      deviceService: deviceService,
+    );
+    addTearDown(() async {
+      await manager.dispose();
+      sensorController.dispose();
+      deviceController.dispose();
+    });
+
+    final registered = manager.emitStream
+        .where((event) => event['event'] == 'registered')
+        .map((event) => event['payload'] as String)
+        .first;
+    await manager.loadPlugin(
+      id: 'dispose-device.plugin',
+      manifest: testManifest(
+        'dispose-device.plugin',
+        permissions: const {PluginPermissions.emit},
+        drivers: const [
+          PluginDriverDeclaration(
+            id: 'humidity',
+            type: PluginDriverType.sensor,
+          ),
+        ],
+      ),
+      settings: const {},
+      jsCode: '''
+        function createPlugin(host) {
+          return {
+            id: "dispose-device.plugin",
+            onLoad() {
+              host.devices.register({
+                driverId: "humidity",
+                instanceId: "office",
+                name: "Office humidity",
+                vendor: "Test",
+                dataChannels: [{ key: "relativeHumidity", type: "number" }]
+              }, {
+                connect() {},
+                disconnect() {
+                  globalThis.disposeDisconnectCalls =
+                    (globalThis.disposeDisconnectCalls || 0) + 1;
+                  return new Promise((resolve) => {
+                    globalThis.resolveDisposeDisconnect = () => {
+                      globalThis.disposeDisconnectCompleted =
+                        (globalThis.disposeDisconnectCompleted || 0) + 1;
+                      resolve();
+                    };
+                  });
+                },
+                execute() { return {}; }
+              }).then((device) => host.emit("registered", device.deviceId));
+            }
+          };
+        }
+      ''',
+    );
+
+    final deviceId = await registered.timeout(const Duration(seconds: 2));
+    final sensor = await sensorController.sensorRegistry
+        .map((sensors) => sensors[deviceId])
+        .where((sensor) => sensor != null)
+        .cast<Sensor>()
+        .first;
+    await sensor.connectionState
+        .where((state) => state == ConnectionState.connected)
+        .first
+        .timeout(const Duration(seconds: 2));
+
+    final disposal = manager.dispose();
+    var disconnectStarted = false;
+    for (
+      var i = 0;
+      i < 1000 && manager.lifecycle == PluginManagerLifecycle.disposing;
+      i++
+    ) {
+      final calls = manager.js.evaluate(
+        'String(globalThis.disposeDisconnectCalls || 0)',
+      );
+      if (!calls.isError && calls.stringResult == '1') {
+        disconnectStarted = true;
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(disconnectStarted, isTrue);
+    expect(
+      manager.js
+          .evaluate('String(globalThis.disposeDisconnectCalls || 0)')
+          .stringResult,
+      '1',
+    );
+
+    manager.js.evaluate('globalThis.resolveDisposeDisconnect();');
+    while (manager.js.executePendingJob() > 0) {}
+    expect(
+      manager.js
+          .evaluate('String(globalThis.disposeDisconnectCompleted || 0)')
+          .stringResult,
+      '1',
+    );
+    await expectLater(disposal, completes);
+    expect(manager.lifecycle, PluginManagerLifecycle.disposed);
+    await sensorController.sensorRegistry
+        .where((sensors) => !sensors.containsKey(deviceId))
+        .first;
+    expect(deviceController.devices, isEmpty);
+  });
 
   test('unregister rejects only pending invocations for its device', () async {
     final deviceService = PluginDeviceService();

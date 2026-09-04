@@ -1051,7 +1051,15 @@ class PluginManager {
     Map<String, dynamic> msg,
   ) async {
     await Future<void>.delayed(Duration.zero);
-    if (_lifecycle != PluginManagerLifecycle.active) return;
+    final generation = msg['generation'];
+    final cleanupTransportClose =
+        msg['type'] == 'close' &&
+        generation is num &&
+        _isDeviceDisconnectCleanup(pluginId, generation.toInt()) &&
+        _plugins[pluginId]?.state == PluginRuntimeState.stopping;
+    if (_lifecycle != PluginManagerLifecycle.active && !cleanupTransportClose) {
+      return;
+    }
     try {
       await _handleTransportMessage(pluginId, msg);
     } catch (e, st) {
@@ -1064,7 +1072,6 @@ class PluginManager {
     Map<String, dynamic> msg,
   ) async {
     await Future<void>.delayed(Duration.zero);
-    if (_lifecycle != PluginManagerLifecycle.active) return;
     final bridgeToken = msg['bridgeToken'];
     final generation = msg['generation'] is num
         ? (msg['generation'] as num).toInt()
@@ -1073,14 +1080,18 @@ class PluginManager {
     final payload = msg['payload'];
     if (payload is! Map) return;
     final data = Map<String, dynamic>.from(payload);
+    final invocationId = data['invocationId'];
+    final pending = invocationId is String
+        ? _pendingDeviceInvocations[invocationId]
+        : null;
+    final cleanupDisconnect =
+        type == 'invocationResult' &&
+        pending?.operation == PluginDeviceOperation.disconnect &&
+        _isDeviceDisconnectCleanup(pluginId, generation);
+    if (_lifecycle != PluginManagerLifecycle.active && !cleanupDisconnect) {
+      return;
+    }
     if (type == 'invocationResult') {
-      final invocationId = data['invocationId'];
-      final pending = invocationId is String
-          ? _pendingDeviceInvocations[invocationId]
-          : null;
-      final cleanupDisconnect =
-          pending?.operation == PluginDeviceOperation.disconnect &&
-          _deviceDisconnectCleanup.contains((pluginId, generation));
       if ((generation != _pluginGenerations[pluginId] ||
               _plugins[pluginId]?.isAlive != true) &&
           !cleanupDisconnect) {
@@ -1220,8 +1231,7 @@ class PluginManager {
         _plugins[pluginId]?.isAlive == true;
     final cleanupDisconnect =
         operation == PluginDeviceOperation.disconnect &&
-        _lifecycle == PluginManagerLifecycle.active &&
-        _deviceDisconnectCleanup.contains((pluginId, generation));
+        _isDeviceDisconnectCleanup(pluginId, generation);
     if (!isCurrent && !cleanupDisconnect) {
       return Future.error(
         const PluginDeviceException('Plugin generation changed'),
@@ -1341,9 +1351,8 @@ class PluginManager {
         _plugins[pluginId]?.isAlive == true;
     final cleanupTransportClose =
         type == 'close' &&
-        _lifecycle == PluginManagerLifecycle.active &&
-        _plugins[pluginId]?.state == PluginRuntimeState.stopping &&
-        _deviceDisconnectCleanup.contains((pluginId, generation));
+        _isDeviceDisconnectCleanup(pluginId, generation) &&
+        _plugins[pluginId]?.state == PluginRuntimeState.stopping;
     if (!current && !cleanupTransportClose) {
       _replyTransport(
         requestId,
@@ -1508,6 +1517,11 @@ class PluginManager {
       _log.warning('Failed to remove transport listener', e, st);
     }
   }
+
+  bool _isDeviceDisconnectCleanup(String pluginId, int generation) =>
+      (_lifecycle == PluginManagerLifecycle.active ||
+          _lifecycle == PluginManagerLifecycle.disposing) &&
+      _deviceDisconnectCleanup.contains((pluginId, generation));
 
   int? _messageGeneration(String pluginId, Map<String, dynamic> msg) {
     final generation = msg['generation'];
@@ -1934,7 +1948,9 @@ class PluginManager {
       await deviceService.removeAllForPlugin(
         pluginId,
         retiringGeneration,
-        runDisconnect: _lifecycle == PluginManagerLifecycle.active,
+        runDisconnect:
+            _lifecycle == PluginManagerLifecycle.active ||
+            _lifecycle == PluginManagerLifecycle.disposing,
       );
     } catch (error, stackTrace) {
       firstError ??= error;

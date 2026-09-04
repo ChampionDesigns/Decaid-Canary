@@ -189,8 +189,6 @@ void main() {
       deviceController.devices.map((device) => device.deviceId),
       contains(registered.deviceId),
     );
-    // The scan re-published the registration, so the sensor is connectable
-    // again through the existing sensor path.
     await sensor.connectionState
         .where((state) => state == ConnectionState.connected)
         .first
