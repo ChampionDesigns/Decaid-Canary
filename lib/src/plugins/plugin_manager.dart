@@ -1131,6 +1131,10 @@ class PluginManager {
           retired.remove(invocationId);
           if (retired.isEmpty) {
             _retiredDeviceConnectInvocations.remove((pluginId, generation));
+            await _transportService.closeRetiredConnectCandidates(
+              pluginId,
+              generation,
+            );
           }
         }
       }
@@ -1533,17 +1537,6 @@ class PluginManager {
             );
             return;
           }
-          if (!ownsDeviceConnect &&
-              _retiredDeviceConnectInvocations[(pluginId, generation)]
-                      ?.isNotEmpty ==
-                  true) {
-            _replyTransport(
-              requestId,
-              bridgeToken,
-              error: 'Plugin device connect retired',
-            );
-            return;
-          }
           final result = await _transportService.open(
             pluginId: pluginId,
             generation: generation,
@@ -1552,6 +1545,17 @@ class PluginManager {
                 ? deviceRegistrationHandle
                 : null,
             deviceInvocationId: ownsDeviceConnect ? deviceInvocationId : null,
+            retiredConnectCandidate:
+                !ownsDeviceConnect &&
+                _retiredDeviceConnectInvocations[(pluginId, generation)]
+                        ?.isNotEmpty ==
+                    true &&
+                !_pendingDeviceInvocations.values.any(
+                  (pending) =>
+                      pending.pluginId == pluginId &&
+                      pending.generation == generation &&
+                      pending.operation == PluginDeviceOperation.connect,
+                ),
           );
           if (!_isCurrentPluginMessage(pluginId, {'generation': generation})) {
             unawaited(
