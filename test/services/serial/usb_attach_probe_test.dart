@@ -360,6 +360,38 @@ void main() {
     expect(liveDevices, [same(reconnected)]);
   });
 
+  test('stale disconnect preserves replacement ownership', () async {
+    final stale = _FakeMachine();
+    final reconnected = _FakeMachine();
+    var detections = 0;
+    listed = [_device()];
+    detection = (_) async => detections++ == 0 ? stale : reconnected;
+    service = build();
+    const remembered = RememberedDevice(
+      id: 'usb-2e8a-a-8549628789ABCDEF',
+      name: 'DE1',
+      type: DeviceType.machine,
+      implementation: DeviceImplementation.unifiedDe1,
+      transportType: TransportType.serial,
+    );
+
+    await service.tryQuickConnect(remembered);
+    await service.tryQuickConnect(remembered);
+    stale.setConnectionState(ConnectionState.disconnected);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(await service.devices.first, [same(reconnected)]);
+
+    await service.handleUsbEvent(
+      UsbEvent()
+        ..event = UsbEvent.ACTION_USB_DETACHED
+        ..device = _device(),
+    );
+
+    expect(reconnected.disconnectCalls, 1);
+    expect(await service.devices.first, isEmpty);
+  });
+
   for (final order in ['de1-first', 'keyboard-first']) {
     test('generic startup hint with multiple devices ($order) still finds '
         'the supported machine', () async {

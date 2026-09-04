@@ -266,7 +266,7 @@ class SerialServiceAndroid
     _recordPhysicalOwnership(machine.deviceId, device);
     machine.connectionState.listen((state) {
       if (state == ConnectionState.disconnected) {
-        _devices.remove(machine);
+        if (!_devices.remove(machine)) return;
         _machineSubject.add(_devices);
         _logicalToPhysicalDeviceId.remove(machine.deviceId);
         final t = _transportForDeviceId.remove(machine.deviceId);
@@ -344,7 +344,7 @@ class SerialServiceAndroid
         _recordPhysicalOwnership(connected.deviceId, d);
         connected.connectionState.listen((state) {
           if (state == ConnectionState.disconnected) {
-            _devices.remove(connected);
+            if (!_devices.remove(connected)) return;
             _machineSubject.add(_devices);
             _logicalToPhysicalDeviceId.remove(connected.deviceId);
             final t = _transportForDeviceId.remove(connected.deviceId);
