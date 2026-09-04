@@ -64,7 +64,23 @@ class ShotExportSection implements DataExportSection {
 
         if (existing != null) {
           if (strategy == ConflictStrategy.overwrite) {
-            await _controller.storageService.updateShot(record);
+            final contentChanged = !existing.sameContent(
+              record,
+              includeMeasurements: true,
+            );
+            await _controller.storageService.updateShot(
+              record.copyWith(
+                createdAt:
+                    existing.createdAt ??
+                    record.createdAt ??
+                    existing.timestamp,
+                updatedAt: contentChanged
+                    ? DateTime.now().toUtc()
+                    : existing.updatedAt ??
+                          existing.createdAt ??
+                          existing.timestamp,
+              ),
+            );
             imported++;
           } else {
             skipped++;

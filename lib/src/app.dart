@@ -64,6 +64,7 @@ import 'settings/gateway_mode.dart';
 import 'settings/settings_controller.dart';
 import 'settings/settings_view.dart';
 import 'package:reaprime/src/services/account/decent_account_service.dart';
+import 'package:reaprime/src/services/app_log_upload_service.dart';
 
 class NavigationService {
   static final GlobalKey<NavigatorState> navigatorKey =
@@ -98,6 +99,7 @@ class MyApp extends StatefulWidget {
     this.profileStorageService,
     this.decentAccountService,
     this.accountTokensController,
+    this.appLogUploadService,
     this.batteryController,
   });
 
@@ -123,6 +125,7 @@ class MyApp extends StatefulWidget {
   final ProfileStorageService? profileStorageService;
   final DecentAccountService? decentAccountService;
   final AccountTokensController? accountTokensController;
+  final AppLogUploadService? appLogUploadService;
   final BatteryController? batteryController;
 
   @override
@@ -345,7 +348,10 @@ class _MyAppState extends State<MyApp> {
                         (e) => e.deviceId == deviceId,
                       );
                       if (device is De1Interface) {
-                        return De1DebugView(machine: device);
+                        return De1DebugView(
+                          machine: device,
+                          de1Controller: widget.de1Controller,
+                        );
                       }
                       if (device is Scale) {
                         return ScaleDebugView(scale: device);
@@ -363,6 +369,7 @@ class _MyAppState extends State<MyApp> {
                     case DebugItemListView.routeName:
                       return DebugItemListView(
                         controller: widget.deviceController,
+                        de1Controller: widget.de1Controller,
                       );
                     case RealtimeShotFeature.routeName:
                       final args = routeSettings.arguments;
@@ -391,6 +398,11 @@ class _MyAppState extends State<MyApp> {
                                   .context
                                   ?.targetYield ??
                               0,
+                          targetWaterVolume: widget
+                              .workflowController
+                              .currentWorkflow
+                              .context
+                              ?.targetWaterVolume,
                           bypassSAW:
                               widget.settingsController.gatewayMode ==
                               GatewayMode.full,
@@ -444,6 +456,7 @@ class _MyAppState extends State<MyApp> {
                     case PluginsSettingsView.routeName:
                       return PluginsSettingsView(
                         pluginLoaderService: widget.pluginLoaderService,
+                        decentAccountService: widget.decentAccountService,
                       );
                     case DeviceManagementPage.routeName:
                       return DeviceManagementPage(
@@ -455,6 +468,7 @@ class _MyAppState extends State<MyApp> {
                         controller: widget.settingsController,
                         persistenceController: widget.persistenceController,
                         de1Controller: widget.de1Controller,
+                        decentAccountService: widget.decentAccountService,
                         profileStorageService: widget.profileStorageService,
                         beanStorageService: widget.beanStorage,
                         grinderStorageService: widget.grinderStorage,
@@ -481,6 +495,7 @@ class _MyAppState extends State<MyApp> {
                       return AccountPage(
                         accountService: widget.decentAccountService!,
                         tokensController: widget.accountTokensController,
+                        appLogUploadService: widget.appLogUploadService,
                       );
                     case LauncherScanPage.routeName:
                       return LauncherScanPage(

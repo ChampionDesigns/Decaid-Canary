@@ -11,6 +11,7 @@ import 'package:reaprime/src/models/device/remembered_device.dart';
 import 'package:reaprime/src/models/device/scan_filter.dart';
 import 'package:reaprime/src/models/device/usb_attach_probe.dart';
 import 'package:reaprime/src/models/device/watch_filter.dart';
+import 'package:reaprime/src/models/device/watch_state.dart';
 import 'package:reaprime/src/services/ble/ble_discovery_service.dart';
 import 'package:reaprime/src/services/telemetry/telemetry_service.dart';
 import 'package:rxdart/rxdart.dart';
@@ -28,8 +29,16 @@ class DeviceController
 
   final BehaviorSubject<bool> _scanningStream = BehaviorSubject.seeded(false);
 
+  final BehaviorSubject<DeviceWatchState> _scaleWatchState =
+      BehaviorSubject.seeded(DeviceWatchState.inactive);
+
   @override
   Stream<bool> get scanningStream => _scanningStream.stream;
+
+  @override
+  Stream<DeviceWatchState> get scaleWatchState => _scaleWatchState.stream;
+
+  @override
   bool get isScanning => _scanningStream.value;
 
   final BehaviorSubject<AdapterState> _adapterStateStream =
@@ -40,6 +49,15 @@ class DeviceController
 
   @override
   AdapterState get currentAdapterState => _adapterStateStream.value;
+
+  Future<List<Map<String, Object?>>> bleDiagnostics() async => Future.wait(
+    _services.whereType<BleDiscoveryService>().map((service) async {
+      return {
+        'service': service.runtimeType.toString(),
+        'details': await service.diagnostics(),
+      };
+    }),
+  );
 
   final PublishSubject<DeviceAttachedEvent> _deviceAttachedStream =
       PublishSubject<DeviceAttachedEvent>();
@@ -103,8 +121,23 @@ class DeviceController
 
     for (var service in _services) {
       try {
+        if (service case final DeviceAttachNotifier notifier) {
+          final attachSub = notifier.deviceAttached.listen((event) {
+            _attachOrigins[event] = service;
+            _log.info("device attached on $service: $event");
+            if (!_deviceAttachedStream.isClosed) {
+              _deviceAttachedStream.add(event);
+            }
+          });
+          _serviceSubscriptions.add(attachSub);
+        }
         await service.initialize();
         if (_disposed) return;
+        if (service case final DeviceWatchCapable watch) {
+          _serviceSubscriptions.add(
+            watch.deviceWatchState.listen(_scaleWatchState.add),
+          );
+        }
         final subscription = service.devices.listen(
           (devices) => _serviceUpdate(service, devices),
         );
@@ -116,16 +149,6 @@ class DeviceController
             }
           });
           _serviceSubscriptions.add(adapterSub);
-        }
-        if (service case final DeviceAttachNotifier notifier) {
-          final attachSub = notifier.deviceAttached.listen((event) {
-            _attachOrigins[event] = service;
-            _log.info("device attached on $service: $event");
-            if (!_deviceAttachedStream.isClosed) {
-              _deviceAttachedStream.add(event);
-            }
-          });
-          _serviceSubscriptions.add(attachSub);
         }
       } catch (e) {
         _log.warning("Service $service failed to init:", e);
@@ -246,20 +269,20 @@ class DeviceController
   bool get supportsBackgroundWatch => _watchCapableServices.isNotEmpty;
 
   @override
-  Future<void> startScaleWatch(DeviceWatchFilter filter) async {
+  Future<DeviceWatchStartResult> startScaleWatch(
+    DeviceWatchFilter filter,
+  ) async {
+    var result = DeviceWatchStartResult.failed;
     for (final service in _watchCapableServices) {
-      await service.startDeviceWatch(filter);
+      result = await service.startDeviceWatch(filter);
     }
+    return result;
   }
 
   @override
   Future<void> stopScaleWatch() async {
     for (final service in _watchCapableServices) {
-      try {
-        await service.stopDeviceWatch();
-      } catch (e, st) {
-        _log.fine('stopDeviceWatch failed for $service', e, st);
-      }
+      await service.stopDeviceWatch();
     }
   }
 
@@ -364,6 +387,7 @@ class DeviceController
     _serviceSubscriptions.clear();
     _deviceStream.close();
     _scanningStream.close();
+    _scaleWatchState.close();
     _adapterStateStream.close();
     _deviceAttachedStream.close();
   }

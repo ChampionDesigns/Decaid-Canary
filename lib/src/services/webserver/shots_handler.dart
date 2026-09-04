@@ -4,6 +4,7 @@ import 'package:reaprime/src/controllers/persistence_controller.dart';
 import 'package:reaprime/src/models/data/shot_record.dart';
 import 'package:reaprime/src/plugins/plugin_manager.dart';
 import 'package:reaprime/src/services/storage/bean_storage_service.dart';
+import 'package:reaprime/src/services/webserver/bounded_request_body.dart';
 import 'package:reaprime/src/services/webserver/json_response.dart';
 import 'package:shelf_plus/shelf_plus.dart';
 
@@ -190,12 +191,30 @@ class ShotsHandler {
   Future<Response> _updateShot(Request req, String id) async {
     id = Uri.decodeComponent(id);
     try {
-      final body = await req.body.asString;
+      final body = await readBoundedRequestBodyString(
+        req,
+        maxBytes: largeRequestBodyBytes,
+        timeout: largeRequestBodyTimeout,
+      );
       final json = jsonDecode(body) as Map<String, dynamic>;
 
       if (json['id'] != null && json['id'] != id) {
         return jsonBadRequest({
           "error": "ID in path does not match ID in body",
+        });
+      }
+
+      if (json.containsKey('measurements')) {
+        return jsonBadRequest({
+          "error": "measurements is not editable via this endpoint",
+        });
+      }
+
+      if (json.containsKey('createdAt') || json.containsKey('updatedAt')) {
+        return jsonBadRequest({
+          "error":
+              "createdAt and updatedAt are system-managed and cannot be "
+              "modified via this endpoint",
         });
       }
 
@@ -211,6 +230,17 @@ class ShotsHandler {
       _synchronizeLegacyAnnotationAliases(merged);
       merged['id'] = id;
 
+      final contentChanged = !ShotRecord.fromJson(
+        merged,
+      ).sameContent(existingShot);
+      merged['updatedAt'] =
+          (contentChanged
+                  ? DateTime.now().toUtc()
+                  : existingShot.updatedAt ??
+                        existingShot.createdAt ??
+                        existingShot.timestamp)
+              .toIso8601String();
+
       final updatedShot = ShotRecord.fromJson(merged);
       await _controller.updateShot(updatedShot);
       _log.info("Broadcasting shotUpdated for ${updatedShot.id}");
@@ -221,6 +251,8 @@ class ShotsHandler {
       });
 
       return jsonOk(updatedShot.toJson());
+    } on RequestBodyReadException {
+      rethrow;
     } catch (e, st) {
       _log.severe("Error updating shot $id", e, st);
       return jsonError({"error": e.toString()});

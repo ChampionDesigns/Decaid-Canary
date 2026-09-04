@@ -807,6 +807,22 @@ function createPlugin() {
         expect(source.assetName, isNull);
       });
 
+      test('bundled dcamp gets its canonical repo', () async {
+        const pluginId = 'dcamp.reaplugin';
+        // Must match the bundled manifest version (assets/plugins/dcamp.reaplugin
+        // = 0.1.2); initialize() already installed the bundled copy, so a lower
+        // version here trips the downgrade guard.
+        await installBundledCopy(pluginId: pluginId, version: '0.1.2');
+
+        service.seedBundledSources();
+
+        final source = service.sourceFor(pluginId)!;
+        expect(source.kind, PluginSourceKind.githubRelease);
+        expect(source.repo, 'decentespresso/decaid-dcamp-plugin');
+        expect(source.releaseTag, 'v0.1.2');
+        expect(source.assetName, isNull);
+      });
+
       test('an existing DYE2 without metadata is migrated', () async {
         await installBundledCopy();
         expect(service.sourceFor(dye2Id), isNull);

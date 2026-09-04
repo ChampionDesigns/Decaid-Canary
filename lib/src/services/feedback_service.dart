@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -9,6 +10,7 @@ import 'package:logging/logging.dart';
 import 'package:reaprime/build_info.dart';
 import 'package:reaprime/src/models/feedback/feedback_request.dart';
 import 'package:reaprime/src/models/feedback/feedback_result.dart';
+import 'package:reaprime/src/services/account/decent_account_service.dart';
 import 'package:reaprime/src/services/storage/app_directories.dart';
 import 'package:reaprime/src/services/telemetry/anonymization.dart';
 
@@ -16,6 +18,8 @@ class FeedbackService {
   final String _githubToken;
   final String _repo;
   final List<String> Function() _currentSerialNumbers;
+  final DecentAccountService? _accountService;
+  final Duration _supportLinkTimeout;
   final Logger _log = Logger('FeedbackService');
 
   static const String _githubApiBase = 'https://api.github.com';
@@ -24,9 +28,13 @@ class FeedbackService {
     required String githubToken,
     String repo = 'decentespresso/decaid',
     required List<String> Function() currentSerialNumbers,
+    DecentAccountService? accountService,
+    Duration supportLinkTimeout = const Duration(seconds: 30),
   }) : _githubToken = githubToken,
        _repo = repo,
-       _currentSerialNumbers = currentSerialNumbers;
+       _currentSerialNumbers = currentSerialNumbers,
+       _accountService = accountService,
+       _supportLinkTimeout = supportLinkTimeout;
 
   bool get isConfigured => _githubToken.isNotEmpty;
 
@@ -73,6 +81,23 @@ class FeedbackService {
 
       final issueNumber = issueResult['number'] as int;
       final issueUrl = issueResult['html_url'] as String;
+
+      final supportLinkAbort = Completer<void>();
+      try {
+        await _linkFeedbackToSupport(
+          issueNumber: issueNumber,
+          issueUrl: issueUrl,
+          abort: supportLinkAbort,
+        ).timeout(
+          _supportLinkTimeout,
+          onTimeout: () {
+            supportLinkAbort.complete();
+            throw TimeoutException('Decent Support linking timed out');
+          },
+        );
+      } catch (e, st) {
+        _log.warning('Could not link feedback to Decent support', e, st);
+      }
 
       _log.info('Feedback submitted successfully as issue #$issueNumber');
       return FeedbackSubmissionResult.succeeded(
@@ -317,6 +342,69 @@ class FeedbackService {
     } catch (e) {
       _log.severe('Failed to create GitHub issue', e);
       return null;
+    }
+  }
+
+  Future<void> _linkFeedbackToSupport({
+    required int issueNumber,
+    required String issueUrl,
+    required Completer<void> abort,
+  }) async {
+    final accountService = _accountService;
+    if (accountService == null || abort.isCompleted) return;
+    if (!await accountService.hasLinkedAccount() || abort.isCompleted) {
+      return;
+    }
+    final contactId = await accountService.sendSupportMessage(
+      subject: 'Decaid feedback #$issueNumber',
+      body: issueUrl,
+      abortTrigger: abort.future,
+    );
+    if (abort.isCompleted) return;
+    await _updateGitHubIssueBody(issueNumber, contactId, abort);
+  }
+
+  Future<void> _updateGitHubIssueBody(
+    int issueNumber,
+    String contactId,
+    Completer<void> abort,
+  ) async {
+    final uri = Uri.parse('$_githubApiBase/repos/$_repo/issues/$issueNumber');
+    final currentRequest = http.AbortableRequest(
+      'GET',
+      uri,
+      abortTrigger: abort.future,
+    )..headers.addAll(_authHeaders);
+    final currentResponse = await http.Response.fromStream(
+      await currentRequest.send(),
+    );
+    if (currentResponse.statusCode != 200) {
+      throw Exception(
+        'Failed to read GitHub issue #$issueNumber '
+        '(${currentResponse.statusCode})',
+      );
+    }
+    if (abort.isCompleted) return;
+    final currentBody =
+        (jsonDecode(currentResponse.body) as Map<String, dynamic>)['body']
+            as String? ??
+        '';
+    final separator = currentBody.isEmpty
+        ? ''
+        : currentBody.endsWith('\n')
+        ? '\n'
+        : '\n\n';
+    final request =
+        http.AbortableRequest('PATCH', uri, abortTrigger: abort.future)
+          ..headers.addAll(_authHeaders)
+          ..body = jsonEncode({
+            'body': '$currentBody$separator---\n**Contact:** `$contactId`\n',
+          });
+    final response = await http.Response.fromStream(await request.send());
+    if (response.statusCode != 200) {
+      throw Exception(
+        'Failed to update GitHub issue #$issueNumber (${response.statusCode})',
+      );
     }
   }
 

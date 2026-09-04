@@ -8,6 +8,10 @@ REA supports loading profiles to the espresso machine either directly through th
 
 The REA Profile data object definition lives in `lib/src/models/data/profile.dart`.
 
+## Workflow Final Targets
+
+`WorkflowContext.targetYield` is beverage output weight in grams and drives scale-based stop-at-weight. `WorkflowContext.targetWaterVolume` is DE1-integrated machine water volume in milliliters and overrides `Profile.targetVolume` only for the existing volumetric fallback when no usable scale stop is available. A null workflow water target inherits the profile target; `0` disables volumetric stopping for that workflow. These quantities are never converted or used as fallbacks for each other.
+
 Step transitions can be owned by either the DE1 firmware or the app. Firmware
 owns pressure/flow `exit` conditions because they are encoded into the profile
 sent to the machine. The app owns per-step `weight` exits because only the
@@ -82,6 +86,7 @@ The implementation follows REA's standard layered architecture with clear separa
 **ProfileController** (`lib/src/controllers/profile_controller.dart`)
 - Business logic and validation layer
 - Auto-loads default profiles from `assets/defaultProfiles/` on every startup (idempotent: seeds new ones, skips existing by content hash). Seeding **preserves the stored visibility** of an existing default, so a default the user hid stays hidden across restarts (re-show it with `POST /api/v1/profiles/restore/{filename}`)
+- **Bundled provenance**: a default profile JSON may carry `"parent_id": "profile:…"` (the immutable content-hash id of the parent bundled profile); seeding then sets that record's `parentId` to the fixed id (after validating the parent exists, idempotent). `best_practice_v3.json` links back to `best_practice.json`'s exact content version, and both appear in the v3 lineage. A fixed id (not a filename) keeps lineage stable even if the parent file's content changes in a future release
 - **Curation upkeep** (so edits to bundled defaults reach existing installs): refreshes a default's presentation fields (title/author/notes) when the bundled `metadataHash` changes but content is unchanged; and `_retireStaleDefaults` hides any default whose `metadata.filename` left the manifest, or whose stored id no longer matches the current bundled version (content changed). Retired defaults are hidden, never deleted
 - Enforces default profile protection (cannot be deleted, only hidden; cannot modify execution fields)
 - Validates parent profile existence before creating children
