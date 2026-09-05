@@ -410,11 +410,9 @@ void main() {
     );
     await pumpDebounce();
 
-    expect(
-      bengle.sawWrites,
-      [30.0],
-      reason: 'a target that goes away must not push 0 over a good value',
-    );
+    expect(bengle.sawWrites, [
+      30.0,
+    ], reason: 'a target that goes away must not push 0 over a good value');
     await bridge.dispose();
   });
 
