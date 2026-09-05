@@ -41,6 +41,9 @@ void main() {
     },
     'weather.reaplugin': {
       PluginPermissions.log,
+      // The plugin fetches from Open-Meteo. Without `api` the request is
+      // refused and the plugin emits nothing at all.
+      PluginPermissions.api,
       PluginPermissions.emit,
       PluginPermissions.pluginStorage,
     },
