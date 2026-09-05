@@ -83,11 +83,9 @@ void main() {
     scale.add(null);
     await Future.delayed(Duration.zero);
 
-    expect(
-      controller.remembered.map((d) => d.id),
-      ['s'],
-      reason: 'disconnect keeps it remembered',
-    );
+    expect(controller.remembered.map((d) => d.id), [
+      's',
+    ], reason: 'disconnect keeps it remembered');
   });
 
   test('registry restores from settings on init', () async {
@@ -330,11 +328,10 @@ void main() {
       );
       await Future.delayed(Duration.zero);
 
-      expect(
-        controller.remembered.map((d) => d.id).toSet(),
-        {'wifi:hds.local', 'AA:BB:CC:DD:EE:FF'},
-        reason: 'same name, distinct ids → distinct entries',
-      );
+      expect(controller.remembered.map((d) => d.id).toSet(), {
+        'wifi:hds.local',
+        'AA:BB:CC:DD:EE:FF',
+      }, reason: 'same name, distinct ids → distinct entries');
     },
   );
 
@@ -373,11 +370,9 @@ void main() {
       throwsA(isA<StateError>()),
       reason: 'the awaitable forget path must not swallow a persist failure',
     );
-    expect(
-      controller.remembered.map((d) => d.id),
-      ['a'],
-      reason: 'a failed persist rolls back the removal (memory matches disk)',
-    );
+    expect(controller.remembered.map((d) => d.id), [
+      'a',
+    ], reason: 'a failed persist rolls back the removal (memory matches disk)');
   });
 
   test(
@@ -409,11 +404,9 @@ void main() {
       controller = build();
       await controller.initialize();
 
-      expect(
-        controller.remembered.map((d) => d.id),
-        ['a'],
-        reason: 'an unreadable record must not abort the whole load',
-      );
+      expect(controller.remembered.map((d) => d.id), [
+        'a',
+      ], reason: 'an unreadable record must not abort the whole load');
     },
   );
 

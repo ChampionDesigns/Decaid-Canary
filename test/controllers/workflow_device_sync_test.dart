@@ -421,11 +421,9 @@ void main() {
 
         applyProfile('A');
         await Future<void>.delayed(const Duration(milliseconds: 10));
-        expect(
-          gated.setProfileCalls.map((p) => p.title),
-          ['A'],
-          reason: 'first change starts an upload immediately',
-        );
+        expect(gated.setProfileCalls.map((p) => p.title), [
+          'A',
+        ], reason: 'first change starts an upload immediately');
 
         applyProfile('B');
         applyProfile('C');
@@ -438,11 +436,10 @@ void main() {
 
         gated.completeNext();
         await Future<void>.delayed(const Duration(milliseconds: 10));
-        expect(
-          gated.setProfileCalls.map((p) => p.title),
-          ['A', 'C'],
-          reason: 'B was superseded by C before its upload started',
-        );
+        expect(gated.setProfileCalls.map((p) => p.title), [
+          'A',
+          'C',
+        ], reason: 'B was superseded by C before its upload started');
 
         gated.completeNext();
         await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -475,11 +472,9 @@ void main() {
         );
 
         await Future<void>.delayed(const Duration(milliseconds: 40));
-        expect(
-          flaky.setProfileCalls.map((p) => p.title),
-          ['Cleaning'],
-          reason: 'retry must fire without any further workflow change',
-        );
+        expect(flaky.setProfileCalls.map((p) => p.title), [
+          'Cleaning',
+        ], reason: 'retry must fire without any further workflow change');
       },
     );
 
@@ -496,11 +491,9 @@ void main() {
       applyProfile('B');
 
       await Future<void>.delayed(const Duration(milliseconds: 100));
-      expect(
-        flaky.setProfileCalls.map((p) => p.title),
-        ['B'],
-        reason: 'superseded profile A must never be uploaded',
-      );
+      expect(flaky.setProfileCalls.map((p) => p.title), [
+        'B',
+      ], reason: 'superseded profile A must never be uploaded');
     });
 
     test('backoff walks the delay list until the upload lands', () async {
@@ -598,11 +591,11 @@ void main() {
       gated.completeNext();
       await Future<void>.delayed(const Duration(milliseconds: 10));
 
-      expect(
-        gated.setProfileCalls.map((p) => p.title),
-        ['P1', 'P2', 'P1'],
-        reason: 'device must converge to the workflow profile, not P2',
-      );
+      expect(gated.setProfileCalls.map((p) => p.title), [
+        'P1',
+        'P2',
+        'P1',
+      ], reason: 'device must converge to the workflow profile, not P2');
 
       gated.completeNext();
       await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -903,11 +896,9 @@ void main() {
       expect(steamEvents, hasLength(steamEventCountAfterBInit));
       expect(hotWaterEvents, hasLength(hotWaterEventCountAfterBInit));
       expect(rinseEvents, hasLength(rinseEventCountAfterBInit));
-      expect(
-        de1B.setProfileCalls.map((p) => p.title),
-        ['Persisted'],
-        reason: 'B should receive the profile via initSettled',
-      );
+      expect(de1B.setProfileCalls.map((p) => p.title), [
+        'Persisted',
+      ], reason: 'B should receive the profile via initSettled');
     });
 
     test('stale init does not emit B\'s generation', () async {
@@ -1290,11 +1281,10 @@ void main() {
         wf.currentWorkflow.copyWith(profile: _profile('Adaptive')),
       );
       await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(
-        refusing.setProfileCalls.map((p) => p.title),
-        ['Lever demo', 'Adaptive'],
-        reason: 'a workflow change triggers a fresh attempt',
-      );
+      expect(refusing.setProfileCalls.map((p) => p.title), [
+        'Lever demo',
+        'Adaptive',
+      ], reason: 'a workflow change triggers a fresh attempt');
     });
 
     test('re-selecting the same refused profile does not re-attempt', () async {
@@ -1366,11 +1356,10 @@ void main() {
         wf.currentWorkflow.copyWith(profile: _profile('Adaptive')),
       );
       await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(
-        refusing.setProfileCalls.map((p) => p.title),
-        ['Power exit demo', 'Adaptive'],
-        reason: 'a workflow change clears the park and re-attempts',
-      );
+      expect(refusing.setProfileCalls.map((p) => p.title), [
+        'Power exit demo',
+        'Adaptive',
+      ], reason: 'a workflow change clears the park and re-attempts');
     });
   });
 }
