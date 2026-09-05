@@ -78,6 +78,10 @@ void main() {
     final bengle = Bengle(transport: transport);
     transport.queueMmrResponseInt(MMRItem.calFlowEst, 100);
     transport.queueOnConnectResponses(v13Model: 128, profileModeCaps: caps);
+    // Bengle.onConnect also hydrates the LED palette. Without a queued answer
+    // that read waits out its fail-closed timeout - 12.6 s per test, and this
+    // file was the slowest in the whole suite because of it.
+    transport.queuePaletteHydrationResponses();
     await bengle.onConnect();
     addTearDown(transport.dispose);
     return bengle;
