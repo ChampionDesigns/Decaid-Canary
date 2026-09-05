@@ -21,7 +21,7 @@ class GitHubRelease {
 
 const _headers = {
   'Accept': 'application/vnd.github.v3+json',
-  'User-Agent': 'Decide',
+  'User-Agent': 'Decaid',
 };
 
 void validateGitHubRepo(String repo) {
