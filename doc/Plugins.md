@@ -683,34 +683,47 @@ origin, so a bare path like `/skin/history` resolves against the API origin and
 lands nowhere. And accepting an absolute URL instead would be an open redirect:
 a link could send the page to any host it liked.
 
-So constrain the value, and reconstruct the origin from a source the page
-already trusts:
+So constrain the value, rebuild the origin from what the page already knows,
+and check the result before you use it:
 
 1. **Require a skin-local path.** It must start with a single `/`. Reject `//`,
    which is protocol-relative and means another host, and reject anything
-   carrying a scheme. Nothing else is accepted — not a host, not an absolute
-   URL, not a bare relative path.
-2. **Ask Decaid where the skin is.** `GET /api/v1/webui/server/status` answers
-   `{serving, path, port, ip}`, where `ip` and `port` are the live skin origin.
-   The page never learns the origin from the parameter.
-3. **Join the two.** `new URL(path, skinOrigin)` with a path already known to
-   be skin-local cannot escape that origin.
+   carrying a scheme. Treat this as a first filter, not as the guarantee.
+2. **Rebuild the skin origin from the page's own host.** Keep the host the
+   browser actually used and replace only the port, with the live `port` from
+   `GET /api/v1/webui/server/status`. Do not build the origin from that
+   response's `ip`: on Android it is the server's bind address, `0.0.0.0`,
+   which is not an origin a browser can navigate to. The fixed `localhost:3000`
+   entry point redirects the same way, preserving the request host and changing
+   only the port.
+3. **Parse the target, then check its origin.** `new URL(path, skinOrigin)` is
+   not enough on its own. The URL parser treats `\` as `/` in an `http` URL and
+   strips tab and newline characters before it parses, so a value such as
+   `/\example.invalid` passes step 1 and still resolves to another host.
+   Require `target.origin === skinOrigin.origin` before you return it.
 
 ```javascript
 async function skinReturnUrl(raw) {
-  // A single leading slash, and no scheme. "//host" is another origin.
+  // First filter: a single leading slash, and no scheme.
   if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return null;
+
   const res = await fetch("/api/v1/webui/server/status");
-  const { serving, ip, port } = await res.json();
-  if (!serving || !ip || !port) return null;
-  return new URL(raw, `http://${ip}:${port}`).toString();
+  const { serving, port } = await res.json();
+  if (!serving || !Number.isInteger(port)) return null;
+
+  // Same host the browser used; only the port differs.
+  const skinOrigin = new URL(location.href);
+  skinOrigin.port = String(port);
+
+  const target = new URL(raw, skinOrigin);
+  return target.origin === skinOrigin.origin ? target.href : null;
 }
 
 const back = await skinReturnUrl(
   new URLSearchParams(location.search).get("return"),
 );
-// `back` is null when the skin is not being served, or when the value was
-// not skin-local. Show the page's own way out instead of navigating.
+// `back` is null when the skin is not being served, or when the target did not
+// resolve onto the skin origin. Show the page's own way out instead.
 ```
 
 **The skin origin is not fixed, so read it every time.** Decaid assigns the
