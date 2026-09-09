@@ -34,32 +34,52 @@ mixin LedStripCapability on UnifiedDe1 {
 
   Future<LedStripState?> getLedStripState() => _ledStripState.first;
 
+  /// Store the palette. Every one of these four registers is persisted by the
+  /// firmware, so each write is a flash write, and only a colour that CHANGED is
+  /// sent: saving one moved zone costs one write rather than four, and re-saving
+  /// the palette already held costs none.
   Future<void> setLedStrip(LedStripState state) async {
     final frontStrip = state.frontStrip.quantized();
     final backStrip = state.backStrip.quantized();
+    final held = _ledStripState.valueOrNull;
+    final heldFront = held?.frontStrip.quantized();
+    final heldBack = held?.backStrip.quantized();
     try {
-      await writeMmrInt(
-        BengleMmr.frontLedAwake,
-        _toFirmwareRgb(frontStrip.awake),
-      );
-      await writeMmrInt(
-        BengleMmr.frontLedSleep,
-        _toFirmwareRgb(frontStrip.sleeping),
-      );
-      await writeMmrInt(
-        BengleMmr.rearLedAwake,
-        _toFirmwareRgb(backStrip.awake),
-      );
-      await writeMmrInt(
-        BengleMmr.rearLedSleep,
-        _toFirmwareRgb(backStrip.sleeping),
-      );
+      if (heldFront?.awake != frontStrip.awake) {
+        await writeMmrInt(
+          BengleMmr.frontLedAwake,
+          _toFirmwareRgb(frontStrip.awake),
+        );
+      }
+      if (heldFront?.sleeping != frontStrip.sleeping) {
+        await writeMmrInt(
+          BengleMmr.frontLedSleep,
+          _toFirmwareRgb(frontStrip.sleeping),
+        );
+      }
+      if (heldBack?.awake != backStrip.awake) {
+        await writeMmrInt(
+          BengleMmr.rearLedAwake,
+          _toFirmwareRgb(backStrip.awake),
+        );
+      }
+      if (heldBack?.sleeping != backStrip.sleeping) {
+        await writeMmrInt(
+          BengleMmr.rearLedSleep,
+          _toFirmwareRgb(backStrip.sleeping),
+        );
+      }
     } catch (e) {
       if (!_ledStripState.isClosed) {
         _ledStripState.add(null);
       }
       rethrow;
     }
+    /* A stored write makes the firmware re-apply the pair for the state it is
+     * in, so both live registers have moved and what they show is no longer
+     * this object's to remember. */
+    _shownFront = null;
+    _shownBack = null;
     final derived = LedStripState(
       frontStrip: frontStrip,
       backStrip: backStrip,
@@ -84,14 +104,30 @@ mixin LedStripCapability on UnifiedDe1 {
   /// in the state that colour belongs to.
   ///
   /// The stored palette is untouched, so [ledStripState] does not move.
+  /// A frame that repeats the colour already showing writes nothing. A picker
+  /// being dragged sends every frame it renders, and a finger resting on one
+  /// colour would otherwise keep the write path busy for as long as it rests.
   Future<void> previewLedStrip({Color16? front, Color16? back}) async {
     if (front != null) {
-      await writeMmrInt(BengleMmr.frontLedColor, _toFirmwareRgb(front));
+      final rgb = _toFirmwareRgb(front);
+      if (rgb != _shownFront) {
+        await writeMmrInt(BengleMmr.frontLedColor, rgb);
+        _shownFront = rgb;
+      }
     }
     if (back != null) {
-      await writeMmrInt(BengleMmr.rearLedColor, _toFirmwareRgb(back));
+      final rgb = _toFirmwareRgb(back);
+      if (rgb != _shownBack) {
+        await writeMmrInt(BengleMmr.rearLedColor, rgb);
+        _shownBack = rgb;
+      }
     }
   }
+
+  /// The colour each live register was last sent, or null when the firmware has
+  /// recomputed them from the stored palette and this no longer knows.
+  int? _shownFront;
+  int? _shownBack;
 
   /// Put the strips back to the stored palette for the state the machine is in.
   ///
