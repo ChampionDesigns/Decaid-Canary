@@ -5916,6 +5916,8 @@ components:
           cleaingGroup,
           cleanSoaking,
           cleaningSteam,
+          pausedSteam,
+          puffing,
           errorNaN,
           errorInf,
           errorGeneric,

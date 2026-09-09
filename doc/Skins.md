@@ -262,6 +262,8 @@ Returns current machine state snapshot.
 - `cleaingGroup` - Cleaning group head
 - `cleanSoaking` - Soaking during clean
 - `cleaningSteam` - Steam cleaning
+- `pausedSteam` - Steam paused between pours
+- `puffing` - Steam purge after steam stops
 
 #### Request State Change
 ```http

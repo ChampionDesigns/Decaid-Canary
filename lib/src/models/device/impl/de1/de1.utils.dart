@@ -72,9 +72,6 @@ MachineSubstate mapDe1SubToMachineSubstate(De1SubState de1SubState) {
     case De1SubState.refill:
       return MachineSubstate.idle;
 
-    // Both are steam phases with nothing pouring, and both were reported as `idle`.
-    // A caller could not tell a pause from a purge from a machine doing nothing, so
-    // neither could be shown, and the purge in particular can last a while.
     case De1SubState.pausedSteam:
       return MachineSubstate.pausedSteam;
     case De1SubState.puffing:
