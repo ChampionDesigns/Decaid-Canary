@@ -78,6 +78,7 @@ A Decaid plugin consists of two required files:
   - `pluginStorage`: Call `host.storage`
   - `events.machine`: Receive `stateUpdate`
   - `events.shots`: Receive `shotStored` and `shotUpdated`
+  - `events.workflow`: Receive `workflowUpdated`
   - `proxy.decent_api`: Send read requests through `host.decentProxy`
   - `proxy.decent_api.write`: Send allowlisted write requests through `host.decentProxy`
   - `network.websocket`: Open outbound WebSocket connections (`ws://` and `wss://`) through `host.transport`
@@ -191,7 +192,7 @@ The returned object has `{ status, headers, body }`. Consent denial or non-decis
 Plugins receive events in the `onEvent` method:
 
 Machine broadcasts require `events.machine`. Shot lifecycle broadcasts require
-`events.shots`.
+`events.shots`. Workflow broadcasts require `events.workflow`.
 
 - **`stateUpdate`**: Machine state changes (temperature, pressure, flow, etc.)
 
@@ -204,6 +205,31 @@ Machine broadcasts require `events.machine`. Shot lifecycle broadcasts require
       pressure: 9.2,
       flow: 2.1,
       // ... other machine metrics
+    }
+  }
+  ```
+
+- **`workflowUpdated`**: Contains exactly the current workflow serialization
+  returned by `WorkflowController.currentWorkflow.toJson()`. A permitted plugin
+  receives the current workflow when a controller is attached or replaced and
+  after each successful load or reload. Later events are delivered when the
+  workflow revision changes.
+
+  ```javascript
+  {
+    name: "workflowUpdated",
+    payload: {
+      id: "workflow-id",
+      name: "Espresso",
+      description: "",
+      profile: { /* profile fields */ },
+      context: {
+        targetDoseWeight: 18.0,
+        targetYield: 36.0
+      },
+      steamSettings: { /* steam fields */ },
+      hotWaterData: { /* hot-water fields */ },
+      rinseData: { /* rinse fields */ }
     }
   }
   ```
@@ -361,6 +387,93 @@ subject; accept a `return` parameter for the way back.
 Treat every parameter as untrusted input: use it as a lookup key against the
 REST API, never interpolate it into generated HTML unescaped, and fall back to
 the page's normal empty state when the value names nothing.
+
+## BLE Declaration Work in Progress (#809)
+
+Manifest parsing accepts the separate `transport.ble` permission, `scale`
+driver type, Scale capabilities, and one `ble.match` declaration per plugin.
+This branch does not yet implement runtime BLE binding. Public non-BLE Scale
+registration is available as described below; end-to-end API and timing
+acceptance remain in progress.
+Accepting a declaration does not grant GATT access. See
+`doc/plans/issue-809-design.md` for the remaining implementation and tests.
+
+The matcher supports one case-insensitive `name` predicate (`exact`, `prefix`,
+or `contains`, 1-248 characters), and/or `serviceUuids` (1-64 UUIDs). It does not
+trim names. UUIDs accept 16-, 32-, and 128-bit forms and serialize as lowercase
+128-bit UUIDs. Name and service predicates combine with AND; the service list
+uses any-of semantics. Unknown keys and unconstrained matchers are invalid.
+
+Incomplete evidence remains indeterminate. A complete observation proving a
+required name is absent makes the matcher a non-match. The evidence cache keeps
+complete observations over incomplete ones regardless of source, uses observation
+time between equally complete records, and never merges records. A proven false
+predicate makes the matcher a non-match. A definite match cannot win against an
+indeterminate competing driver. Two definite matches conflict. Discovery and connection
+admission still need to use these arbitration primitives.
+
+### Non-BLE Scale Registration
+
+Declare a Scale driver in the manifest. No `transport.ble` permission is needed:
+
+```json
+"drivers": [{"id": "memory", "type": "scale"}]
+```
+
+A minimal synthetic Scale plugin can register an instance during `onLoad`:
+
+```javascript
+function createPlugin(host) {
+  return {
+    id: "example.scale",
+    onLoad() {
+      return host.devices.register({
+        driverId: "memory",
+        instanceId: "one",
+        name: "Memory Scale"
+      }, {
+        async connect(context) {
+          await context.publish({weight: 0});
+        },
+        disconnect() {}
+      });
+    }
+  };
+}
+```
+
+Each connect invocation receives a fresh context with `transport`,
+`publish(snapshot)`, and `reportDisconnected()`. Network `transport` uses the
+existing invocation-owned transport API and requires the corresponding network
+permission. Capture this context in protocol callbacks; do not look up a mutable
+current context when a delayed callback runs. The host rejects stale-session
+publications and failure reports. The persistent registration exposes `deviceId`
+and `unregister()`, not publication or failure-reporting methods.
+
+Scale disconnect remains in progress until the manager's bounded handler
+invocation and host transport cleanup finish. Reconnect waits for that retirement,
+including when the handler throws or times out. Host cleanup also closes transports
+opened by a connect handler that already completed; old handles cannot send into
+a replacement session. The adapter does not apply a separate disconnect timeout.
+
+Weight is finite signed grams. Optional `battery` is an integer from 0 to 100;
+omission or null means unknown, including in existing controller serialization.
+Optional finite `flow` and nonnegative integer `timerMs` require `flow` and
+`timerTelemetry` capabilities respectively. Battery requires `battery`.
+Arbitrary timestamps and unknown publication fields are rejected.
+
+Declare optional commands in manifest `capabilities`: `tare` requires a `tare`
+handler; `timerControl` requires `startTimer`, `stopTimer`, and `resetTimer`;
+`displayControl` requires `sleepDisplay` and `wakeDisplay`. Host registration
+validates handlers against these declarations, including direct bridge calls.
+Unsupported operations fail with `unsupported_operation`, not success.
+Disconnect-to-sleep recovery policy is not yet complete in this branch.
+
+Readiness requires both successful `connect` completion and a valid weight.
+Up to 256 initialization samples are retained for controller activation, then
+delivered once. Initialization is bounded; invalid samples cannot mark ready.
+Publication-ingress timestamps are provisional pending the required timing gate.
+
 ## Network Transports (`host.transport`)
 
 `host.transport` exposes permission-gated outbound network transports: WebSocket

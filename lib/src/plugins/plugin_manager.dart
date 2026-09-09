@@ -14,6 +14,7 @@ import 'plugin_transport_service.dart';
 import 'plugin_types.dart';
 import '../services/storage/kv_store_service.dart';
 import '../controllers/de1_controller.dart';
+import '../controllers/workflow_controller.dart';
 import '../models/device/de1_interface.dart';
 import '../models/device/machine.dart';
 import '../services/account/decent_proxy_service.dart';
@@ -102,6 +103,10 @@ class PluginManager {
   Future<void> _snapshotQueue = Future.value();
   int _attachmentGeneration = 0;
   int _snapshotGeneration = 0;
+  WorkflowController? _workflowController;
+  void Function()? _workflowListener;
+  int? _lastWorkflowRevision;
+  int _workflowAttachmentGeneration = 0;
   PluginManagerLifecycle _lifecycle = PluginManagerLifecycle.active;
   Future<void>? _disposeFuture;
   final Map<String, int> _retiringPluginGenerations = {};
@@ -121,6 +126,9 @@ class PluginManager {
   De1Controller? get de1Controller => _de1controller;
   PluginManagerLifecycle get lifecycle => _lifecycle;
   int get liveTransportCount => _transportService.liveTransportCount;
+  int get deviceConnectAttemptCount => _deviceConnectAttempts.length;
+  int get retiredDeviceConnectCount =>
+      _transportService.retiredDeviceConnectCount;
   int get attachmentGeneration => _attachmentGeneration;
   int get activeSubscriptionCount =>
       (_de1Subscription == null ? 0 : 1) +
@@ -195,6 +203,10 @@ class PluginManager {
     }
 
     try {
+      await runStage(
+        'workflow controller detachment',
+        _detachWorkflowController,
+      );
       await runStage('attachment queue', () => _attachmentQueue);
       await runStage('snapshot queue', () => _snapshotQueue);
       await runStage('controller detachment', _cancelControllerSubscriptions);
@@ -242,6 +254,9 @@ class PluginManager {
       _de1Subscription = null;
       _snapshotSubscription = null;
       _de1controller = null;
+      _workflowController = null;
+      _workflowListener = null;
+      _lastWorkflowRevision = null;
       _lifecycle = PluginManagerLifecycle.disposed;
     }
 
@@ -721,6 +736,11 @@ class PluginManager {
         __frozenTransportGlobal("__deviceRemoveHandlers", function (handle) {
           __mapDelete(__deviceHandlers, handle);
         });
+        __frozenTransportGlobal("__deviceHasHandler", function (handle, pluginId, generation, operation) {
+          const entry = __mapGet(__deviceHandlers, handle);
+          return !!entry && entry.pluginId === pluginId && entry.generation === generation &&
+            typeof entry.handlers[operation] === "function";
+        });
         __frozenTransportGlobal("__handleDeviceReply", function (msg) {
           const pending = __mapGet(__devicePending, msg.requestId);
           if (!pending || pending.bridgeToken !== msg.bridgeToken) return;
@@ -748,7 +768,7 @@ class PluginManager {
           }
           try {
             const handlerResult = operation === "connect"
-              ? handler(entry.connectTransport(invocationId))
+              ? handler(entry.connectTransport(invocationId, payload))
               : handler(payload);
             const promise = __nativeReflectApply(
               __nativePromiseResolve,
@@ -1166,23 +1186,58 @@ class PluginManager {
           }
           final typedDefinition = Map<String, dynamic>.from(definition);
           final driverId = typedDefinition['driverId'];
-          final declared =
-              _plugins[pluginId]?.manifest.drivers.any(
-                (driver) =>
-                    driver.id == driverId &&
-                    driver.type == PluginDriverType.sensor,
-              ) ??
-              false;
-          if (!declared) {
+          final declarations = _plugins[pluginId]!.manifest.drivers.where(
+            (driver) => driver.id == driverId,
+          );
+          if (declarations.isEmpty) {
             throw const PluginDeviceException(
               'Device driver is not declared by this plugin',
             );
+          }
+          final driver = declarations.single;
+          if (driver.type == PluginDriverType.scale) {
+            final requiredHandlers = {
+              'connect',
+              'disconnect',
+              if (driver.capabilities.contains(PluginScaleCapability.tare))
+                'tare',
+              if (driver.capabilities.contains(
+                PluginScaleCapability.timerControl,
+              )) ...[
+                'startTimer',
+                'stopTimer',
+                'resetTimer',
+              ],
+              if (driver.capabilities.contains(
+                PluginScaleCapability.displayControl,
+              )) ...[
+                'sleepDisplay',
+                'wakeDisplay',
+              ],
+            };
+            for (final operation in PluginDeviceOperation.values) {
+              final present =
+                  js
+                      .evaluate(
+                        'globalThis.__deviceHasHandler(${jsonEncode(registrationHandle)},'
+                        '${jsonEncode(pluginId)},$generation,${jsonEncode(operation.name)})',
+                      )
+                      .stringResult ==
+                  'true';
+              if (present != requiredHandlers.contains(operation.name)) {
+                throw PluginDeviceException(
+                  'Scale handler ${operation.name} does not match declared capabilities',
+                  code: 'invalid_argument',
+                );
+              }
+            }
           }
           final registered = await deviceService.register(
             pluginId: pluginId,
             generation: generation,
             registrationHandle: registrationHandle,
             definition: typedDefinition,
+            driver: driver,
             invoke: (operation, parameters) => _invokeDeviceHandler(
               pluginId,
               generation,
@@ -1206,6 +1261,9 @@ class PluginManager {
             generation: generation,
             registrationHandle: registrationHandle,
             snapshot: Map<String, dynamic>.from(snapshot),
+            session: data['session'] is String
+                ? data['session'] as String
+                : null,
           );
           _replyDevice(requestId, bridgeToken, result: const {});
         case 'reportDisconnected':
@@ -1213,6 +1271,9 @@ class PluginManager {
             pluginId: pluginId,
             generation: generation,
             registrationHandle: registrationHandle,
+            session: data['session'] is String
+                ? data['session'] as String
+                : null,
           );
           _replyDevice(requestId, bridgeToken, result: const {});
         case 'unregister':
@@ -1240,7 +1301,7 @@ class PluginManager {
         requestId,
         bridgeToken,
         error: error.message,
-        code: 'plugin_device_error',
+        code: error.code,
       );
     } catch (error) {
       _replyDevice(requestId, bridgeToken, error: error.toString());
@@ -1287,15 +1348,35 @@ class PluginManager {
     final retiredConnectInvocations = <String>[];
     if (operation == PluginDeviceOperation.disconnect) {
       final key = (pluginId, generation, registrationHandle);
-      retiredConnectInvocations.addAll(
-        _timedOutDeviceConnects.remove(key) ?? const <String>{},
-      );
+      retiredConnectInvocations.addAll({
+        ...?_timedOutDeviceConnects.remove(key),
+        if (payload['session'] is String)
+          ..._transportService.deviceConnectInvocations(
+            pluginId,
+            generation,
+            registrationHandle,
+          ),
+        for (final entry in _deviceConnectAttempts.entries)
+          if (entry.value.pluginId == pluginId &&
+              entry.value.generation == generation &&
+              entry.value.registrationHandle == registrationHandle)
+            entry.key,
+      });
       for (final connectInvocationId in retiredConnectInvocations) {
+        _deviceConnectAttempts.remove(connectInvocationId);
         _transportService.retireDeviceConnect(
           pluginId,
           generation,
           registrationHandle,
           connectInvocationId,
+        );
+        final pending = _pendingDeviceInvocations.remove(connectInvocationId);
+        pending?.timer.cancel();
+        pending?.completer.completeError(
+          const PluginDeviceException(
+            'Plugin device connect retired',
+            code: 'stale_session',
+          ),
         );
       }
     }
@@ -1392,6 +1473,15 @@ class PluginManager {
         await closeTransports();
       } catch (_) {}
       Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      for (final invocationId in invocationIds) {
+        _transportService.finishDeviceConnect(
+          pluginId,
+          generation,
+          registrationHandle,
+          invocationId,
+        );
+      }
     }
   }
 
@@ -1860,12 +1950,12 @@ class PluginManager {
         const devices = {
           register(definition, handlers) {
             const driver = definition && declaredDrivers.find((entry) => entry.id === definition.driverId);
-            if (!driver || driver.type !== "sensor") {
+            if (!driver || (driver.type !== "sensor" && driver.type !== "scale")) {
               return Promise.reject(new Error("Device driver is not declared by this plugin"));
             }
             if (!handlers || typeof handlers.connect !== "function" ||
                 typeof handlers.disconnect !== "function" ||
-                typeof handlers.execute !== "function") {
+                (driver.type === "sensor" && typeof handlers.execute !== "function")) {
               return Promise.reject(new Error("Device handlers connect, disconnect, and execute are required"));
             }
             const registrationHandle = "device_" + pluginGeneration + "_" + __deviceNonce + "_" + (++__deviceSeq);
@@ -1874,8 +1964,24 @@ class PluginManager {
               generation: pluginGeneration,
               bridgeToken: pluginBridgeToken,
               handlers: handlers,
-              connectTransport: (invocationId) =>
-                __connectTransport(registrationHandle, invocationId)
+              connectTransport: (invocationId, payload) => {
+                const transport = __connectTransport(registrationHandle, invocationId);
+                if (driver.type === "sensor") return transport;
+                const session = payload.session;
+                return Object.freeze({
+                  transport: transport,
+                  publish(snapshot) {
+                    return __deviceCall("publish", {
+                      registrationHandle: registrationHandle, session: session, snapshot: snapshot
+                    });
+                  },
+                  reportDisconnected() {
+                    return __deviceCall("reportDisconnected", {
+                      registrationHandle: registrationHandle, session: session
+                    });
+                  }
+                });
+              }
             });
             return __deviceCall("register", {
               registrationHandle: registrationHandle,
@@ -1907,6 +2013,10 @@ class PluginManager {
                     );
                   }
                 };
+                if (driver.type === "scale") {
+                  delete device.publish;
+                  delete device.reportDisconnected;
+                }
                 return Object.freeze(device);
               },
               (error) => {
@@ -1999,6 +2109,17 @@ class PluginManager {
       while (js.executePendingJob() > 0) {}
 
       runtime.markRunning();
+      if (identical(_plugins[id], runtime) &&
+          generation == _pluginGenerations[id]) {
+        final workflowController = _workflowController;
+        if (workflowController != null) {
+          dispatchEvent(
+            id,
+            'workflowUpdated',
+            workflowController.currentWorkflow.toJson(),
+          );
+        }
+      }
       _log.info("loaded: $id");
     } catch (e, st) {
       try {
@@ -2181,6 +2302,7 @@ class PluginManager {
     final permission = switch (name) {
       'stateUpdate' => PluginPermissions.eventsMachine,
       'shotStored' || 'shotUpdated' => PluginPermissions.eventsShots,
+      'workflowUpdated' => PluginPermissions.eventsWorkflow,
       _ => null,
     };
     if (permission != null && !_hasPermission(pluginId, permission)) return;
@@ -2667,6 +2789,45 @@ class PluginManager {
   }
 
   List<PluginRuntime> get loadedPlugins => _plugins.values.toList();
+
+  void attachWorkflowController(WorkflowController? controller) {
+    _ensureActive();
+    if (identical(controller, _workflowController)) return;
+
+    _detachWorkflowController();
+    if (controller == null) return;
+    final generation = _workflowAttachmentGeneration;
+    _workflowController = controller;
+    _lastWorkflowRevision = controller.revision;
+
+    void listener() {
+      if (_lifecycle != PluginManagerLifecycle.active ||
+          !identical(controller, _workflowController) ||
+          generation != _workflowAttachmentGeneration) {
+        return;
+      }
+      final revision = controller.revision;
+      if (revision == _lastWorkflowRevision) return;
+      _lastWorkflowRevision = revision;
+      broadcastEvent('workflowUpdated', controller.currentWorkflow.toJson());
+    }
+
+    _workflowListener = listener;
+    controller.addListener(listener);
+    broadcastEvent('workflowUpdated', controller.currentWorkflow.toJson());
+  }
+
+  void _detachWorkflowController() {
+    _workflowAttachmentGeneration += 1;
+    final controller = _workflowController;
+    final listener = _workflowListener;
+    _workflowController = null;
+    _workflowListener = null;
+    _lastWorkflowRevision = null;
+    if (controller != null && listener != null) {
+      controller.removeListener(listener);
+    }
+  }
 
   Future<void> attachDe1Controller(De1Controller? controller) {
     _ensureActive();
