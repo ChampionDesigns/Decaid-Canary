@@ -233,6 +233,9 @@ common cause is that the other one is already running.
 `serveOrReportPortInUse` raises a typed `WebServerPortInUse`; `main()` catches it
 and runs `WebServerPortConflictApp` instead of the app.
 
+Only the 8080 API bind reaches `main()`. `startApiDocsServer` catches the same
+exception for 4001, logs it, and returns null, so the docs port is best effort.
+
 ### Design Choices
 
 - **Only EADDRINUSE is a port clash.** Every other `SocketException` is
@@ -247,8 +250,12 @@ and runs `WebServerPortConflictApp` instead of the app.
   brittle, so a test pins the wording: a Dart change fails that test rather than
   letting the check fall through to the unknown-failure path. This is also why
   an in-process test can exercise `serveOrReportPortInUse` at all.
-- **The boot stops.** Continuing would present a working-looking app with
-  nothing behind it, which is the defect this replaces.
+- **The boot stops for 8080, not for 4001.** Continuing without the API would
+  present a working-looking app with nothing behind it, which is the defect this
+  replaces. 4001 serves only the API docs, and it binds after 8080 has already
+  succeeded. Treating a docs conflict as fatal would abort a boot whose API was
+  running, and would leave that 8080 server open behind the conflict screen,
+  because `startWebServer` holds the only reference to it.
 - **The screen does not close the other app.** Android does not let one app stop
   another; `killBackgroundProcesses` needs its own permission and only ever
   touches background processes. The screen offers "Check again", which re-probes
@@ -261,6 +268,7 @@ and runs `WebServerPortConflictApp` instead of the app.
 
 ```
 flutter test test/unit/services/webserver/port_binding_test.dart
+flutter test test/unit/services/webserver/api_docs_server_port_test.dart
 flutter test test/unit/ui/webserver_port_conflict_app_test.dart
 ```
 
