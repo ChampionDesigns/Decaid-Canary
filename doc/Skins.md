@@ -67,9 +67,13 @@ this reload should be persisted through the Decaid API or browser storage.
 ### Skin Origins and Browser Storage
 
 Each installed skin is served from its own **stable origin** — a port derived
-from the skin's identity and remembered across restarts. Browser storage is
-keyed by origin, so `localStorage`, `sessionStorage` and IndexedDB written by a
-skin are still there the next time the app starts.
+from the skin's identity and remembered across restarts. Persistent browser
+storage is keyed by origin, so `localStorage` and IndexedDB written by a skin
+are still there the next time the app starts.
+
+`sessionStorage` is not covered by that guarantee. It is scoped to a page
+session, so it is cleared when the page is unloaded — including the background
+unload described above — and it never survives an app restart.
 
 Ports are assigned from 24800 upward. 3000, 4001 and 8080 are reserved, so a
 skin never lands on the entry point, the local listener or the REST API.
@@ -79,9 +83,9 @@ origin.
 **The fallback, and what it costs.** If a skin's assigned port cannot be bound
 — another process holds it — Decaid retries briefly, then falls back to a
 **temporary origin** for that run. The skin loads and works normally, but
-because the origin differs, **browser storage written under the stable origin
-is not visible**, and anything written during that run is not visible after it.
-Nothing is deleted; it is simply keyed to a different origin.
+because the origin differs, **persistent browser storage written under the
+stable origin is not visible**, and anything written during that run is not
+visible after it. Nothing is deleted; it is simply keyed to a different origin.
 
 A skin that must not lose state across such a run should persist it through the
 Decaid API rather than browser storage. The KV endpoints are unaffected by
