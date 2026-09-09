@@ -614,7 +614,7 @@ String _appendVary(String? value, String headerName) {
   return '$value, $headerName';
 }
 
-Future<void> startApiDocsServer() async {
+Future<HttpServer?> startApiDocsServer() async {
   final tempDir = await getTemporaryDirectory();
   final apiDir = Directory('${tempDir.path}/api');
   if (!apiDir.existsSync()) {
@@ -641,8 +641,17 @@ Future<void> startApiDocsServer() async {
     listDirectories: true,
   );
 
-  final apiServer = await serveOrReportPortInUse(apiHandler, '0.0.0.0', 4001);
+  final HttpServer apiServer;
+  try {
+    apiServer = await serveOrReportPortInUse(apiHandler, '0.0.0.0', 4001);
+  } on WebServerPortInUse catch (e) {
+    log.warning(
+      'API docs server not started: port ${e.port} is already in use',
+    );
+    return null;
+  }
   log.info(
     '✅ API Docs server running at http://${apiServer.address.host}:${apiServer.port}',
   );
+  return apiServer;
 }
