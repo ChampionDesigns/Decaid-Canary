@@ -538,6 +538,39 @@ paths:
           description: Machine write queue is full
         "500":
           description: No machine was connected, the machine changed during the write, or the write failed
+  /api/v1/machine/stopAtWeight:
+    get:
+      summary: Get the firmware stop-at-weight target
+      description: |
+        Read the stop-at-weight target the machine currently holds, in grams.
+        The app writes this target from `WorkflowContext.targetYield`, which is
+        its single source of truth, so this endpoint reports what the firmware
+        actually has rather than what the app last sent. `0` means
+        stop-at-weight is off. Returns 404 when the connected machine is not a
+        Bengle. The `stopAtWeight` capability on
+        `GET /api/v1/machine/capabilities` reports whether this endpoint is
+        available.
+      tags: [Machine]
+      responses:
+        "200":
+          description: Current stop-at-weight target
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [grams]
+                properties:
+                  grams:
+                    type: number
+                    format: double
+                    minimum: 0
+                    description: |
+                      Target beverage weight in grams. `0` means stop-at-weight
+                      is off.
+                    example: 36.0
+        "404":
+          description: Machine connected but does not support stop-at-weight
+
   /api/v1/machine/ledStrip:
     get:
       summary: Get LED strip configuration
