@@ -44,6 +44,8 @@ class SettingsView extends StatelessWidget {
         listenable: controller,
         builder: (context, _) {
           final isMobile = Platform.isAndroid || Platform.isIOS;
+          final managedContentOnly =
+              updateCheckService?.externallyManaged ?? BuildInfo.appStore;
           return ListView(
             children: [
               const SettingsSectionHeader('General'),
@@ -72,7 +74,7 @@ class SettingsView extends StatelessWidget {
               ),
 
               const SettingsSectionHeader('Updates'),
-              if (!Platform.isIOS) ...[
+              if (!Platform.isIOS && !managedContentOnly) ...[
                 SettingsTile(
                   icon: Icons.science_outlined,
                   label: 'Update channel',
@@ -95,7 +97,8 @@ class SettingsView extends StatelessWidget {
                     } else {
                       await updateCheckService?.disableAutomaticChecks();
                     }
-                    if (macosUpdater?.isAvailable == true) {
+                    if (!managedContentOnly &&
+                        macosUpdater?.isAvailable == true) {
                       try {
                         await macosUpdater?.setAutomaticChecks(v);
                       } catch (e, st) {
@@ -107,25 +110,37 @@ class SettingsView extends StatelessWidget {
                       }
                     }
                   },
-                  label: const Text('Automatic update checks'),
-                  sublabel: const Text('Check for updates every 12 hours'),
+                  label: Text(
+                    managedContentOnly
+                        ? 'Automatic skin and plugin updates'
+                        : 'Automatic update checks',
+                  ),
+                  sublabel: Text(
+                    managedContentOnly
+                        ? 'Check for skin and plugin updates every 12 hours'
+                        : 'Check for updates every 12 hours',
+                  ),
                 ),
               ),
-              const SettingsDivider(),
-              ListTile(
-                leading: const Icon(LucideIcons.refreshCcwDot),
-                title: const Text('Check for updates'),
-                trailing: updateCheckService?.hasAvailableUpdate == true
-                    ? Chip(
-                        label: Text(
-                          updateCheckService?.availableUpdate?.version ?? '',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                        backgroundColor: Theme.of(context).colorScheme.primary,
-                      )
-                    : null,
-                onTap: () => _checkForUpdates(context),
-              ),
+              if (!managedContentOnly) ...[
+                const SettingsDivider(),
+                ListTile(
+                  leading: const Icon(LucideIcons.refreshCcwDot),
+                  title: const Text('Check for updates'),
+                  trailing: updateCheckService?.hasAvailableUpdate == true
+                      ? Chip(
+                          label: Text(
+                            updateCheckService?.availableUpdate?.version ?? '',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                        )
+                      : null,
+                  onTap: () => _checkForUpdates(context),
+                ),
+              ],
 
               const SettingsSectionHeader('Power'),
               if (isMobile) ...[

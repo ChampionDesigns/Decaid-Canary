@@ -266,6 +266,11 @@ class UniversalBleTransport extends BLETransport {
     UniversalBleErrorCode.serviceNotFound,
   };
 
+  static const _unsupportedWriteCodes = {
+    UniversalBleErrorCode.characteristicDoesNotSupportWrite,
+    UniversalBleErrorCode.characteristicDoesNotSupportWriteWithoutResponse,
+  };
+
   Never _handleGattError(
     UniversalBleException e,
     String operation,
@@ -305,6 +310,7 @@ class UniversalBleTransport extends BLETransport {
       _clearQueue(UniversalBleErrorCode.deviceDisconnected);
       throw const DeviceNotConnectedException.unknown();
     }
+    _log.warning('GATT $operation($path) failed — unmapped error: $e');
     throw e;
   }
 
@@ -332,24 +338,46 @@ class UniversalBleTransport extends BLETransport {
     return _lifecycleGate.run(_device.deviceId, _disconnectLocked);
   }
 
+  @override
+  Future<void> disconnectConfirmed() =>
+      _lifecycleGate.run(_device.deviceId, _disconnectConfirmedLocked);
+
+  Future<void> _disconnectConfirmedLocked() async {
+    _connectionGeneration++;
+    _maintenanceGeneration = null;
+    try {
+      await _disconnectNative();
+    } catch (error, stackTrace) {
+      _log.warning('BLE teardown remains unconfirmed', error, stackTrace);
+    }
+    while (true) {
+      try {
+        final state = await UniversalBle.getConnectionState(
+          _device.deviceId,
+          timeout: _linkProbeTimeout,
+        );
+        final queue = UniversalBle.getQueueDiagnostics(_device.deviceId);
+        if (state == BleConnectionState.disconnected &&
+            queue.activeOperations == 0) {
+          break;
+        }
+      } catch (_) {}
+      await Future<void>.delayed(_faultRecoveryPollInterval);
+    }
+    await _advertSub?.cancel();
+    _advertSub = null;
+    await _cancelNotificationListeners();
+    await _connectionStateSubscription?.cancel();
+    _connectionStateSubscription = null;
+    _publishDisconnected();
+  }
+
   Future<void> _disconnectLocked() async {
     _maintenanceGeneration = null;
     await _advertSub?.cancel();
     _advertSub = null;
 
-    final listeners = _subscriptions.values.toList(growable: false);
-    _subscriptions.clear();
-    for (final listener in listeners) {
-      try {
-        await listener.cancel();
-      } catch (error, stackTrace) {
-        _log.warning(
-          'Failed to cancel BLE notification listener',
-          error,
-          stackTrace,
-        );
-      }
-    }
+    await _cancelNotificationListeners();
 
     try {
       _log.fine("disconnect");
@@ -383,6 +411,22 @@ class UniversalBleTransport extends BLETransport {
         });
     _nativeDisconnectOperation = operation;
     return operation;
+  }
+
+  Future<void> _cancelNotificationListeners() async {
+    final listeners = _subscriptions.values.toList(growable: false);
+    _subscriptions.clear();
+    for (final listener in listeners) {
+      try {
+        await listener.cancel();
+      } catch (error, stackTrace) {
+        _log.warning(
+          'Failed to cancel BLE notification listener',
+          error,
+          stackTrace,
+        );
+      }
+    }
   }
 
   @override
@@ -721,6 +765,31 @@ class UniversalBleTransport extends BLETransport {
   }
 
   @override
+  Future<void> unsubscribe(
+    String serviceUUID,
+    String characteristicUUID,
+  ) async {
+    final key = '$serviceUUID--$characteristicUUID';
+    await _subscriptions.remove(key)?.cancel();
+    try {
+      await UniversalBle.unsubscribe(
+        _device.deviceId,
+        serviceUUID,
+        characteristicUUID,
+      );
+    } on TimeoutException {
+      _onOperationTimeout('unsubscribe', '$serviceUUID/$characteristicUUID');
+      rethrow;
+    } on UniversalBleException catch (error) {
+      _handleGattError(
+        error,
+        'unsubscribe',
+        '$serviceUUID/$characteristicUUID',
+      );
+    }
+  }
+
+  @override
   Future<void> write(
     String serviceUUID,
     String characteristicUUID,
@@ -729,21 +798,59 @@ class UniversalBleTransport extends BLETransport {
     Duration? timeout,
   }) async {
     try {
-      await UniversalBle.write(
-        _device.deviceId,
-        BleUuidParser.string(serviceUUID),
-        BleUuidParser.string(characteristicUUID),
+      await _writeWithProperty(
+        serviceUUID,
+        characteristicUUID,
         data,
-        withoutResponse: !withResponse,
+        withResponse: withResponse,
         timeout: timeout,
       );
     } on TimeoutException {
       _onOperationTimeout('write', '$serviceUUID/$characteristicUUID');
       rethrow;
     } on UniversalBleException catch (e) {
-      _handleGattError(e, 'write', '$serviceUUID/$characteristicUUID');
+      if (withResponse || !_unsupportedWriteCodes.contains(e.code)) {
+        _handleGattError(e, 'write', '$serviceUUID/$characteristicUUID');
+      }
+      _log.warning(
+        'GATT write($serviceUUID/$characteristicUUID) rejected '
+        'withoutResponse — retrying with response: ${e.code}',
+      );
+      try {
+        await _writeWithProperty(
+          serviceUUID,
+          characteristicUUID,
+          data,
+          withResponse: true,
+          timeout: timeout,
+        );
+      } on TimeoutException {
+        _onOperationTimeout('write', '$serviceUUID/$characteristicUUID');
+        rethrow;
+      } on UniversalBleException catch (retryError) {
+        _handleGattError(
+          retryError,
+          'write',
+          '$serviceUUID/$characteristicUUID',
+        );
+      }
     }
   }
+
+  Future<void> _writeWithProperty(
+    String serviceUUID,
+    String characteristicUUID,
+    Uint8List data, {
+    required bool withResponse,
+    Duration? timeout,
+  }) => UniversalBle.write(
+    _device.deviceId,
+    BleUuidParser.string(serviceUUID),
+    BleUuidParser.string(characteristicUUID),
+    data,
+    withoutResponse: !withResponse,
+    timeout: timeout,
+  );
 
   @override
   Future<void> setTransportPriority(bool prioritized) async {

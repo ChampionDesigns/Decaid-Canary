@@ -189,6 +189,8 @@ A queue can produce only one wrapper timeout per faulted generation; followers a
 - Service verification during `onConnect()` via `BleServiceIdentifier`.
 - `ScanStateGuardian` guards against overlapping scans and tracks adapter state.
 - `ScanOrchestrator` manages single-scan lifecycle.
+- Discovery owns cache state, not native connection teardown. Duplicate advertisements preserve unknown, discovered, connecting, and disconnecting devices. A connected cache entry is replaced only after identity-fenced Dart and native rechecks confirm it is stale; the final identity/Dart recheck runs after the last native probe with no await before cache removal. Replacement never calls native disconnect.
+- Cache disconnect listeners are device-instance-fenced so an older generation cannot evict its replacement.
 
 ## Sleep From NeedsWater (Refill State)
 
@@ -203,6 +205,16 @@ An awake Decent Scale connection requires a recognised FFF4 status or weight fra
 Acaia parsing is frame-bounded. Payload lengths above 64 bytes and impossible lengths for known settings or weight events trigger header resynchronization; complete unsupported frames are consumed whole so embedded `EF DD` bytes cannot become top-level frames. Only accepted settings, weight, or timer frames refresh liveness. Event 11 selector 5 carries weight, while selector 7 is timer data. Connection readiness requires a decoded valid weight rather than an arbitrary notification.
 
 AtomHeart Eclair uses service `B905EAEA-2E63-0E04-7582-7913F10D8F81`, data/status characteristic `AD736C5F-BBC9-1F96-D304-CB5D5F41E160`, and command characteristic `4F9A45BA-8E1B-4E07-E157-0814D393B968`. Its connection remains `connecting` until a valid checksummed `0x57` weight frame arrives. Silence for 800 ms resets the notification subscription at most twice; a third silent window tears down the transport so ConnectionManager owns recovery. Timer reset/start/stop commands are `520101`, `530101`, and `450101`; tare remains `540101`.
+
+A readiness gate that only reports "timed out" cannot be diagnosed from a user log. The Eclair connect timeout names how many notifications arrived and the last frame that failed validation, which separates a dead subscription (zero notifications, a CCCD or GATT problem) from a frame format the parser rejects (notifications arriving, none accepted). Issue #629 was closed without a root cause for want of exactly that distinction.
+
+A characteristic advertises write-with-response, write-without-response, or both, and the requested type must match. CoreBluetooth rejects a mismatch locally, before any radio traffic: universal_ble surfaces `characteristicDoesNotSupportWrite` or `characteristicDoesNotSupportWriteWithoutResponse` in single-digit milliseconds. The Eclair command characteristic is write-with-response only on current firmware, so every `540101` tare issued as write-without-response failed instantly (issue #780). `AtomheartScale` therefore issues its commands with response; the device contract belongs at the caller.
+
+The two ATT write procedures are not equivalent, so the transport never substitutes one for the other freely. A write request is acknowledged and has a server error path; a write command is not and does not. `UniversalBleTransport.write` retries in one direction only: a write the caller asked to send unacknowledged that the platform rejects for its property is retried once with response, which adds an acknowledgement the caller did not ask for but never removes one it did. A rejected write-with-response is surfaced as-is, never downgraded.
+
+The retry cannot duplicate a command. Darwin, Android, and Windows all validate the requested property against the GATT database and return the error before dispatching anything to the radio, so a rejected write never reached the device. BlueZ does not report these codes at all and never enters the retry path. A write that the platform accepts is issued exactly once, with the property the caller asked for.
+
+`_handleGattError` must log before it rethrows. An unmapped `UniversalBleException` used to escape silently, which is why #780 reached the tracker as a bare HTTP 500 with no cause anywhere in the log. REST handlers that turn an exception into a 500 body must log it too; a response body the user never sees is not evidence.
 
 The Eclair weight frame is fixed at exactly 10 bytes: `0x57` header, four little-endian weight bytes in milligrams, four timer bytes, and one XOR checksum over bytes 1 to 8. Accept only that exact width. A shorter frame makes the last payload byte double as the checksum, so `57 00 00 00 00 00 00 00 00` would otherwise XOR-validate as a zero-weight snapshot and satisfy the readiness gate.
 

@@ -509,6 +509,7 @@ void main(List<String> args) async {
     deviceService: pluginDeviceService,
   );
   await pluginService.pluginManager.attachDe1Controller(de1Controller);
+  pluginService.pluginManager.attachWorkflowController(workflowController);
   persistenceController.onShotStored = (shotId) =>
       pluginService.pluginManager.broadcastEvent('shotStored', {'id': shotId});
 
@@ -534,7 +535,9 @@ void main(List<String> args) async {
     pluginSourceService: PluginSourceService(pluginService),
   );
 
-  final macosUpdater = Platform.isMacOS ? MacOSUpdater() : null;
+  final macosUpdater = Platform.isMacOS && !BuildInfo.appStore
+      ? MacOSUpdater()
+      : null;
 
   try {
     await startWebServer(
