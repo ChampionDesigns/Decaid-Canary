@@ -168,6 +168,9 @@ class WorkflowHandler {
       } else if (merge.containsKey('steamSettings')) {
         throw const FormatException('Field "steamSettings" must be an object');
       }
+      if (merge['context'] case final Map<String, dynamic> context) {
+        rejectExplicitNulls(context, const ['targetYield']);
+      }
 
       while (true) {
         final oldWorkflow = _controller.currentWorkflow;
