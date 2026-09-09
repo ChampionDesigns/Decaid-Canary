@@ -7764,7 +7764,15 @@ components:
           type: number
           format: double
           nullable: true
-          description: Target output weight in grams (beverage)
+          description: |
+            Target output weight in grams (beverage). It is the single source
+            of truth for stop-at-weight. Null means this workflow sets no
+            weight target, which is the same as 0: stop-at-weight is off, and
+            a machine that stops autonomously has its firmware target set to 0.
+            `PUT /api/v1/workflow` refuses an explicit null on this field with
+            400, because a client that clears it usually means 0. Omit the
+            field to keep the current value, or send 0 to turn stop-at-weight
+            off deliberately.
           example: 36.0
         targetWaterVolume:
           type: number

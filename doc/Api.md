@@ -262,6 +262,9 @@ cross-request or cross-client coalescing. Partial updates are deep-merged agains
 workflow state when each request executes, and each response contains that request's resulting
 workflow. Omitted steam-setting fields are preserved and supplied values replace them. The
 `steamSettings` object and all of its fields are non-nullable; explicit `null` returns `400`.
+`context.targetYield` is non-nullable for the same reason: it is the single source of truth for
+stop-at-weight, and null and `0` both mean the feature is off, so an explicit `null` returns `400`.
+Omit the field to keep the current value, or send `0` to turn stop-at-weight off deliberately.
 Requests may wait behind machine I/O; the server does not debounce high-frequency
 input, so clients should throttle controls themselves. Bodies larger than 1 MiB return `413`,
 requests beyond the eight-entry active/queued limit return `429`, and requests waiting more

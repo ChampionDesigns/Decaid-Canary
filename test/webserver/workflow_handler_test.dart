@@ -775,7 +775,7 @@ void main() {
     );
   });
 
-  group('PUT /api/v1/workflow — targetYield explicit zero and removal', () {
+  group('PUT /api/v1/workflow — targetYield explicit zero and null', () {
     test('an explicit targetYield of 0 lands in the document as 0', () async {
       await _settleHandler(spy);
 
@@ -797,8 +797,9 @@ void main() {
       );
     });
 
-    test('an explicit null removes targetYield from the document', () async {
+    test('an explicit null is refused with 400', () async {
       await _settleHandler(spy);
+      final before = workflowController.currentWorkflow.context?.targetYield;
 
       final future = put({
         'context': {'targetYield': null},
@@ -806,10 +807,32 @@ void main() {
       await _settleHandler(spy);
       final response = await future;
 
-      expect(response.statusCode, equals(200));
+      expect(response.statusCode, equals(400));
       final body = jsonDecode(await response.readAsString());
-      expect((body['context'] as Map).containsKey('targetYield'), isFalse);
-      expect(workflowController.currentWorkflow.context?.targetYield, isNull);
+      expect(body['message'], contains('targetYield'));
+      expect(
+        workflowController.currentWorkflow.context?.targetYield,
+        equals(before),
+        reason: 'a refused update must not change the document',
+      );
+    });
+
+    test('a PUT that omits targetYield keeps the current value', () async {
+      await _settleHandler(spy);
+      final before = workflowController.currentWorkflow.context?.targetYield;
+      expect(before, isNotNull);
+
+      final future = put({
+        'context': {'targetDoseWeight': 19.0},
+      });
+      await _settleHandler(spy);
+      final response = await future;
+
+      expect(response.statusCode, equals(200));
+      expect(
+        workflowController.currentWorkflow.context?.targetYield,
+        equals(before),
+      );
     });
   });
 
