@@ -71,11 +71,6 @@ class UnifiedDe1 implements De1Interface {
 
   UnifiedDe1({
     required DataTransport transport,
-    // On-device erase and verify of a larger firmware image can outlast the
-    // original 30 s bounds while the machine emits only non-terminal frames,
-    // tripping the outer timeout near completion. These bounds are the sole
-    // limit on the erase/verify poll (each poll read keeps its own short
-    // bound), so lengthening them just grants more poll iterations.
     this.firmwareEraseTimeout = const Duration(seconds: 60),
     this.firmwareVerificationTimeout = const Duration(seconds: 120),
     this.calibrationTimeout = const Duration(seconds: 4),

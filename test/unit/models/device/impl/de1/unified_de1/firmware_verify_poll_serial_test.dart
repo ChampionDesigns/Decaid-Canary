@@ -25,13 +25,9 @@ void main() {
         await transport.connect();
         serial.writes.clear();
 
-        // Start the fresh read: it arms for the NEXT [I] then re-sends <+I>. Do
-        // not await yet — the fresh frame has not arrived.
         final pending = transport.readFwMapRequestFresh();
         await pumpEventQueue();
 
-        // The reprovoke went out (no matching <-I> — the continuous notify sub
-        // must survive).
         expect(
           serial.writes,
           contains('<+${Endpoint.fwMapRequest.representation}>'),
@@ -43,7 +39,6 @@ void main() {
           reason: 'the continuous subscription must not be dropped mid-update',
         );
 
-        // The firmware now pushes a fresh [I] frame.
         serial.injectSerial(
           '[I]${_hex(const [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07])}\n',
         );

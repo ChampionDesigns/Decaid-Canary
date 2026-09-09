@@ -28,9 +28,7 @@ class FakeBleTransport extends BLETransport {
 
   final Map<int, List<int>> _rawResponses = {};
 
-  /// Per-UUID queued `read()` outcomes. Each entry is either a [Uint8List]
-  /// payload (returned) or an [Object] error (thrown) — see [queueReadError],
-  /// used to exercise the firmware-poll's must-not-disturb-the-link path.
+  /// Each entry is either a [Uint8List] payload to return or an error to throw.
   final Map<String, Queue<Object>> _readQueue = {};
   final Queue<Uint8List> _firmwareMapResponses = Queue<Uint8List>();
 
@@ -42,9 +40,6 @@ class FakeBleTransport extends BLETransport {
 
   final Map<int, int> _mmrWriteCounts = {};
 
-  /// Number of times [connect] / [disconnect] have been called. A spurious
-  /// reconnect after a BLE timeout drives both; a poll read that stays off the
-  /// recovery path leaves them untouched.
   int connectCalls = 0;
   int disconnectCalls = 0;
 
@@ -74,10 +69,8 @@ class FakeBleTransport extends BLETransport {
     _readQueue.putIfAbsent(characteristicUUID, Queue<Object>.new).add(bytes);
   }
 
-  /// Queue [error] to be THROWN by the next `read()` against
-  /// [characteristicUUID], interleaved in order with any [queueRead] payloads.
-  /// Models a transient GATT failure (e.g. a BleTimeoutException)
-  /// mid-firmware-update.
+  /// Throws [error] from the next `read()` on [characteristicUUID], in order
+  /// with any [queueRead] payloads.
   void queueReadError(String characteristicUUID, Object error) {
     _readQueue.putIfAbsent(characteristicUUID, Queue<Object>.new).add(error);
   }
@@ -142,7 +135,7 @@ class FakeBleTransport extends BLETransport {
     if (q != null && q.isNotEmpty) {
       final next = q.removeFirst();
       if (next is Uint8List) return next;
-      throw next; // queued error (see [queueReadError])
+      throw next;
     }
     return Uint8List(20);
   }
