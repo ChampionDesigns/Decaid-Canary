@@ -2,12 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/data/profile_hash.dart';
 
-/// Parse coverage for [StepLimiter]. A limiter's `range` (the falloff band
-/// below the cap) is optional on the wire: absent or null means a hard cap at
-/// `value`, which is what range 0 already encodes on the DE1 and what the
-/// mock's clamp branch already implements. `value` stays required and is
-/// refused by name, because a limiter without a value would silently become an
-/// OFF limiter on the machine (Decal audit finding F-048, server half).
 void main() {
   Map<String, dynamic> flowStepJson({dynamic limiter}) => {
     'name': 'preinfusion',
@@ -55,7 +49,7 @@ void main() {
     });
   });
 
-  group('StepLimiter.fromJson — optional range (F-048)', () {
+  group('StepLimiter.fromJson — optional range', () {
     test('a value-only limiter parses as a hard cap (range 0)', () {
       final limiter = StepLimiter.fromJson({'value': 0.1});
 

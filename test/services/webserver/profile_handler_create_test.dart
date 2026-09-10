@@ -227,10 +227,7 @@ void main() {
     });
   });
 
-  // Decal audit finding F-048 (server half). The device answered these exact
-  // bytes with a 500 on POST and a 400 on PUT, because a limiter carrying only
-  // a "value" threw a TypeError that only _handleUpdate caught.
-  group('rangeless limiter (F-048)', () {
+  group('a limiter with no range', () {
     String fixture(String name) =>
         File('test/fixtures/f048/$name').readAsStringSync();
 
