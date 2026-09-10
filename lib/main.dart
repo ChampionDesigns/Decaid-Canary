@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' show AppExitResponse, AppExitType;
 
@@ -69,6 +70,7 @@ import 'package:reaprime/src/services/app_log_upload_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:reaprime/src/services/storage/hive_store_service.dart';
+import 'package:reaprime/src/database_failure_view.dart';
 import 'package:reaprime/src/services/universal_ble_discovery_service.dart';
 import 'package:reaprime/src/services/simulated_device_service.dart';
 import 'package:reaprime/src/services/webserver/data_export/backup_data_sources.dart';
@@ -178,6 +180,37 @@ ActiveSkinConsent? _activeSkinConsent(String path, WebUIStorage storage) {
   );
 }
 
+const skinPortAssignmentsPreferenceKey = 'webUISkinPorts';
+
+Map<String, int> decodeSkinPortAssignments(String? raw) {
+  if (raw == null || raw.isEmpty) return {};
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) return {};
+    return {
+      for (final entry in decoded.entries)
+        if (entry.key is String && entry.value is int)
+          entry.key as String: entry.value as int,
+    };
+  } catch (_) {
+    return {};
+  }
+}
+
+Future<Map<String, int>> loadPersistedSkinPortAssignments() async {
+  final raw = await SharedPreferencesAsync().getString(
+    skinPortAssignmentsPreferenceKey,
+  );
+  return decodeSkinPortAssignments(raw);
+}
+
+Future<void> persistSkinPortAssignments(Map<String, int> assignments) async {
+  await SharedPreferencesAsync().setString(
+    skinPortAssignmentsPreferenceKey,
+    jsonEncode(assignments),
+  );
+}
+
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final cliArgs = parseCliArgs(args);
@@ -280,9 +313,12 @@ void main(List<String> args) async {
 
   final List<DeviceDiscoveryService> services = [];
   final pluginDeviceService = PluginDeviceService();
+  late final PluginLoaderService pluginService;
   services.add(pluginDeviceService);
 
-  final bleDiscoveryService = UniversalBleDiscoveryService();
+  final bleDiscoveryService = UniversalBleDiscoveryService(
+    pluginBleService: () => pluginService.pluginManager.bleService,
+  );
   if (!cliArgs.serial) {
     services.add(bleDiscoveryService);
   } else {
@@ -306,6 +342,16 @@ void main(List<String> args) async {
     log.info("enabling simulated devices from dart-define: $dartDefineDevices");
   }
   final appDatabase = AppDatabase.defaults();
+  final databaseStartupError = await appDatabase.openForStartup(log);
+  if (databaseStartupError != null) {
+    runApp(
+      DatabaseFailureApp(
+        logFilePath: '$logDir/log.txt',
+        detail: databaseStartupError.runtimeType.toString(),
+      ),
+    );
+    return;
+  }
 
   final persistenceController = PersistenceController(
     storageService: DriftStorageService(appDatabase),
@@ -413,7 +459,10 @@ void main(List<String> args) async {
     scaleController: scaleController,
     settingsController: settingsController,
   );
-  final WebUIService webUIService = WebUIService();
+  final WebUIService webUIService = WebUIService(
+    loadSkinPortAssignments: loadPersistedSkinPortAssignments,
+    saveSkinPortAssignments: persistSkinPortAssignments,
+  );
   final WebUIStorage webUIStorage = WebUIStorage(settingsController);
 
   DecentAccountService? decentAccountService;
@@ -502,13 +551,14 @@ void main(List<String> args) async {
   };
   webUIService.skinProxyTokenRevoker = proxyTokenService.revokeSkinToken;
 
-  final PluginLoaderService pluginService = PluginLoaderService(
+  pluginService = PluginLoaderService(
     kvStore: HiveStoreService(defaultNamespace: "plugins")..initialize(),
     decentProxyService: decentProxyService,
     credentialStore: credentialStore,
     deviceService: pluginDeviceService,
   );
   await pluginService.pluginManager.attachDe1Controller(de1Controller);
+  pluginService.pluginManager.attachWorkflowController(workflowController);
   persistenceController.onShotStored = (shotId) =>
       pluginService.pluginManager.broadcastEvent('shotStored', {'id': shotId});
 
@@ -534,7 +584,9 @@ void main(List<String> args) async {
     pluginSourceService: PluginSourceService(pluginService),
   );
 
-  final macosUpdater = Platform.isMacOS ? MacOSUpdater() : null;
+  final macosUpdater = Platform.isMacOS && !BuildInfo.appStore
+      ? MacOSUpdater()
+      : null;
 
   try {
     await startWebServer(
