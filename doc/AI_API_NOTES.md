@@ -24,6 +24,38 @@ Read this when changing REST endpoints, WebSocket topics, API specs, auth proxy,
 - Content-based hash IDs for profile deduplication (`ProfileController`).
 - ETag / `If-None-Match` support on cacheable resources (#203).
 
+### Patch Nullability
+
+`rejectExplicitNulls()` in `json_patch.dart` is the shared helper for refusing an explicit
+`null` on a PUT (`profile_handler.dart` keeps its own inline check for `profile`), and the
+refusal has to be modelled in a patch-specific schema — `SteamSettingsPatch`,
+`WorkflowContextPatch` — because a generated client reads the schema, not the handler.
+Keep a patch schema field-for-field with its model and change only the fields the handler
+names: `WorkflowContextPatch` drops `nullable` on `targetYield` alone, because that is the
+only field `WorkflowHandler` passes to `rejectExplicitNulls`, and every other context field
+is genuinely cleared by an explicit `null`. `WorkflowContext` stays nullable throughout,
+since a stored shot legitimately has no target and it is the GET and 200 response shape.
+`test/webserver/workflow_patch_schema_test.dart` pins the pair against drift.
+
+A nested patch object needs the refusal at both levels. `Workflow.fromJson` drops the whole
+context when `context` is `null`, so `{"context": null}` used to clear `targetYield` through
+the back door and answer `200` while the schema — a bare `$ref`, and bare `$ref` is
+non-nullable in OpenAPI 3.0.3 — said it was invalid. `WorkflowHandler` therefore names
+`context` alongside `steamSettings` in the top-level `rejectExplicitNulls()` call and rejects
+a non-object `context`, mirroring the `steamSettings` arm. A client clears individual context
+fields with an explicit `null` and turns stop-at-weight off with `0`; there is no
+whole-object clear.
+
+`rejectExplicitNulls()` pairs with `validatePatchFieldTypes()` — the idiom used by
+`beans_handler.dart` and `grinders_handler.dart` — because a wrong type is the same hole as a
+`null`. `parseOptionalDouble()` returns `null` when a value will not parse, so an unparseable
+`targetYield` silently meant no target and `BengleSawBridge` wrote `0` to the firmware, which
+is stop-at-weight off. The type check is scoped to `targetYield`: it is the field with the
+safety consequence, and widening it to the sibling numeric fields is a separate behaviour
+change. One consequence worth knowing before widening it: `validatePatchFieldTypes()` requires
+`value is num`, so a numeric *string* such as `"36"` that `parseOptionalDouble()` accepted now
+returns `400`. Nothing in this repo sends one and `type: number` never permitted it.
+
 ### Admission Control
 
 `/api/` requests pass through a process-local gate after authentication and inside
@@ -54,6 +86,35 @@ stalled body. Workflow PUT retains its smaller semantic bounds.
 - Backup export is atomic: a requested section export failure returns an error and never a partial ZIP. Native callers validate HTTP `200` and `application/zip` before opening a save picker.
 - Remote sync clients accept legacy flat section maps and structured `sections` responses, but fail closed for missing sections, malformed semantic fields, contradictory declarations, or a hybrid representation.
 - In every sync mode, omitted sections mean all locally registered sections; explicit empty, unknown, or malformed section lists are rejected before network activity.
+
+## LED Strip PUT Response Shape
+
+`PUT /api/v1/machine/ledStrip` answers with the stored canonical palette rather
+than a write acknowledgement. The request value and the stored value are not the
+same thing on this endpoint: the firmware holds 8 bits per RGB channel, so the
+app quantizes before writing, and `frontSwitch` has no register of its own and is
+derived from the front strip. An acknowledgement therefore could not tell a caller
+what the machine actually holds, and a client had to issue a second GET to find
+out. The 200 body is now byte-identical to that GET.
+
+The acknowledgement survives as a defensive fallback for a machine implementation
+that reports no stored palette after the write, which is why the spec documents the
+200 as an `anyOf`. No shipped implementation produces that branch: every
+implementation populates the stored palette on the success path of the write, so a
+failed hydration is repaired by the write rather than surfaced here. Both branches
+are covered in `test/services/webserver/de1handler_led_strip_test.dart`, the
+fallback through a test double that reports no state at all.
+
+This is a deliberate divergence from the sibling `PUT /api/v1/machine/cupWarmer`,
+which still returns `{"status": "accepted"}`. Only the ledStrip endpoint moved;
+there is no repo-wide convention change. Cup-warmer writes are stored as sent, so
+an echo would carry no information the caller does not already have.
+
+The canonicalisation itself lives in one place, `LedStripState.canonical()` in
+`lib/src/models/device/led_strip.dart`. The real capability, `MockBengle` and
+`MockReplayDe1` all route their writes through it, and the replay mock seeds its
+starting palette with it too, so a mock cannot hold or store a palette the machine
+could not produce.
 
 ## WebSocket Conventions
 
@@ -148,6 +209,68 @@ All four machine sockets: `/ws/v1/machine/snapshot`, `/ws/v1/machine/shotSetting
 
 **Full gateway mode is explicitly exempt**, checked via `settingsController.gatewayMode == GatewayMode.full` alongside the shot-state check — not left implicit. In `full` mode the skin owns the shot and `De1StateManager` normally never starts its own `ShotSequencer` for it, so `currentShotState` would usually stay idle anyway; but the launcher/home-screen path in `De1StateManager._handleEspressoState` starts an app-owned `ShotSequencer` "regardless of mode" whenever the app's own home screen is foregrounded, even under `full` gateway mode. Relying on ShotSequencer-absence alone would make the lockout accidentally engage in that edge case, which is out of scope for the setting's intent (it exists to protect app-tracked shots, not skin-owned ones) — hence the explicit gateway-mode check rather than an inferred one.
 
+## Fixed Port Already Bound
+
+### Problem
+
+`startWebServer` binds two fixed ports: 8080 for the REST and WebSocket API, and
+4001 for the API docs. `main()` wrapped the call in a bare `catch` that logged
+`failed to start web server` and carried on, so a bind failure left the app
+running with no API at all.
+
+That failure was close to invisible. The WebUI binds an ephemeral port and is
+unaffected, so the skin still loaded and the app looked normal; only every REST
+call and every WebSocket behind it was gone. `BootTiming.mark('webserver_up')`
+fired either way. The user saw an app that opened correctly and then misbehaved,
+with the reason only in the log.
+
+Two Decaid-family apps installed on one device share those fixed ports, so the
+common cause is that the other one is already running.
+
+### Solution
+
+`lib/src/services/webserver/port_binding.dart` wraps both binds.
+`serveOrReportPortInUse` raises a typed `WebServerPortInUse`; `main()` catches it
+and runs `WebServerPortConflictApp` instead of the app.
+
+Only the 8080 API bind reaches `main()`. `startApiDocsServer` catches the same
+exception for 4001, logs it, and returns null, so the docs port is best effort.
+
+### Design Choices
+
+- **Only EADDRINUSE is a port clash.** Every other `SocketException` is
+  rethrown unchanged so it keeps its own error path. A check that treated all of
+  them as a clash would tell the user to close an app that is not running.
+- **The errno set is per platform.** Dart reports the raw OS code and does not
+  normalise it: 98 on Linux and Android, 48 on macOS and iOS, 10048 on Windows.
+- **A same-process double bind carries no errno.** Dart refuses it before the OS
+  sees it and raises its own message, "The shared flag to bind() needs to be
+  `true` ...". That is the same condition for the user, so `isAddressInUse`
+  matches on `sameProcessBindClashMessage` as well. Matching a message is
+  brittle, so a test pins the wording: a Dart change fails that test rather than
+  letting the check fall through to the unknown-failure path. This is also why
+  an in-process test can exercise `serveOrReportPortInUse` at all.
+- **The boot stops for 8080, not for 4001.** Continuing without the API would
+  present a working-looking app with nothing behind it, which is the defect this
+  replaces. 4001 serves only the API docs, and it binds after 8080 has already
+  succeeded. Treating a docs conflict as fatal would abort a boot whose API was
+  running, and would leave that 8080 server open behind the conflict screen,
+  because `startWebServer` holds the only reference to it.
+- **The screen does not close the other app.** Android does not let one app stop
+  another; `killBackgroundProcesses` needs its own permission and only ever
+  touches background processes. The screen offers "Check again", which re-probes
+  the port, and "Close this app".
+- **`probePortIsFree` is injected into the screen.** A widget test drives a fake
+  clock and real socket I/O never settles under it, so the widget takes a
+  `PortProbe`. The real probe is covered separately in a plain test.
+
+### Focused Tests
+
+```
+flutter test test/unit/services/webserver/port_binding_test.dart
+flutter test test/unit/services/webserver/api_docs_server_port_test.dart
+flutter test test/unit/ui/webserver_port_conflict_app_test.dart
+```
 ## Profile Step Limiters
 
 A step limiter is `{value, range}`. `value` is required and refused by name when

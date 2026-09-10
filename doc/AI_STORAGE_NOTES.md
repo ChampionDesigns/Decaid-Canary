@@ -73,6 +73,13 @@ Persistence uses Drift (SQLite) via `AppDatabase`. DAOs in `lib/src/daos/`, mapp
 
 **Schema v5 (shot revision metadata):** `shot_records.createdAt`/`updatedAt` were added as nullable TEXT and backfilled from `timestamp` during the 4→5 migration, so pre-v5 rows carry a real DB-level revision instead of NULL. `ShotMapper.fromRow` still falls back to `timestamp` for any row with NULL fields (e.g. rows inserted without stamps). The revision contract (bookkeeping extras do not advance `updatedAt`, PUT cannot write the fields) is documented in `doc/Api.md` under Shots → Modification tracking.
 
+**Migration lesson from #811 (0.8.5 startup failures):** Drift only writes `PRAGMA user_version` after `beforeOpen`/`onUpgrade` completes, and the upgrade body is NOT automatically transactional. An interrupted multi-step migration can therefore leave a partially upgraded physical schema (e.g. only `created_at` added) while `user_version` stays at the old value; the next open re-enters the same step and the unconditional `ADD COLUMN` fails with `duplicate column name`. Rules for future migrations:
+
+- Wrap the whole `onUpgrade` body in an explicit Drift `transaction()` so any failed step rolls back atomically and the next open retries from a known state.
+- Make each step resume-safe/idempotent where it can reconcile a partial physical schema: inspect `PRAGMA table_info(...)` and apply only the missing work instead of blind `ADD COLUMN`/`CREATE TABLE`. `shot_records` v5 columns (`created_at`/`updated_at`, nullable TEXT) are validated against `PRAGMA table_info` metadata (TEXT, notnull=0, pk=0, no default or an explicit NULL literal default) before being reused.
+- Test partially-applied states (each column subset present at the old `user_version`, NULL and non-NULL value mixes), not only clean `N -> N+1` fixtures.
+- Unknown/incompatible states fail closed and preserve the DB (no drop/recreate/reset/rename fallback); surface them for assisted recovery instead of silently reshaping user data.
+
 ## Profile Storage
 
 Content-based hash IDs for deduplication. `ProfileController` manages the profile library:
@@ -80,6 +87,51 @@ Content-based hash IDs for deduplication. `ProfileController` manages the profil
 - Deduplication: two profiles with identical content get the same hash ID.
 - `ProfileStorageService` interface with `DriftProfileStorageService` implementation.
 - ID-changing updates use `ProfileStorageService.replace`, which inserts the replacement and deletes the original in one Drift transaction. Target-ID collisions throw `ArgumentError` and leave both records unchanged.
+
+### Recorded Shot Profiles Are Not Executable Profiles
+
+A shot's stored `workflowJson.profile` is a historical record, not something the
+app brews from, so `ShotMapper.fromRow` reads it with
+`Workflow.fromRecordedJson`, which parses the profile via
+`Profile.fromRecordedJson` and allows an empty `steps` array and a missing
+title. `Workflow.fromJson` and `Profile.fromJson` stay strict and back the
+profile library, the profile and workflow REST handlers, the stored current
+workflow, and DE1 upload; a step-less profile must never enter the brewable
+library, and `PUT /api/v1/workflow` must keep returning 400 for one (issue
+#338).
+
+de1app `.shot` files carry the shot, not the profile that produced it, so
+`TclShotParser` and the no-profile branch of `ShotV2JsonParser` store a
+placeholder profile with `steps: []`. Before the lenient read path existed, the
+strict parser refused to read those rows back, and because
+`DriftStorageService.getShotsPaginated` mapped rows with a bare `rows.map(...)`,
+a single de1app import made `GET /api/v1/shots` return 500 and hid the entire
+history rather than one shot (issue #784).
+
+The same leniency has to hold for every path that re-reads a stored shot as
+JSON, not just the row mapper. `PUT /api/v1/shots/<id>` merges the patch into
+`existingShot.toJson()` and reparses the result; `ShotImporter`
+(`lib/src/util/shot_importer.dart`) reads shots from a standalone backup file;
+and `ShotExportSection.importJson` (`lib/src/services/webserver/data_export/shot_export_section.dart`)
+is the restore side of the app's own `/backup` archive endpoint. All three use
+`ShotRecord.fromRecordedJson`. With the strict parser there, an imported
+step-less shot read back fine but could not be annotated, re-imported, or
+restored from a `/backup` archive. `ShotRecord.fromJson` stays strict for
+everything else.
+
+`ShotMapper.fromRows` now skips and logs a row it cannot map, so any future
+corruption costs its own shot instead of the whole list. Single-shot reads
+(`getShot`, `getLatestShot`) still surface the error, because there the failing
+row is the answer.
+
+`ShotExportSection.exportJson` (wired from `pageShotsForExport` in
+`lib/main.dart`) pages through `ShotDao.getShotsForExport` and treats a page
+shorter than the requested page size as end-of-stream. Because
+`ShotMapper.fromRows` drops unmappable rows, a raw page that happened to
+contain one would come back short even with more rows waiting, truncating the
+backup. `pageShotsForExport` re-queries past a dropped row, using the raw
+row's cursor (not the last successfully mapped shot's) to advance, until it
+either fills the requested page or the table is genuinely exhausted.
 
 ### Legacy Profile Corpus Ingestion
 

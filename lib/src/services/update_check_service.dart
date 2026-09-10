@@ -18,6 +18,7 @@ class UpdateCheckService {
   final PluginSourceService? _pluginSourceService;
 
   final bool _isAndroid;
+  final bool externallyManaged;
 
   final bool _isMacOS;
 
@@ -38,6 +39,7 @@ class UpdateCheckService {
     PluginSourceService? pluginSourceService,
     bool? platformIsAndroid,
     bool? platformIsMacOS,
+    this.externallyManaged = BuildInfo.appStore,
   }) : _settingsService = settingsService,
        _updater = updater ?? AndroidUpdater(owner: 'tadelv', repo: 'reaprime'),
        _webUIStorage = webUIStorage,
@@ -47,9 +49,10 @@ class UpdateCheckService {
     _state = BehaviorSubject.seeded(_snapshot(AppUpdatePhase.idle));
   }
 
-  UpdateInfo? get availableUpdate => _availableUpdate;
+  UpdateInfo? get availableUpdate =>
+      externallyManaged ? null : _availableUpdate;
 
-  bool get hasAvailableUpdate => _availableUpdate != null;
+  bool get hasAvailableUpdate => availableUpdate != null;
 
   Stream<AppUpdateState> get updateState => _state.stream;
 
@@ -57,12 +60,14 @@ class UpdateCheckService {
 
   bool get canInstall => _isAndroid;
 
+  bool get canCheck => !_isMacOS && !externallyManaged;
+
   AppUpdateState _snapshot(
     AppUpdatePhase phase, {
     double? progress,
     String? error,
   }) {
-    final update = _availableUpdate;
+    final update = availableUpdate;
     final hasUpdate = update != null;
     return AppUpdateState(
       phase: phase,
@@ -88,7 +93,11 @@ class UpdateCheckService {
 
   Future<void> requestCheck() async {
     if (_inProgress) return;
-    await checkForUpdate();
+    try {
+      await checkForUpdate();
+    } catch (e) {
+      _log.fine('Manual update check failed; error state already emitted: $e');
+    }
   }
 
   Future<void> downloadAndInstall() async {
@@ -96,7 +105,12 @@ class UpdateCheckService {
     if (!_isAndroid) return;
 
     if (_availableUpdate == null) {
-      await checkForUpdate();
+      try {
+        await checkForUpdate();
+      } catch (e, st) {
+        _log.warning('Update check before install failed', e, st);
+        return;
+      }
       if (_availableUpdate == null) {
         return;
       }
@@ -143,13 +157,13 @@ class UpdateCheckService {
       '${_isMacOS ? ' [skins only — Sparkle owns macOS app updates]' : ''}',
     );
 
-    if (_isMacOS) {
+    if (_isMacOS || externallyManaged) {
       await _updateManagedContent();
     } else {
       final lastCheck = await _settingsService.lastUpdateCheckTime();
       if (lastCheck == null ||
           DateTime.now().difference(lastCheck) > _checkInterval) {
-        await checkForUpdate();
+        await checkForUpdate(quiet: true);
         await _updateManagedContent();
       }
     }
@@ -157,7 +171,7 @@ class UpdateCheckService {
     _periodicTimer?.cancel();
     _periodicTimer = Timer.periodic(_checkInterval, (_) async {
       if (!_isMacOS) {
-        await checkForUpdate();
+        await checkForUpdate(quiet: true);
       }
       await _updateManagedContent();
     });
@@ -189,7 +203,12 @@ class UpdateCheckService {
     }
   }
 
-  Future<UpdateInfo?> checkForUpdate() async {
+  Future<UpdateInfo?> checkForUpdate({bool quiet = false}) async {
+    if (externallyManaged) {
+      _availableUpdate = null;
+      _emit(AppUpdatePhase.idle);
+      return null;
+    }
     if (_isMacOS) {
       _log.info('macOS app updates are owned by Sparkle; skipping APK check');
       return null;
@@ -227,8 +246,16 @@ class UpdateCheckService {
       return updateInfo;
     } catch (e, stackTrace) {
       _log.warning('Error checking for updates', e, stackTrace);
+      if (quiet) {
+        _emit(
+          _availableUpdate != null
+              ? AppUpdatePhase.available
+              : AppUpdatePhase.idle,
+        );
+        return null;
+      }
       _emit(AppUpdatePhase.error, error: 'Update check failed: $e');
-      return null;
+      rethrow;
     }
   }
 
@@ -259,6 +286,11 @@ class UpdateCheckService {
   }
 
   void debugForceUpdate({String version = '99.0.0', String? downloadUrl}) {
+    if (externallyManaged) {
+      _availableUpdate = null;
+      _emit(AppUpdatePhase.idle);
+      return;
+    }
     _log.info('DEBUG: forcing fake update notification ($version)');
     _availableUpdate = UpdateInfo(
       version: version,

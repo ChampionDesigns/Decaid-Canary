@@ -1,8 +1,19 @@
 # API Reference
 
+Scale REST command failures preserve the existing HTTP 500 response and `error`
+message. Plugin Scale failures additionally include `code`; unsupported optional
+operations use `unsupported_operation`. Native timer no-op behavior is unchanged.
+The four tare/timer 500 responses share the OpenAPI `ScaleCommandError` schema.
+
 Decaid exposes REST and WebSocket APIs on port 8080. Full OpenAPI specs are in [`assets/api/rest_v1.yml`](../assets/api/rest_v1.yml) and [`assets/api/websocket_v1.yml`](../assets/api/websocket_v1.yml). Interactive docs are available at port 4001 when the app is running.
 
 For skin development, see [`doc/Skins.md`](Skins.md). For plugin development, see [`doc/Plugins.md`](Plugins.md).
+
+The #809 work-in-progress manifest schema includes `transport.ble`, Scale
+capabilities, and BLE matchers. Public non-BLE Scale registration is implemented;
+runtime BLE binding and full API acceptance remain incomplete. See
+[the active design](plans/issue-809-design.md). This stage
+adds no routes or WebSocket messages.
 
 ---
 
@@ -60,7 +71,7 @@ For browser clients on a different origin, `ETag` is exposed via `Access-Control
 | Method | Path | Description | Handler |
 |--------|------|-------------|---------|
 | GET | `/api/v1/machine/info` | Machine model, firmware, features | `de1handler.dart` |
-| GET | `/api/v1/machine/state` | Current machine state + substate | |
+| GET | `/api/v1/machine/state` | Current machine state + substate. The steam substates `pausedSteam` and `puffing` report as themselves; both used to report as `idle` | |
 | PUT | `/api/v1/machine/state/{newState}` | Request state change (`idle`, `sleep`, `espresso`, …) | |
 | GET | `/api/v1/machine/settings` | DE1 machine settings (temps, flows) | |
 | POST | `/api/v1/machine/settings` | Update machine settings (one grouped, serialized device write per request) | |
@@ -85,7 +96,7 @@ For browser clients on a different origin, `ETag` is exposed via `Access-Control
 | GET | `/api/v1/machine/cupWarmer/preheat` | Read scheduled pre-warm `enabled`/`leadMinutes`/`active` (firmware-owned timing) — Bengle only, 404 elsewhere | |
 | PUT | `/api/v1/machine/cupWarmer/preheat` | Set pre-warm `enabled` and/or `leadMinutes` (0–120, persisted in firmware) — Bengle only | |
 | GET | `/api/v1/machine/ledStrip` | Read LED strip palette (3 zones × 2 modes, 16-bit RGB; `frontSwitch` derived, not a hardware control); 503 until firmware hydration succeeds — Bengle only | |
-| PUT | `/api/v1/machine/ledStrip` | Write palette write-through to FW registers (persisted immediately; `frontSwitch` ignored) — Bengle only | |
+| PUT | `/api/v1/machine/ledStrip` | Write palette write-through to FW registers (persisted immediately; `frontSwitch` ignored). The 200 body is the canonical stored palette — strips quantized to the firmware's 8 bits per channel, `frontSwitch` derived — replacing the former `{"status":"accepted"}` acknowledgement, which now only appears if the machine reports no stored palette after the write — Bengle only | |
 | POST | `/api/v1/machine/ledStrip/commit` | Compatibility no-op (palette writes are already persisted) — Bengle only | |
 | POST | `/api/v1/machine/ledStrip/reset` | Re-read palette from FW and return refreshed state (truthful reload, not a rollback) — Bengle only | |
 | GET | `/api/v1/machine/scaleCalibration` | Read decoded scale-calibration state (step, cell, sub-state, seconds remaining, status) — Bengle only, 404 elsewhere | |
@@ -251,6 +262,15 @@ cross-request or cross-client coalescing. Partial updates are deep-merged agains
 workflow state when each request executes, and each response contains that request's resulting
 workflow. Omitted steam-setting fields are preserved and supplied values replace them. The
 `steamSettings` object and all of its fields are non-nullable; explicit `null` returns `400`.
+The `context` object is validated against `WorkflowContextPatch`, which is not the stored
+`WorkflowContext`: every context field still accepts an explicit `null` to clear it, except
+`context.targetYield`, which returns `400`. `targetYield` is the single source of truth for
+stop-at-weight and null and `0` both mean the feature is off, so omit the field to keep the
+current value, or send `0` to turn stop-at-weight off deliberately; a value that is not a
+number returns `400` rather than clearing the target. The `context` object itself is
+non-nullable too — `{"context": null}` returns `400`, because dropping the whole context
+would clear `targetYield` with it, so clearing is per field. A stored or returned workflow
+keeps a nullable `targetYield`.
 Requests may wait behind machine I/O; the server does not debounce high-frequency
 input, so clients should throttle controls themselves. Bodies larger than 1 MiB return `413`,
 requests beyond the eight-entry active/queued limit return `429`, and requests waiting more
@@ -601,7 +621,7 @@ All WebSocket endpoints are on port 8080 at `/ws/v1/...`. See [`assets/api/webso
 | `/ws/v1/logs` | App log stream | Timestamped log entries |
 | `/ws/v1/webview/logs` | WebView console log stream | WebView console messages |
 | `/ws/v1/display` | Display state changes | Brightness, wakelock |
-| `/ws/v1/update` | App-update state stream. Also accepts `{"command":"check"}` and `{"command":"install"}` (Android installs; other platforms reply `{"error","url"}`). | `phase`, `progress`, `latestVersion`, `installable` |
+| `/ws/v1/update` | App-update state stream. Also accepts `{"command":"check"}` (refused on macOS and on externally managed App Store/TestFlight builds, where the store owns app updates) and `{"command":"install"}` (Android installs; refused elsewhere). Either refusal replies `{"error","url"}` carrying `releaseUrl` — the release tag when one is known, otherwise the releases page. | `phase`, `progress`, `latestVersion`, `installable` |
 
 ### Machine sockets re-bind across a reconnect
 

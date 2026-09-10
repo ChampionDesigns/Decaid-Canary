@@ -183,12 +183,32 @@ A queue can produce only one wrapper timeout per faulted generation; followers a
 
 `operationCancelled` means local queue recovery, never physical disconnect. It is benign Crashlytics noise. `deviceDisconnected` remains reserved for a confirmed or forced physical disconnect. The legacy `Exception('Queue Cancelled')` string sentinel is not part of the 2.2.1 path.
 
+## Stale Disconnect vs Queued GATT Work
+
+`universal_ble` installs an automatic per-device queue drain (`UniversalBle._wireQueueDrain`) that disposes a device's queue on every raw `isConnected == false` connection update. Decaid runs `QueueType.perDevice` (`universal_ble_discovery_service.dart`), so that drain is keyed on the same id as every queued Decaid GATT call: `BleCommandQueue.clearQueue` removes the queue and `Queue.dispose` completes every pending caller with `deviceDisconnected`.
+
+A platform can publish that update late for a link that a newer connection attempt already re-established. `UniversalBleTransport._confirmDisconnect()` already probes the OS link before publishing the domain disconnect, but that probe cannot run early enough to protect queued callers: the dependency drains them in the same stream dispatch, and the rejected caller then reaches `_handleGattError()`'s gone-device branch and reports `disconnected`. Suppressing that later state does not restore the cancelled callers, so the destructive action has to be fixed at its owner.
+
+Decaid therefore pins `universal_ble` on the unreleased commit `9c50e12fcc33b061fe37e7037c69e44e30d96c79` (a merge of `tadelv/universal_ble` `main` into `tadelv/universal_ble` PR #24). It confirms the authoritative link state before draining and holds the device queue while that confirmation is in flight, so a genuine disconnect still cancels pending commands before the next one can dispatch. The hold is owned by the newest confirmation for that device: `connected` or `connecting` releases it, an inconclusive confirmation clears it, a queue created while the hold is live starts held, and a superseded confirmation can neither resume nor clear. Releasing a live-link hold resumes dispatch only once the active command has completed, so a confirmed stale disconnect cannot run two commands on the same device at once. Re-pin to a released tag once that change lands.
+
+`test/universal_ble_transport_recovery_test.dart`, group `stale disconnect vs queued GATT work`, guards the Decaid side of that contract: a stale update must leave the in-flight and queued writes alive with the queue still `running`, confirming the stale update as connected must not dispatch the queued write while the in-flight write is still running, a genuine disconnect must still cancel exactly once and publish exactly one `disconnected`, and a genuine disconnect whose link probe is still pending must hold queued work instead of dispatching it.
+
+## Plugin Connection Deadlines
+
+A host-bound BLE plugin device connects in two phases. `PluginProtocolDevice.prepareConnection` establishes the physical BLE session and `PluginBleBinding` owns admission, claim reservation and `session.connect()` there; only then does the plugin's own `connect` handler run, and only then does `invocationTimeout` bound protocol startup and readiness.
+
+The split exists because platform acquisition and recovery are transport policy: a slow Android connect, a BlueZ cache-refresh retry, or an MTU negotiation can legitimately outlive any budget a plugin timeout would pick, and killing them there reports a healthy recovery as a plugin failure. Raising the plugin timeout instead would only move the same ownership error and weaken the bound on a stalled plugin, so the phases stay separate. Cancellation or disposal in either phase must settle without publishing `connected` and must retire the physical session the attempt prepared, even when the logical session was already cleared.
+
+A plugin that creates a first-packet readiness promise must attach its own rejection handler when it creates it. Startup can fail before that promise is awaited, and a later disconnect or silence watchdog would otherwise reject an unobserved promise. The Bookoo reference plugin and `scripts/test_bookoo_readiness_rejection.mjs` show the pattern and its regression.
+
 ## BLE Scanning
 
 - Device discovery uses unfiltered scans with name-based matching (`DeviceMatcher`).
 - Service verification during `onConnect()` via `BleServiceIdentifier`.
 - `ScanStateGuardian` guards against overlapping scans and tracks adapter state.
 - `ScanOrchestrator` manages single-scan lifecycle.
+- Discovery owns cache state, not native connection teardown. Duplicate advertisements preserve unknown, discovered, connecting, and disconnecting devices. A connected cache entry is replaced only after identity-fenced Dart and native rechecks confirm it is stale; the final identity/Dart recheck runs after the last native probe with no await before cache removal. Replacement never calls native disconnect.
+- Cache disconnect listeners are device-instance-fenced so an older generation cannot evict its replacement.
 
 ## Sleep From NeedsWater (Refill State)
 
@@ -203,6 +223,16 @@ An awake Decent Scale connection requires a recognised FFF4 status or weight fra
 Acaia parsing is frame-bounded. Payload lengths above 64 bytes and impossible lengths for known settings or weight events trigger header resynchronization; complete unsupported frames are consumed whole so embedded `EF DD` bytes cannot become top-level frames. Only accepted settings, weight, or timer frames refresh liveness. Event 11 selector 5 carries weight, while selector 7 is timer data. Connection readiness requires a decoded valid weight rather than an arbitrary notification.
 
 AtomHeart Eclair uses service `B905EAEA-2E63-0E04-7582-7913F10D8F81`, data/status characteristic `AD736C5F-BBC9-1F96-D304-CB5D5F41E160`, and command characteristic `4F9A45BA-8E1B-4E07-E157-0814D393B968`. Its connection remains `connecting` until a valid checksummed `0x57` weight frame arrives. Silence for 800 ms resets the notification subscription at most twice; a third silent window tears down the transport so ConnectionManager owns recovery. Timer reset/start/stop commands are `520101`, `530101`, and `450101`; tare remains `540101`.
+
+A readiness gate that only reports "timed out" cannot be diagnosed from a user log. The Eclair connect timeout names how many notifications arrived and the last frame that failed validation, which separates a dead subscription (zero notifications, a CCCD or GATT problem) from a frame format the parser rejects (notifications arriving, none accepted). Issue #629 was closed without a root cause for want of exactly that distinction.
+
+A characteristic advertises write-with-response, write-without-response, or both, and the requested type must match. CoreBluetooth rejects a mismatch locally, before any radio traffic: universal_ble surfaces `characteristicDoesNotSupportWrite` or `characteristicDoesNotSupportWriteWithoutResponse` in single-digit milliseconds. The Eclair command characteristic is write-with-response only on current firmware, so every `540101` tare issued as write-without-response failed instantly (issue #780). `AtomheartScale` therefore issues its commands with response; the device contract belongs at the caller.
+
+The two ATT write procedures are not equivalent, so the transport never substitutes one for the other freely. A write request is acknowledged and has a server error path; a write command is not and does not. `UniversalBleTransport.write` retries in one direction only: a write the caller asked to send unacknowledged that the platform rejects for its property is retried once with response, which adds an acknowledgement the caller did not ask for but never removes one it did. A rejected write-with-response is surfaced as-is, never downgraded.
+
+The retry cannot duplicate a command. Darwin, Android, and Windows all validate the requested property against the GATT database and return the error before dispatching anything to the radio, so a rejected write never reached the device. BlueZ does not report these codes at all and never enters the retry path. A write that the platform accepts is issued exactly once, with the property the caller asked for.
+
+`_handleGattError` must log before it rethrows. An unmapped `UniversalBleException` used to escape silently, which is why #780 reached the tracker as a bare HTTP 500 with no cause anywhere in the log. REST handlers that turn an exception into a 500 body must log it too; a response body the user never sees is not evidence.
 
 The Eclair weight frame is fixed at exactly 10 bytes: `0x57` header, four little-endian weight bytes in milligrams, four timer bytes, and one XOR checksum over bytes 1 to 8. Accept only that exact width. A shorter frame makes the last payload byte double as the checksum, so `57 00 00 00 00 00 00 00 00` would otherwise XOR-validate as a zero-weight snapshot and satisfy the readiness gate.
 
@@ -430,6 +460,61 @@ not cancel the underlying future, so releasing the queue on timeout would let a
 stalled write resume later and overwrite a newer one. Bound the actual
 unbounded read instead; a real anti-wedge mechanism needs explicit
 cancellation or fencing.
+
+## Plugin BLE Binding (#809 Checkpoint)
+
+Bookoo's opt-in JS reference lives under `examples/plugins/bookoo-mini.reaplugin`.
+Shared native/plugin byte fixtures are in `test/helpers/bookoo_packets.dart`.
+The driver's valid-packet silence deadline is two seconds, a provisional protocol
+health policy pending hardware cadence measurements, not a native GATT timeout.
+
+Notification provenance is captured before JS dispatch. An optional opaque token
+round-trips through the callback and publication; host validation supplies the
+Scale timestamp. Four-event/100 ms trace tests reproduced collapsed timestamps
+without it. Keep the two-second expiry aligned with shot freshness, retain bounded
+session ownership, and measure arrival delay separately from timestamp quality.
+
+`PluginBleBinding` reserves the physical ID before transport creation and owns a
+fresh `PluginBleSession` per connect. Factory metadata has no mutable publication
+target: all publication and GATT closures capture a session capability. Do not
+move those closures onto a persistent factory object when adding Scale protocols.
+
+Expose the domain session only after `PluginBleSession.connect()` succeeds. Android
+GATT-133 can emit a disconnect event before the native connect Future reports its
+error; exposing the domain session earlier lets terminal cleanup cancel the domain
+connect and masks the actionable BLE error as `stale_session`. The Scale debug view
+owns connect failures and lets the user retry the same binding without rescanning.
+
+Retirement and native teardown are different boundaries. The session fences normal
+operations immediately, permits only bounded cleanup reads/writes, then awaits
+`disconnectConfirmed`. If confirmation times out, retain the physical claim. A
+caller-facing timeout must never imply that the native link has closed.
+`BleAdmissionTransport` applies the same physical exclusion to native candidates;
+discarding a candidate which never reserved ownership must not disconnect another
+owner's link.
+
+Plugin arbitration uses the native cache's identity-fenced eviction and adoption
+helpers. Cache eviction never disconnects a native candidate. Plugin candidate
+retirement rechecks binding occupancy and physical claims after asynchronous
+listener cancellation; active or unconfirmed-teardown bindings remain owned.
+
+Discovery records whole observations before its native empty-name gate. System
+metadata is incomplete; it cannot erase complete advertisements. Observations
+arriving during async candidate creation are replayed and admission rechecks the
+current registry/evidence. Watch filter changes use the existing scan owner rather
+than a second scanner. Initial loader settlement gates native fallback.
+
+Every scan-generation advance also resets evidence, observations, ownership
+decisions, and queued observation work. Watch stop and adapter recovery are
+generation boundaries too; otherwise fresh Apple quick-connect system evidence
+is rejected by the previous cache generation.
+
+Real-JS integration fixtures are in `test/plugins/plugin_manager_ble_test.dart`,
+`plugin_ble_native_bridge_test.dart`, and `plugin_ble_sensor_api_test.dart`. The
+last drives actual HTTP/WebSocket clients through DeviceController, SensorController,
+the JS bridge, and a fake GATT edge. Native bridge coverage uses
+UniversalBleTransport to prove CCCD reset and write-property error behavior.
+These checks do not replace hardware or Scale timing acceptance.
 
 ## Keeping Notes Fresh
 

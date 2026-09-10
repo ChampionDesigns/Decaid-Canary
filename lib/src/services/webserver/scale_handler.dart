@@ -39,7 +39,11 @@ class ScaleHandler {
           try {
             await _controller.tare();
           } catch (e) {
-            return jsonError({'error': e.toString()});
+            _log.warning('tare command failed', e);
+            return jsonError({
+              'error': e.toString(),
+              if (e is ScaleOperationException) 'code': e.code,
+            });
           }
           return jsonOk(null);
         default:
@@ -66,7 +70,11 @@ class ScaleHandler {
             return jsonNotFound({'error': 'Unknown command: $command'});
         }
       } catch (e) {
-        return jsonError({'error': e.toString()});
+        _log.warning('timer $command command failed', e);
+        return jsonError({
+          'error': e.toString(),
+          if (e is ScaleOperationException) 'code': e.code,
+        });
       }
     });
     app.get('/ws/v1/scale/snapshot', admittedWebSocketHandler(_handleSnapshot));

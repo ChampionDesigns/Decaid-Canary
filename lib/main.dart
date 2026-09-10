@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' show AppExitResponse, AppExitType;
 
@@ -45,6 +46,7 @@ import 'package:reaprime/src/plugins/plugin_source_service.dart';
 import 'package:reaprime/src/services/android_updater.dart';
 import 'package:reaprime/src/services/wifi/wifi_scale_discovery_service.dart';
 import 'package:reaprime/src/services/database/database.dart' hide Workflow;
+import 'package:reaprime/src/models/data/shot_record.dart' as domain;
 import 'package:reaprime/src/services/database/mappers/shot_mapper.dart';
 import 'package:reaprime/src/services/database/mappers/steam_mapper.dart';
 import 'package:reaprime/src/services/database/mappers/bean_mapper.dart';
@@ -69,10 +71,13 @@ import 'package:reaprime/src/services/app_log_upload_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:reaprime/src/services/storage/hive_store_service.dart';
+import 'package:reaprime/src/database_failure_view.dart';
 import 'package:reaprime/src/services/universal_ble_discovery_service.dart';
 import 'package:reaprime/src/services/simulated_device_service.dart';
 import 'package:reaprime/src/services/webserver/data_export/backup_data_sources.dart';
 import 'package:reaprime/src/services/webserver_service.dart';
+import 'package:reaprime/src/services/webserver/port_binding.dart';
+import 'package:reaprime/src/ui/webserver_port_conflict_app.dart';
 import 'package:reaprime/src/services/macos_updater.dart';
 import 'package:reaprime/src/services/update_check_service.dart';
 import 'package:reaprime/src/webui_support/webui_service.dart';
@@ -152,6 +157,30 @@ Set<SimulatedDevicesTypes> _parseSimulateFlag(String value) {
       .toSet();
 }
 
+Future<List<domain.ShotRecord>> pageShotsForExport(
+  AppDatabase appDatabase,
+  int limit, {
+  DateTime? afterTimestamp,
+  DateTime? afterCreatedAt,
+  String? afterId,
+}) async {
+  final result = <domain.ShotRecord>[];
+  DateTime? cursorTimestamp = afterTimestamp;
+  String? cursorId = afterId;
+  while (result.length < limit) {
+    final rows = await appDatabase.shotDao.getShotsForExport(
+      limit: limit - result.length,
+      cursorTimestamp: cursorTimestamp,
+      cursorId: cursorId,
+    );
+    if (rows.isEmpty) break;
+    cursorTimestamp = rows.last.timestamp;
+    cursorId = rows.last.id;
+    result.addAll(ShotMapper.fromRows(rows));
+  }
+  return result;
+}
+
 Future<void> _printStoragePaths() async {
   stdout.writeln('support: ${await AppDirectories.support}');
   stdout.writeln('hive: ${await AppDirectories.hive}');
@@ -175,6 +204,37 @@ ActiveSkinConsent? _activeSkinConsent(String path, WebUIStorage storage) {
     id: skin?.id,
     name: skin?.name ?? 'Custom skin',
     path: value,
+  );
+}
+
+const skinPortAssignmentsPreferenceKey = 'webUISkinPorts';
+
+Map<String, int> decodeSkinPortAssignments(String? raw) {
+  if (raw == null || raw.isEmpty) return {};
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) return {};
+    return {
+      for (final entry in decoded.entries)
+        if (entry.key is String && entry.value is int)
+          entry.key as String: entry.value as int,
+    };
+  } catch (_) {
+    return {};
+  }
+}
+
+Future<Map<String, int>> loadPersistedSkinPortAssignments() async {
+  final raw = await SharedPreferencesAsync().getString(
+    skinPortAssignmentsPreferenceKey,
+  );
+  return decodeSkinPortAssignments(raw);
+}
+
+Future<void> persistSkinPortAssignments(Map<String, int> assignments) async {
+  await SharedPreferencesAsync().setString(
+    skinPortAssignmentsPreferenceKey,
+    jsonEncode(assignments),
   );
 }
 
@@ -280,9 +340,12 @@ void main(List<String> args) async {
 
   final List<DeviceDiscoveryService> services = [];
   final pluginDeviceService = PluginDeviceService();
+  late final PluginLoaderService pluginService;
   services.add(pluginDeviceService);
 
-  final bleDiscoveryService = UniversalBleDiscoveryService();
+  final bleDiscoveryService = UniversalBleDiscoveryService(
+    pluginBleService: () => pluginService.pluginManager.bleService,
+  );
   if (!cliArgs.serial) {
     services.add(bleDiscoveryService);
   } else {
@@ -306,6 +369,16 @@ void main(List<String> args) async {
     log.info("enabling simulated devices from dart-define: $dartDefineDevices");
   }
   final appDatabase = AppDatabase.defaults();
+  final databaseStartupError = await appDatabase.openForStartup(log);
+  if (databaseStartupError != null) {
+    runApp(
+      DatabaseFailureApp(
+        logFilePath: '$logDir/log.txt',
+        detail: databaseStartupError.runtimeType.toString(),
+      ),
+    );
+    return;
+  }
 
   final persistenceController = PersistenceController(
     storageService: DriftStorageService(appDatabase),
@@ -413,7 +486,10 @@ void main(List<String> args) async {
     scaleController: scaleController,
     settingsController: settingsController,
   );
-  final WebUIService webUIService = WebUIService();
+  final WebUIService webUIService = WebUIService(
+    loadSkinPortAssignments: loadPersistedSkinPortAssignments,
+    saveSkinPortAssignments: persistSkinPortAssignments,
+  );
   final WebUIStorage webUIStorage = WebUIStorage(settingsController);
 
   DecentAccountService? decentAccountService;
@@ -502,13 +578,14 @@ void main(List<String> args) async {
   };
   webUIService.skinProxyTokenRevoker = proxyTokenService.revokeSkinToken;
 
-  final PluginLoaderService pluginService = PluginLoaderService(
+  pluginService = PluginLoaderService(
     kvStore: HiveStoreService(defaultNamespace: "plugins")..initialize(),
     decentProxyService: decentProxyService,
     credentialStore: credentialStore,
     deviceService: pluginDeviceService,
   );
   await pluginService.pluginManager.attachDe1Controller(de1Controller);
+  pluginService.pluginManager.attachWorkflowController(workflowController);
   persistenceController.onShotStored = (shotId) =>
       pluginService.pluginManager.broadcastEvent('shotStored', {'id': shotId});
 
@@ -534,7 +611,9 @@ void main(List<String> args) async {
     pluginSourceService: PluginSourceService(pluginService),
   );
 
-  final macosUpdater = Platform.isMacOS ? MacOSUpdater() : null;
+  final macosUpdater = Platform.isMacOS && !BuildInfo.appStore
+      ? MacOSUpdater()
+      : null;
 
   try {
     await startWebServer(
@@ -558,14 +637,14 @@ void main(List<String> args) async {
       grinderStorage: grinderStorage,
       connectionManager: connectionManager,
       backupSources: BackupDataSources(
-        pageShots: (limit, {afterTimestamp, afterCreatedAt, afterId}) async {
-          final rows = await appDatabase.shotDao.getShotsForExport(
-            limit: limit,
-            cursorTimestamp: afterTimestamp,
-            cursorId: afterId,
-          );
-          return rows.map(ShotMapper.fromRow).toList();
-        },
+        pageShots: (limit, {afterTimestamp, afterCreatedAt, afterId}) =>
+            pageShotsForExport(
+              appDatabase,
+              limit,
+              afterTimestamp: afterTimestamp,
+              afterCreatedAt: afterCreatedAt,
+              afterId: afterId,
+            ),
         pageSteams: (limit, {afterTimestamp, afterCreatedAt, afterId}) async {
           final rows = await appDatabase.steamDao.getSteamsForExport(
             limit: limit,
@@ -598,6 +677,12 @@ void main(List<String> args) async {
       proxyTokenService: proxyTokenService,
       updateCheckService: updateCheckService,
     );
+  } on WebServerPortInUse catch (e) {
+    log.severe(
+      'port ${e.port} already in use; refusing to boot without the API',
+    );
+    runApp(WebServerPortConflictApp(port: e.port));
+    return;
   } catch (e, st) {
     log.severe('failed to start web server', e, st);
   }
