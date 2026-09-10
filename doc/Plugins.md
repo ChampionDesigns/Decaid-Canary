@@ -1,6 +1,36 @@
 
 # Decaid Plugin Development Guide
 
+## BLE Scale Sample Time
+
+BLE notification callbacks receive `(base64Data, sample)`. The optional opaque
+`sample` token identifies a host-timestamped notification. After decoding, use
+`await session.publish({weight: grams}, sample)` to retain its ingress time even
+when JavaScript dispatch/publication is delayed. No timestamp supplied by JS is
+trusted. Existing one-argument callbacks/publications remain compatible.
+
+Tokens are binding/session-owned, single-use, ordered, and expire after two
+seconds (the existing shot freshness window). At most 256 tokens are retained;
+the oldest token is discarded when that bound is reached, without dropping the
+notification itself. A foreign, duplicate, out-of-order, evicted, or expired token
+returns `stale_sample`. That rejection remains visible to plugin code, but if it
+escapes a notification callback the host drops that sample and continues the
+subscription. Other callback failures remain fatal. Retirement invalidates all
+tokens. A backward clock change retires the BLE session rather than leaving
+publication blocked behind its previous timestamp. Reconnect establishes a fresh
+timestamp sequence and follows normal Scale recovery policy.
+
+Omitting the token retains publication-ingress time for non-BLE or synthetic
+measurements. Do not use that fallback to disguise delayed notification samples.
+Accurate sample timestamps do not reduce delivery latency or recover stop commands
+missed while JavaScript was stalled.
+
+Plugin Scale commands report stable error codes through the existing Scale REST
+routes, including `unsupported_operation` for undeclared tare or timer support.
+Automatic shot timer failures are logged without aborting the shot. A Scale with
+`disconnectToSleep` uses host deliberate-sleep policy: display-off disconnects it
+without recovery until the machine wakes. No plugin reconnect loop is needed.
+
 ## Overview
 
 > **Note on naming:** Plugin JS APIs use `Rea`-prefixed names (`fetchReaSettings`, `updateReaSetting`, `convertReaToVisualizerFormat`) for backwards compatibility with existing plugins. These were not renamed during the app rename from ReaPrime to Decaid.
@@ -712,8 +742,199 @@ is not remembered across app restarts. On plugin unload, Decaid runs each
 device's `disconnect()` handler, removes every device, and rejects in-flight
 commands owned by the retiring generation, even if `onUnload()` fails. Late
 publications and command results from older generations
-are ignored. BLE-backed drivers, discovery, probing and grinder registration are
-not supported by this first sensor registration contract.
+are ignored. BLE-backed drivers use the separate binding contract below;
+probing and grinder registration are not supported.
+
+### BLE Driver Binding (`host.devices.bindDriver`)
+
+Declare a BLE matcher and `transport.ble` permission, then bind its factory from
+`onLoad()`. Binding does not open a connection or register a synthetic device.
+The existing scanner selects physical candidates before invoking the factory.
+
+```json
+{
+  "permissions": ["transport.ble"],
+  "drivers": [{
+    "id": "humidity",
+    "type": "sensor",
+    "ble": {"match": {"serviceUuids": ["180f"]}}
+  }]
+}
+```
+
+`await host.devices.bindDriver('humidity', {create(device) { ... }})` binds one
+factory per plugin generation. `create` must synchronously return `connect`,
+`disconnect`, and `execute` handlers plus Sensor `vendor`, `dataChannels`, and
+`commands` metadata using the schema above. Async factories are rejected: all
+hardware initialization belongs in `connect(context)`. The frozen factory input
+contains `id`, `name`, and `advertisement` (`name`, `nameComplete`, `serviceUuids`,
+`servicesComplete`). It has no publication or GATT authority.
+
+The public ID is `plugin:<pluginId>:<driverId>:<normalizedPhysicalId>`, stable
+across reloads and reconnects. Sensor inventory, commands, and snapshots use the
+existing REST/WebSocket paths. Each connection receives a fresh context:
+
+- `context.publish(snapshot)` and `context.reportDisconnected()` belong only to
+  that connection. Retaining a context cannot authorize a replacement session.
+- `context.gatt.discoverServices()` returns normalized 128-bit service UUIDs.
+- `read(service, characteristic)` returns base64 bytes.
+- `writeWithResponse(service, characteristic, base64)` and
+  `writeWithoutResponse(service, characteristic, base64)` select acknowledgement
+  explicitly. Unsupported acknowledged writes are not silently downgraded.
+- `subscribe(service, characteristic, callback)` returns an object with an async
+  `unsubscribe()`. The callback receives base64 bytes and may run before subscribe
+  resolves. Replacing the same tuple resets native notifications; the old logical
+  unsubscribe cannot remove the replacement.
+- `onDisconnect(callback)` installs one terminal listener for the session.
+
+These GATT methods are on `context.gatt`. UUID input accepts Bluetooth aliases
+but native calls always use 128-bit UUIDs. Resolving `connect` declares protocol
+readiness. `disconnect({gatt})` receives separate, bounded cleanup authority for
+discover/read/write only. Link loss or adapter revocation skips protocol cleanup.
+After retirement, normal GATT calls and publications fail even if a JavaScript
+Promise never settles. Physical ownership remains reserved until native teardown
+is confirmed; a cleanup deadline alone cannot authorize another connection.
+
+Limits per session are 16 pending GATT operations, 8 subscriptions, 256 queued
+notification events / 64 KiB, and 16 KiB per read or write. Notification overflow
+retires the session rather than dropping protocol data silently. Production permits
+one active physical binding per plugin generation. Definitions and Sensor payloads
+retain the 64 KiB JSON limit. Bridge failures carry `code`, including
+`stale_session`, `permission_denied`, `resource_limit`, `attribute_unavailable`,
+`link_lost`, and `timeout`; other native BLE codes are preserved.
+
+BLE Scale bindings reuse the Scale adapter and declared capability checks. The
+current checkpoint proves the Sensor path with a fake BLE edge; Bookoo hardware,
+Scale timing acceptance, automatic optional Scale operations, and sleep policy
+remain #809 follow-up work.
+
+## Serving HTTP Endpoints
+
+An `api` entry with `"type": "http"` exposes the plugin at
+`/api/v1/plugins/:id/:endpoint`. Decaid dispatches the request to the plugin's
+`__httpRequestHandler`, which returns a response or a promise for one.
+
+```json
+"api": [
+  { "id": "edit-shot", "type": "http", "data": {} }
+]
+```
+
+```javascript
+__httpRequestHandler: function (request) {
+  const shotId = request.query.shotId;
+  return {
+    status: 200,
+    headers: { "Content-Type": "text/html" },
+    body: renderPage(shotId)
+  };
+}
+```
+
+A `handleHttpRequest` method on the object `createPlugin` returns works the
+same way — the loader aliases it to `__httpRequestHandler` at load.
+
+The `request` object:
+
+| Field | Type | Contents |
+|-------|------|----------|
+| `requestId` | string | Correlation id for this dispatch |
+| `endpoint` | string | The endpoint `id` from the manifest |
+| `method` | string | `GET`, `POST`, and so on |
+| `headers` | object | Request headers |
+| `body` | any | Parsed JSON request body, `null` when the body is empty |
+| `query` | object | Query parameters, percent-decoded |
+
+`query` carries every parameter of the request URL and is always present — an
+empty object when the URL has none, so `request.query.name` is safe to read
+without guarding. A caller can therefore name the record a page should open on:
+
+```
+GET /api/v1/plugins/my.reaplugin/edit-shot?shotId=<id>&return=/skin/history
+```
+
+`shotId` is a lookup key. `return` is a navigation target and carries its own
+rules — see [The `return` parameter](#the-return-parameter) below. It is a
+**skin-local path**, never a host and never an absolute URL.
+
+### Reading parameters in a served page
+
+Pages a plugin serves run in the browser on Decaid's API origin, so a page can
+read the same URL client-side instead:
+
+```javascript
+const shotId = new URLSearchParams(location.search).get("shotId");
+```
+
+Prefer this for a page that fetches its data over the REST API; it keeps the
+value out of the generated HTML.
+
+Skins are served from a different browser origin than plugin pages, so a skin
+cannot write a plugin page's `sessionStorage` or `localStorage`. A query
+parameter on a top-level navigation is how a skin hands a plugin page its
+subject; accept a `return` parameter for the way back.
+
+Treat every parameter as untrusted input: never interpolate it into generated
+HTML unescaped, and fall back to the page's normal empty state when the value
+names nothing. Most parameters are then used as a lookup key against the REST
+API. **`return` is the exception, and it needs its own rule**, because it is a
+navigation target rather than a lookup key.
+
+### The `return` parameter
+
+`return` cannot be assigned to `location` as it arrives, for two reasons.
+
+A plugin page runs on the **API origin**, and the skin runs on its **own**
+origin, so a bare path like `/skin/history` resolves against the API origin and
+lands nowhere. And accepting an absolute URL instead would be an open redirect:
+a link could send the page to any host it liked.
+
+So constrain the value, rebuild the origin from what the page already knows,
+and check the result before you use it:
+
+1. **Require a skin-local path.** It must start with a single `/`. Reject `//`,
+   which is protocol-relative and means another host, and reject anything
+   carrying a scheme. Treat this as a first filter, not as the guarantee.
+2. **Rebuild the skin origin from the page's own host.** Keep the host the
+   browser actually used and replace only the port, with the live `port` from
+   `GET /api/v1/webui/server/status`. Do not build the origin from that
+   response's `ip`: on Android it is the server's bind address, `0.0.0.0`,
+   which is not an origin a browser can navigate to. The fixed `localhost:3000`
+   entry point redirects the same way, preserving the request host and changing
+   only the port.
+3. **Parse the target, then check its origin.** `new URL(path, skinOrigin)` is
+   not enough on its own. The URL parser treats `\` as `/` in an `http` URL and
+   strips tab and newline characters before it parses, so a value such as
+   `/\example.invalid` passes step 1 and still resolves to another host.
+   Require `target.origin === skinOrigin.origin` before you return it.
+
+```javascript
+async function skinReturnUrl(raw) {
+  // First filter: a single leading slash, and no scheme.
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return null;
+
+  const res = await fetch("/api/v1/webui/server/status");
+  const { serving, port } = await res.json();
+  if (!serving || !Number.isInteger(port)) return null;
+
+  // Same host the browser used; only the port differs.
+  const skinOrigin = new URL(location.href);
+  skinOrigin.port = String(port);
+
+  const target = new URL(raw, skinOrigin);
+  return target.origin === skinOrigin.origin ? target.href : null;
+}
+
+const back = await skinReturnUrl(
+  new URLSearchParams(location.search).get("return"),
+);
+// `back` is null when the skin is not being served, or when the target did not
+// resolve onto the skin origin. Show the page's own way out instead.
+```
+
+**The skin origin is not fixed, so read it every time.** Decaid assigns the
+skin server a port and reports it here; a page that remembers one from an
+earlier visit can send the user to a port nothing is listening on.
 
 ## Plugin Lifecycle
 

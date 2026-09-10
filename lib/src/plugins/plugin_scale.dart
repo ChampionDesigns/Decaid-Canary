@@ -9,13 +9,14 @@ import 'plugin_manifest.dart';
 import 'plugin_protocol_device.dart';
 
 class PluginScale extends PluginProtocolDevice
-    implements Scale, ScaleSnapshotHandoff {
+    implements Scale, ScaleSnapshotHandoff, DisconnectToSleepScale {
   final Set<PluginScaleCapability> capabilities;
   final StreamController<ScaleSnapshot> _snapshots =
       StreamController.broadcast();
   final List<ScaleSnapshot> _handoff = [];
   Completer<void> _firstWeight = Completer<void>();
   bool _active = false;
+  DateTime? _lastTimestamp;
 
   PluginScale({
     required super.deviceId,
@@ -30,12 +31,16 @@ class PluginScale extends PluginProtocolDevice
   @override
   DeviceType get type => DeviceType.scale;
   @override
+  bool get disconnectsToSleep =>
+      capabilities.contains(PluginScaleCapability.disconnectToSleep);
+  @override
   Stream<ScaleSnapshot> get currentSnapshot => _snapshots.stream;
   @override
   void beginSamples() {
     _firstWeight = Completer<void>();
     _handoff.clear();
     _active = false;
+    _lastTimestamp = null;
   }
 
   @override
@@ -51,7 +56,11 @@ class PluginScale extends PluginProtocolDevice
   }
 
   @override
-  void publish(Map<String, dynamic> snapshot, {String? session}) {
+  void publish(
+    Map<String, dynamic> snapshot, {
+    String? session,
+    DateTime? timestamp,
+  }) {
     checkSession(session);
     final weight = snapshot['weight'];
     final battery = snapshot['battery'];
@@ -91,8 +100,16 @@ class PluginScale extends PluginProtocolDevice
         code: 'resource_limit',
       );
     }
+    final acceptedAt = timestamp ?? clock.now();
+    if (_lastTimestamp != null && acceptedAt.isBefore(_lastTimestamp!)) {
+      throw const PluginDeviceException(
+        'Scale sample precedes the last publication',
+        code: 'stale_sample',
+      );
+    }
+    _lastTimestamp = acceptedAt;
     final sample = ScaleSnapshot(
-      timestamp: clock.now(),
+      timestamp: acceptedAt,
       weight: weight.toDouble(),
       batteryLevel: battery as int?,
       flow: (flow as num?)?.toDouble(),
@@ -109,16 +126,18 @@ class PluginScale extends PluginProtocolDevice
   Future<void> _optional(
     PluginScaleCapability capability,
     PluginDeviceOperation operation,
-  ) {
+  ) async {
     if (!capabilities.contains(capability)) {
-      return Future.error(
-        PluginDeviceException(
-          '${operation.name} is unsupported',
-          code: 'unsupported_operation',
-        ),
+      throw ScaleOperationException(
+        '${operation.name} is unsupported',
+        code: 'unsupported_operation',
       );
     }
-    return command(operation);
+    try {
+      await command(operation);
+    } on PluginDeviceException catch (error) {
+      throw ScaleOperationException(error.message, code: error.code);
+    }
   }
 
   @override
@@ -140,8 +159,7 @@ class PluginScale extends PluginProtocolDevice
     PluginDeviceOperation.resetTimer,
   );
   @override
-  Future<void> sleepDisplay() =>
-      capabilities.contains(PluginScaleCapability.disconnectToSleep)
+  Future<void> sleepDisplay() => disconnectsToSleep
       ? disconnect()
       : _optional(
           PluginScaleCapability.displayControl,
