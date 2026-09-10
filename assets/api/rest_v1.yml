@@ -1276,7 +1276,11 @@ paths:
         and partial request bodies are deep-merged against the workflow state when that request
         reaches the front of the queue. Omitted steam-setting fields keep their current values;
         supplied values replace them. Steam settings are non-nullable, so explicit `null` for
-        `steamSettings` or any of its fields returns `400`.
+        `steamSettings` or any of its fields returns `400`. The `context` object is likewise
+        non-nullable, and inside it `targetYield` is non-nullable too, because null and `0` both
+        mean stop-at-weight is off: send `0` to turn it off. Every other `context` field still
+        accepts an explicit `null` to clear it, so clearing is per field — there is no
+        whole-object clear.
         The server does not debounce or combine separate requests. Machine side effects from
         workflow PUT requests do not execute concurrently,
         so a request may wait behind an in-flight machine operation. Each response describes
@@ -1388,9 +1392,12 @@ paths:
         "400":
           description: >
             Invalid request body — the merged JSON failed to parse (e.g. an
-            invalid enum value, a missing required profile field, or an
-            unparseable number). The response body contains an `error` and
-            `message` field describing the validation failure.
+            invalid enum value, a missing required profile field, an
+            unparseable number, a non-numeric `context.targetYield`, or an
+            explicit `null` on a non-nullable patch field such as
+            `steamSettings`, `context` or `context.targetYield`). The
+            response body contains an `error` and `message` field describing
+            the validation failure.
           content:
             application/json:
               schema:
@@ -6752,7 +6759,12 @@ components:
       type: object
       description: |
         Partial workflow update. Omitted fields preserve their current values.
-        Fields in `steamSettings` are non-nullable and reject explicit `null`.
+        Nullability here is the PUT-patch contract, not the workflow model: a
+        stored or returned workflow may hold `null` where this schema refuses it.
+        `steamSettings` and every field inside it are non-nullable and reject an
+        explicit `null`. The `context` object is non-nullable as well; inside it,
+        only `targetYield` is non-nullable, and every other context field still
+        accepts an explicit `null` to clear it. See `WorkflowContextPatch`.
       properties:
         name:
           type: string
@@ -6761,7 +6773,7 @@ components:
         profile:
           $ref: "#/components/schemas/Profile"
         context:
-          $ref: "#/components/schemas/WorkflowContext"
+          $ref: "#/components/schemas/WorkflowContextPatch"
         steamSettings:
           $ref: "#/components/schemas/SteamSettingsPatch"
         hotWaterData:
@@ -7747,12 +7759,104 @@ components:
             push:
               $ref: "#/components/schemas/SyncPhaseResult"
 
+    WorkflowContextPatch:
+      type: object
+      description: |
+        The `context` form accepted by `PUT /api/v1/workflow`. The object itself is
+        non-nullable: `{"context": null}` returns `400`, because dropping the whole
+        context would clear `targetYield` too. Omitted fields keep their current
+        value and an explicit `null` clears that one field, with one exception:
+        `targetYield` is non-nullable here, so an explicit `null` returns `400`.
+        The stored and returned form is `WorkflowContext`, where every field
+        including `targetYield` is nullable.
+      properties:
+        targetDoseWeight:
+          type: number
+          format: double
+          nullable: true
+          description: Input dose weight in grams (dry coffee)
+          example: 18.0
+        targetYield:
+          type: number
+          format: double
+          description: |
+            Target output weight in grams (beverage), and the single source of
+            truth for stop-at-weight. Null and 0 both mean stop-at-weight is
+            off, so an explicit null on this field is ambiguous and returns
+            400, as does a value that is not a number. Omit the field to keep
+            the current value, or send 0 to turn stop-at-weight off
+            deliberately. A stored workflow may still hold null here; see
+            `WorkflowContext.targetYield`.
+          example: 36.0
+        targetWaterVolume:
+          type: number
+          format: double
+          nullable: true
+          description: |
+            DE1-integrated machine water volume in milliliters. Overrides the
+            profile targetVolume only for the existing volumetric fallback when
+            no usable scale stop is available. Null inherits the profile target;
+            0 disables volumetric stopping for this workflow.
+          example: 55.0
+        grinderId:
+          type: string
+          nullable: true
+          description: ID of a managed Grinder entity. When set, links to a grinder in /api/v1/grinders.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        grinderModel:
+          type: string
+          nullable: true
+          description: Grinder model name (display string)
+          example: "Niche Zero"
+        grinderSetting:
+          type: string
+          nullable: true
+          description: Current grinder setting value
+          example: "5.2"
+        beanBatchId:
+          type: string
+          nullable: true
+          description: ID of a managed BeanBatch entity. When set, links to a batch in /api/v1/bean-batches.
+          example: "660e8400-e29b-41d4-a716-446655440001"
+        coffeeName:
+          type: string
+          nullable: true
+          description: Coffee bean name (display string)
+          example: "Ethiopia Yirgacheffe"
+        coffeeRoaster:
+          type: string
+          nullable: true
+          description: Coffee roaster name (display string)
+          example: "Square Mile"
+        finalBeverageType:
+          type: string
+          nullable: true
+          description: Beverage classification (e.g., espresso, filter, lungo)
+          example: "espresso"
+        baristaName:
+          type: string
+          nullable: true
+          description: Name of the person pulling the shot
+          example: "Alice"
+        drinkerName:
+          type: string
+          nullable: true
+          description: Name of the person drinking the beverage
+          example: "Bob"
+        extras:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Arbitrary key-value pairs for plugin data or custom fields
+
     WorkflowContext:
       type: object
       description: |
         Unified shot metadata containing dose, grinder, coffee, and people information.
-        All fields are nullable for flexible usage — from minimal (dose only) to full
-        (with entity IDs linking to managed beans/grinders).
+        This is the stored and returned form, in which all fields are nullable for
+        flexible usage — from minimal (dose only) to full (with entity IDs linking to
+        managed beans/grinders). `PUT /api/v1/workflow` validates its `context` against
+        the stricter `WorkflowContextPatch`.
       properties:
         targetDoseWeight:
           type: number
@@ -7769,10 +7873,8 @@ components:
             of truth for stop-at-weight. Null means this workflow sets no
             weight target, which is the same as 0: stop-at-weight is off, and
             a machine that stops autonomously has its firmware target set to 0.
-            `PUT /api/v1/workflow` refuses an explicit null on this field with
-            400, because a client that clears it usually means 0. Omit the
-            field to keep the current value, or send 0 to turn stop-at-weight
-            off deliberately.
+            A stored or returned workflow may therefore legitimately hold null
+            here. A PUT patch may not: see `WorkflowContextPatch.targetYield`.
           example: 36.0
         targetWaterVolume:
           type: number

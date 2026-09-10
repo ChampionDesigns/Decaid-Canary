@@ -775,7 +775,7 @@ void main() {
     );
   });
 
-  group('PUT /api/v1/workflow — targetYield explicit zero and null', () {
+  group('PUT /api/v1/workflow — context nullability', () {
     test('an explicit targetYield of 0 lands in the document as 0', () async {
       await _settleHandler(spy);
 
@@ -832,6 +832,94 @@ void main() {
       expect(
         workflowController.currentWorkflow.context?.targetYield,
         equals(before),
+      );
+    });
+
+    test('an explicit null context is refused with 400', () async {
+      await _settleHandler(spy);
+      final before = workflowController.currentWorkflow.context?.targetYield;
+      expect(before, isNotNull);
+
+      final future = put({'context': null});
+      await _settleHandler(spy);
+      final response = await future;
+
+      expect(response.statusCode, equals(400));
+      final body = jsonDecode(await response.readAsString());
+      expect(body['message'], contains('context'));
+      expect(
+        workflowController.currentWorkflow.context?.targetYield,
+        equals(before),
+        reason:
+            'clearing the whole context would drop targetYield and turn '
+            'stop-at-weight off, which is the ambiguity this endpoint refuses',
+      );
+    });
+
+    test('a non-object context is refused with 400', () async {
+      await _settleHandler(spy);
+      final before = workflowController.currentWorkflow.context?.targetYield;
+
+      final future = put({'context': 5});
+      await _settleHandler(spy);
+      final response = await future;
+
+      expect(response.statusCode, equals(400));
+      expect(
+        workflowController.currentWorkflow.context?.targetYield,
+        equals(before),
+      );
+    });
+
+    test('a non-numeric targetYield is refused with 400', () async {
+      await _settleHandler(spy);
+      final before = workflowController.currentWorkflow.context?.targetYield;
+      expect(before, isNotNull);
+
+      final future = put({
+        'context': {'targetYield': 'abc'},
+      });
+      await _settleHandler(spy);
+      final response = await future;
+
+      expect(response.statusCode, equals(400));
+      final body = jsonDecode(await response.readAsString());
+      expect(body['message'], contains('targetYield'));
+      expect(
+        workflowController.currentWorkflow.context?.targetYield,
+        equals(before),
+        reason:
+            'an unparseable target must not silently become null, which '
+            'reads as stop-at-weight off',
+      );
+    });
+
+    test('an explicit null still clears another context field', () async {
+      await _settleHandler(spy);
+
+      final setFuture = put({
+        'context': {'grinderModel': 'Niche Zero'},
+      });
+      await _settleHandler(spy);
+      expect((await setFuture).statusCode, equals(200));
+      expect(
+        workflowController.currentWorkflow.context?.grinderModel,
+        equals('Niche Zero'),
+      );
+
+      final clearFuture = put({
+        'context': {'grinderModel': null},
+      });
+      await _settleHandler(spy);
+      final response = await clearFuture;
+
+      expect(response.statusCode, equals(200));
+      expect(
+        workflowController.currentWorkflow.context?.grinderModel,
+        isNull,
+        reason:
+            'only targetYield is non-nullable on a PUT; every other context '
+            'field is cleared by an explicit null',
       );
     });
   });

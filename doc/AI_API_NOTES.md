@@ -24,6 +24,38 @@ Read this when changing REST endpoints, WebSocket topics, API specs, auth proxy,
 - Content-based hash IDs for profile deduplication (`ProfileController`).
 - ETag / `If-None-Match` support on cacheable resources (#203).
 
+### Patch Nullability
+
+`rejectExplicitNulls()` in `json_patch.dart` is the shared helper for refusing an explicit
+`null` on a PUT (`profile_handler.dart` keeps its own inline check for `profile`), and the
+refusal has to be modelled in a patch-specific schema — `SteamSettingsPatch`,
+`WorkflowContextPatch` — because a generated client reads the schema, not the handler.
+Keep a patch schema field-for-field with its model and change only the fields the handler
+names: `WorkflowContextPatch` drops `nullable` on `targetYield` alone, because that is the
+only field `WorkflowHandler` passes to `rejectExplicitNulls`, and every other context field
+is genuinely cleared by an explicit `null`. `WorkflowContext` stays nullable throughout,
+since a stored shot legitimately has no target and it is the GET and 200 response shape.
+`test/webserver/workflow_patch_schema_test.dart` pins the pair against drift.
+
+A nested patch object needs the refusal at both levels. `Workflow.fromJson` drops the whole
+context when `context` is `null`, so `{"context": null}` used to clear `targetYield` through
+the back door and answer `200` while the schema — a bare `$ref`, and bare `$ref` is
+non-nullable in OpenAPI 3.0.3 — said it was invalid. `WorkflowHandler` therefore names
+`context` alongside `steamSettings` in the top-level `rejectExplicitNulls()` call and rejects
+a non-object `context`, mirroring the `steamSettings` arm. A client clears individual context
+fields with an explicit `null` and turns stop-at-weight off with `0`; there is no
+whole-object clear.
+
+`rejectExplicitNulls()` pairs with `validatePatchFieldTypes()` — the idiom used by
+`beans_handler.dart` and `grinders_handler.dart` — because a wrong type is the same hole as a
+`null`. `parseOptionalDouble()` returns `null` when a value will not parse, so an unparseable
+`targetYield` silently meant no target and `BengleSawBridge` wrote `0` to the firmware, which
+is stop-at-weight off. The type check is scoped to `targetYield`: it is the field with the
+safety consequence, and widening it to the sibling numeric fields is a separate behaviour
+change. One consequence worth knowing before widening it: `validatePatchFieldTypes()` requires
+`value is num`, so a numeric *string* such as `"36"` that `parseOptionalDouble()` accepted now
+returns `400`. Nothing in this repo sends one and `type: number` never permitted it.
+
 ### Admission Control
 
 `/api/` requests pass through a process-local gate after authentication and inside

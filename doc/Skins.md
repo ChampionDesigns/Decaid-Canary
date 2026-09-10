@@ -593,9 +593,11 @@ Update just the profile:
 
 #### Workflow Data Structure Reference
 
-**WorkflowContext** (recommended — all fields nullable):
+**WorkflowContext** (recommended — all fields nullable, except `targetYield` on a PUT):
 - `targetDoseWeight` (number): Input dose in grams (dry coffee)
-- `targetYield` (number): Target output in grams (beverage)
+- `targetYield` (number): Target output in grams (beverage). Null and `0` both mean
+  stop-at-weight is off, so a PUT refuses an explicit `null` with `400`; send `0` to disable it.
+  A PUT also refuses a whole `"context": null` and a non-numeric `targetYield` with `400`
 - `grinderId` (string): ID of a managed Grinder entity (see Grinders API)
 - `grinderModel` (string): Grinder model name (display string)
 - `grinderSetting` (string): Current grinder setting
