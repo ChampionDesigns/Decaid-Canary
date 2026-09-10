@@ -23,6 +23,11 @@ class _FailingResetBengle extends MockBengle {
   Future<LedStripState?> resetLedStrip() async => null;
 }
 
+class _UnknownStateBengle extends MockBengle {
+  @override
+  Future<LedStripState?> getLedStripState() async => null;
+}
+
 void main() {
   late Handler handler;
   late De1Controller controller;
@@ -175,8 +180,8 @@ void main() {
       );
     });
 
-    test('the audited F-044 write on frontStrip.awake echoes the palette '
-        'the machine recorded', () async {
+    test('a replicated-byte write on frontStrip.awake echoes the palette '
+        'the machine stored', () async {
       await wireWith(MockBengle());
 
       final res = await put('/api/v1/machine/ledStrip', {
@@ -195,8 +200,8 @@ void main() {
           'frontSwitch': {'sleeping': '400022000000', 'awake': 'FF0022000000'},
         },
         reason:
-            'the echo must match the stored state the audited machine '
-            'served back for this exact write',
+            'the echo must be the palette the firmware actually stored for '
+            'this exact write',
       );
     });
 
@@ -233,6 +238,21 @@ void main() {
         final echoed = jsonDecode(await res.readAsString());
         expect(echoed['frontSwitch']['awake'], 'FF00F000C800');
         expect(echoed['frontSwitch']['sleeping'], '550050004300');
+      },
+    );
+
+    test(
+      '200 + acknowledgement when the stored palette is unavailable',
+      () async {
+        await wireWith(_UnknownStateBengle());
+
+        final res = await put('/api/v1/machine/ledStrip', {
+          'frontStrip': {'sleeping': 'FFFF80000000', 'awake': '000000000000'},
+          'backStrip': {'sleeping': '000000000000', 'awake': '000000000000'},
+          'frontSwitch': {'sleeping': '000000000000', 'awake': '000000000000'},
+        });
+        expect(res.statusCode, 200);
+        expect(jsonDecode(await res.readAsString()), {'status': 'accepted'});
       },
     );
 
