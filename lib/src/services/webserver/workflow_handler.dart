@@ -157,7 +157,7 @@ class WorkflowHandler {
 
   Future<Response> _applyUpdate(Map<String, dynamic> merge) async {
     try {
-      rejectExplicitNulls(merge, const ['steamSettings']);
+      rejectExplicitNulls(merge, const ['steamSettings', 'context']);
       if (merge['steamSettings'] case final Map<String, dynamic> settings) {
         rejectExplicitNulls(settings, const [
           'targetTemperature',
@@ -170,6 +170,9 @@ class WorkflowHandler {
       }
       if (merge['context'] case final Map<String, dynamic> context) {
         rejectExplicitNulls(context, const ['targetYield']);
+        validatePatchFieldTypes(context, numberFields: const ['targetYield']);
+      } else if (merge.containsKey('context')) {
+        throw const FormatException('Field "context" must be an object');
       }
 
       while (true) {
