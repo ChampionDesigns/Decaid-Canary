@@ -26,3 +26,4 @@ Pick the scenario that matches the task and run it before calling related work d
 | Plugin Decent account proxy bridge | `scenarios/plugin-decent-proxy.md` |
 | Discover and restore default profiles | `scenarios/profiles-defaults.md` |
 | Shot-state WebSocket and persisted stop reason | `scenarios/shot-state-ws.md` |
+| Update-check capability refusals | `scenarios/update-check-capability.md` |

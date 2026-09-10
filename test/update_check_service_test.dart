@@ -374,6 +374,16 @@ void main() {
       svc.dispose();
     });
 
+    test('canCheck is false', () {
+      final managed = build(externallyManaged: true);
+      expect(managed.canCheck, isFalse);
+      managed.dispose();
+
+      final managedMacOS = build(externallyManaged: true, isMacOS: true);
+      expect(managedMacOS.canCheck, isFalse);
+      managedMacOS.dispose();
+    });
+
     test(
       'direct and debug checks cannot populate application update state',
       () async {

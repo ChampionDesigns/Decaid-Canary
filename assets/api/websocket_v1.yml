@@ -188,14 +188,17 @@ channels:
       Bidirectional app-update channel. Emits an `AppUpdateState` snapshot on
       connect and on every state change. Accepts commands:
       - `{"command": "check"}` — force a re-poll of GitHub releases. Not
-        supported on macOS, where it replies with a transient
-        `{"error", "url"}` carrying the releases page rather than polling.
+        supported on macOS, nor on externally managed builds (App Store /
+        TestFlight) where the store owns app updates. Both reply with a
+        transient `{"error", "url"}` carrying the releases page rather
+        than polling.
       - `{"command": "install"}` — on Android: auto-check if needed, then
         download + launch the system installer. On other platforms this is not
         supported and replies with a transient `{"error", "url"}`.
-      Command-level problems (unknown command, unsupported platform) come back
-      as a direct `{"error": ...}` reply; operational outcomes (download/install
-      progress and failures) flow through the `AppUpdateState` stream.
+      Command-level problems (unknown command, unsupported platform or
+      externally managed build) come back as a direct `{"error": ...}` reply;
+      operational outcomes (download/install progress and failures) flow
+      through the `AppUpdateState` stream.
     messages:
       updateState:
         $ref: '#/components/messages/UpdateState'

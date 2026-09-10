@@ -607,7 +607,7 @@ All WebSocket endpoints are on port 8080 at `/ws/v1/...`. See [`assets/api/webso
 | `/ws/v1/logs` | App log stream | Timestamped log entries |
 | `/ws/v1/webview/logs` | WebView console log stream | WebView console messages |
 | `/ws/v1/display` | Display state changes | Brightness, wakelock |
-| `/ws/v1/update` | App-update state stream. Also accepts `{"command":"check"}` and `{"command":"install"}` (Android installs; other platforms reply `{"error","url"}`). | `phase`, `progress`, `latestVersion`, `installable` |
+| `/ws/v1/update` | App-update state stream. Also accepts `{"command":"check"}` (refused on macOS and on externally managed App Store/TestFlight builds, where the store owns app updates) and `{"command":"install"}` (Android installs; refused elsewhere). Either refusal replies `{"error","url"}` carrying `releaseUrl` — the release tag when one is known, otherwise the releases page. | `phase`, `progress`, `latestVersion`, `installable` |
 
 ### Machine sockets re-bind across a reconnect
 

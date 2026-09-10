@@ -60,7 +60,7 @@ class UpdateHandler {
       case 'check':
         if (!_service.canCheck) {
           reply({
-            'error': 'App update checks are not supported on this platform',
+            'error': 'App update checks are not supported on this build',
             'url': _service.currentState.releaseUrl,
           });
           return;

@@ -60,7 +60,7 @@ class UpdateCheckService {
 
   bool get canInstall => _isAndroid;
 
-  bool get canCheck => !_isMacOS;
+  bool get canCheck => !_isMacOS && !externallyManaged;
 
   AppUpdateState _snapshot(
     AppUpdatePhase phase, {
