@@ -808,6 +808,134 @@ current checkpoint proves the Sensor path with a fake BLE edge; Bookoo hardware,
 Scale timing acceptance, automatic optional Scale operations, and sleep policy
 remain #809 follow-up work.
 
+## Serving HTTP Endpoints
+
+An `api` entry with `"type": "http"` exposes the plugin at
+`/api/v1/plugins/:id/:endpoint`. Decaid dispatches the request to the plugin's
+`__httpRequestHandler`, which returns a response or a promise for one.
+
+```json
+"api": [
+  { "id": "edit-shot", "type": "http", "data": {} }
+]
+```
+
+```javascript
+__httpRequestHandler: function (request) {
+  const shotId = request.query.shotId;
+  return {
+    status: 200,
+    headers: { "Content-Type": "text/html" },
+    body: renderPage(shotId)
+  };
+}
+```
+
+A `handleHttpRequest` method on the object `createPlugin` returns works the
+same way — the loader aliases it to `__httpRequestHandler` at load.
+
+The `request` object:
+
+| Field | Type | Contents |
+|-------|------|----------|
+| `requestId` | string | Correlation id for this dispatch |
+| `endpoint` | string | The endpoint `id` from the manifest |
+| `method` | string | `GET`, `POST`, and so on |
+| `headers` | object | Request headers |
+| `body` | any | Parsed JSON request body, `null` when the body is empty |
+| `query` | object | Query parameters, percent-decoded |
+
+`query` carries every parameter of the request URL and is always present — an
+empty object when the URL has none, so `request.query.name` is safe to read
+without guarding. A caller can therefore name the record a page should open on:
+
+```
+GET /api/v1/plugins/my.reaplugin/edit-shot?shotId=<id>&return=/skin/history
+```
+
+`shotId` is a lookup key. `return` is a navigation target and carries its own
+rules — see [The `return` parameter](#the-return-parameter) below. It is a
+**skin-local path**, never a host and never an absolute URL.
+
+### Reading parameters in a served page
+
+Pages a plugin serves run in the browser on Decaid's API origin, so a page can
+read the same URL client-side instead:
+
+```javascript
+const shotId = new URLSearchParams(location.search).get("shotId");
+```
+
+Prefer this for a page that fetches its data over the REST API; it keeps the
+value out of the generated HTML.
+
+Skins are served from a different browser origin than plugin pages, so a skin
+cannot write a plugin page's `sessionStorage` or `localStorage`. A query
+parameter on a top-level navigation is how a skin hands a plugin page its
+subject; accept a `return` parameter for the way back.
+
+Treat every parameter as untrusted input: never interpolate it into generated
+HTML unescaped, and fall back to the page's normal empty state when the value
+names nothing. Most parameters are then used as a lookup key against the REST
+API. **`return` is the exception, and it needs its own rule**, because it is a
+navigation target rather than a lookup key.
+
+### The `return` parameter
+
+`return` cannot be assigned to `location` as it arrives, for two reasons.
+
+A plugin page runs on the **API origin**, and the skin runs on its **own**
+origin, so a bare path like `/skin/history` resolves against the API origin and
+lands nowhere. And accepting an absolute URL instead would be an open redirect:
+a link could send the page to any host it liked.
+
+So constrain the value, rebuild the origin from what the page already knows,
+and check the result before you use it:
+
+1. **Require a skin-local path.** It must start with a single `/`. Reject `//`,
+   which is protocol-relative and means another host, and reject anything
+   carrying a scheme. Treat this as a first filter, not as the guarantee.
+2. **Rebuild the skin origin from the page's own host.** Keep the host the
+   browser actually used and replace only the port, with the live `port` from
+   `GET /api/v1/webui/server/status`. Do not build the origin from that
+   response's `ip`: on Android it is the server's bind address, `0.0.0.0`,
+   which is not an origin a browser can navigate to. The fixed `localhost:3000`
+   entry point redirects the same way, preserving the request host and changing
+   only the port.
+3. **Parse the target, then check its origin.** `new URL(path, skinOrigin)` is
+   not enough on its own. The URL parser treats `\` as `/` in an `http` URL and
+   strips tab and newline characters before it parses, so a value such as
+   `/\example.invalid` passes step 1 and still resolves to another host.
+   Require `target.origin === skinOrigin.origin` before you return it.
+
+```javascript
+async function skinReturnUrl(raw) {
+  // First filter: a single leading slash, and no scheme.
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return null;
+
+  const res = await fetch("/api/v1/webui/server/status");
+  const { serving, port } = await res.json();
+  if (!serving || !Number.isInteger(port)) return null;
+
+  // Same host the browser used; only the port differs.
+  const skinOrigin = new URL(location.href);
+  skinOrigin.port = String(port);
+
+  const target = new URL(raw, skinOrigin);
+  return target.origin === skinOrigin.origin ? target.href : null;
+}
+
+const back = await skinReturnUrl(
+  new URLSearchParams(location.search).get("return"),
+);
+// `back` is null when the skin is not being served, or when the target did not
+// resolve onto the skin origin. Show the page's own way out instead.
+```
+
+**The skin origin is not fixed, so read it every time.** Decaid assigns the
+skin server a port and reports it here; a page that remembers one from an
+earlier visit can send the user to a port nothing is listening on.
+
 ## Plugin Lifecycle
 
 1. **Initialization**: Plugin directory is copied to app storage
