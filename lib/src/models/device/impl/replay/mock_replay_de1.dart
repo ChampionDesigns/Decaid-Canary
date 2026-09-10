@@ -291,14 +291,15 @@ class MockReplayDe1 implements BengleInterface, SimulatedDevice {
   }) async {}
 
   final BehaviorSubject<LedStripState> _led = BehaviorSubject.seeded(
-    const LedStripState(),
+    const LedStripState().canonical(),
   );
   @override
   Stream<LedStripState> get ledStripState => _led.stream;
   @override
   Future<LedStripState> getLedStripState() async => _led.value;
   @override
-  Future<void> setLedStrip(LedStripState state) async => _led.add(state);
+  Future<void> setLedStrip(LedStripState state) async =>
+      _led.add(state.canonical());
   @override
   Future<void> previewLedStrip({Color16? front, Color16? back}) async {}
 

@@ -511,7 +511,33 @@ void main() {
       await sub.cancel();
     });
 
-    test('ignores oversized six-byte frame (no snapshot)', () async {
+    test('uses first weight block from nine-byte notification', () async {
+      final completer = Completer<ScaleSnapshot>();
+      final sub = scale.currentSnapshot.listen((snapshot) {
+        if (!completer.isCompleted) completer.complete(snapshot);
+      });
+
+      transport.simulateWeightNotification([
+        0x00,
+        0xE8,
+        0x03,
+        0x00,
+        0xFF,
+        0xD2,
+        0x04,
+        0x00,
+        0xFE,
+      ]);
+
+      final snapshot = await completer.future.timeout(
+        const Duration(seconds: 1),
+      );
+      expect(snapshot.weight, closeTo(100.0, 0.001));
+
+      await sub.cancel();
+    });
+
+    test('ignores unsupported six-byte frame', () async {
       var emissions = 0;
       final sub = scale.currentSnapshot.listen((_) => emissions++);
 

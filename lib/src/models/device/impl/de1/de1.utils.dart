@@ -70,9 +70,12 @@ MachineSubstate mapDe1SubToMachineSubstate(De1SubState de1SubState) {
     case De1SubState.noState:
     case De1SubState.userNotPresent:
     case De1SubState.refill:
-    case De1SubState.pausedSteam:
-    case De1SubState.puffing:
       return MachineSubstate.idle;
+
+    case De1SubState.pausedSteam:
+      return MachineSubstate.pausedSteam;
+    case De1SubState.puffing:
+      return MachineSubstate.puffing;
 
     case De1SubState.heatWaterTank:
     case De1SubState.heatWaterHeater:

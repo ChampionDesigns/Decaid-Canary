@@ -1,8 +1,19 @@
 # API Reference
 
+Scale REST command failures preserve the existing HTTP 500 response and `error`
+message. Plugin Scale failures additionally include `code`; unsupported optional
+operations use `unsupported_operation`. Native timer no-op behavior is unchanged.
+The four tare/timer 500 responses share the OpenAPI `ScaleCommandError` schema.
+
 Decaid exposes REST and WebSocket APIs on port 8080. Full OpenAPI specs are in [`assets/api/rest_v1.yml`](../assets/api/rest_v1.yml) and [`assets/api/websocket_v1.yml`](../assets/api/websocket_v1.yml). Interactive docs are available at port 4001 when the app is running.
 
 For skin development, see [`doc/Skins.md`](Skins.md). For plugin development, see [`doc/Plugins.md`](Plugins.md).
+
+The #809 work-in-progress manifest schema includes `transport.ble`, Scale
+capabilities, and BLE matchers. Public non-BLE Scale registration is implemented;
+runtime BLE binding and full API acceptance remain incomplete. See
+[the active design](plans/issue-809-design.md). This stage
+adds no routes or WebSocket messages.
 
 ---
 
@@ -60,7 +71,7 @@ For browser clients on a different origin, `ETag` is exposed via `Access-Control
 | Method | Path | Description | Handler |
 |--------|------|-------------|---------|
 | GET | `/api/v1/machine/info` | Machine model, firmware, features | `de1handler.dart` |
-| GET | `/api/v1/machine/state` | Current machine state + substate | |
+| GET | `/api/v1/machine/state` | Current machine state + substate. The steam substates `pausedSteam` and `puffing` report as themselves; both used to report as `idle` | |
 | PUT | `/api/v1/machine/state/{newState}` | Request state change (`idle`, `sleep`, `espresso`, …) | |
 | GET | `/api/v1/machine/settings` | DE1 machine settings (temps, flows) | |
 | POST | `/api/v1/machine/settings` | Update machine settings (one grouped, serialized device write per request) | |
@@ -85,7 +96,7 @@ For browser clients on a different origin, `ETag` is exposed via `Access-Control
 | GET | `/api/v1/machine/cupWarmer/preheat` | Read scheduled pre-warm `enabled`/`leadMinutes`/`active` (firmware-owned timing) — Bengle only, 404 elsewhere | |
 | PUT | `/api/v1/machine/cupWarmer/preheat` | Set pre-warm `enabled` and/or `leadMinutes` (0–120, persisted in firmware) — Bengle only | |
 | GET | `/api/v1/machine/ledStrip` | Read LED strip palette (3 zones × 2 modes, 16-bit RGB; `frontSwitch` derived, not a hardware control); 503 until firmware hydration succeeds — Bengle only | |
-| PUT | `/api/v1/machine/ledStrip` | Write palette write-through to FW registers (persisted immediately; `frontSwitch` ignored). Only a zone whose colour changed is written — Bengle only | |
+| PUT | `/api/v1/machine/ledStrip` | Write palette write-through to FW registers (persisted immediately; `frontSwitch` ignored). Only a zone whose colour changed is written. The 200 body is the canonical stored palette — strips quantized to the firmware's 8 bits per channel, `frontSwitch` derived — replacing the former `{"status":"accepted"}` acknowledgement, which now only appears if the machine reports no stored palette after the write — Bengle only | |
 | POST | `/api/v1/machine/ledStrip/preview` | Show `frontStrip`/`backStrip` on the live registers now, without storing them; either optional, same 16-bit RGB spelling as GET. The stored palette does not move, so an asleep colour can be shown on an awake machine. A frame repeating the colour already shown writes nothing — Bengle only | |
 | POST | `/api/v1/machine/ledStrip/preview/clear` | End a preview: the strips return to the stored palette for the state the machine is in — Bengle only | |
 | POST | `/api/v1/machine/ledStrip/commit` | Compatibility no-op (palette writes are already persisted) — Bengle only | |
@@ -177,6 +188,30 @@ Newly recorded shots snapshot `serialNumber`, `model`, `firmwareVersion`, and
 fields. Consumers must not infer missing capture-time identity from the machine
 that happens to be connected when a record is read.
 
+**Modification tracking.** Every shot carries `createdAt` and `updatedAt`
+(ISO-8601 UTC, always serialized with a trailing `Z`). `createdAt` is set
+when the shot enters local storage; the extraction `timestamp` is the fallback
+for legacy records that predate the field. Both fields are system-managed: a
+`PUT /api/v1/shots/:id` body containing either is rejected with 400, so
+clients cannot spoof revision metadata. `updatedAt` advances only when shot
+*content* changes: `PUT /api/v1/shots/:id` bumps it iff the merged record
+differs outside the bookkeeping keys. The bookkeeping keys are
+`uploaded_to_decent`, `decent_upload_rejected`, and `visualizerId` inside
+`annotations.extras` (the reserved scratch space for plugin sync state).
+Writes confined to those keys persist without touching `updatedAt`, so
+consumers can reconcile edits by comparing `updatedAt` against their own sync
+marker without feedback loops.
+An `extras` map emptied by that exclusion compares equal to no `extras`, and
+an `annotations` map emptied by it compares equal to no `annotations`, so the
+first-ever sync marker on a clean shot does not dirty it. All other `extras`
+keys count as content. `measurements` is not editable through this endpoint:
+a PUT body containing it is rejected with 400. Sync import with
+`onConflict: overwrite` replaces the whole record, so its comparison
+includes `measurements` (which overwrite can change, unlike PUT): the
+existing `createdAt` is preserved, and `updatedAt` advances whenever the
+imported record differs from the stored one, so a no-op re-import cannot
+move a consumer's cursor backwards.
+
 ### Steams
 
 Recorded milk-steaming sessions. Each record is opened when the machine
@@ -229,6 +264,15 @@ cross-request or cross-client coalescing. Partial updates are deep-merged agains
 workflow state when each request executes, and each response contains that request's resulting
 workflow. Omitted steam-setting fields are preserved and supplied values replace them. The
 `steamSettings` object and all of its fields are non-nullable; explicit `null` returns `400`.
+The `context` object is validated against `WorkflowContextPatch`, which is not the stored
+`WorkflowContext`: every context field still accepts an explicit `null` to clear it, except
+`context.targetYield`, which returns `400`. `targetYield` is the single source of truth for
+stop-at-weight and null and `0` both mean the feature is off, so omit the field to keep the
+current value, or send `0` to turn stop-at-weight off deliberately; a value that is not a
+number returns `400` rather than clearing the target. The `context` object itself is
+non-nullable too — `{"context": null}` returns `400`, because dropping the whole context
+would clear `targetYield` with it, so clearing is per field. A stored or returned workflow
+keeps a nullable `targetYield`.
 Requests may wait behind machine I/O; the server does not debounce high-frequency
 input, so clients should throttle controls themselves. Bodies larger than 1 MiB return `413`,
 requests beyond the eight-entry active/queued limit return `429`, and requests waiting more
@@ -373,6 +417,50 @@ same request prevent all fields from being stored (validation is atomic).
 | GET | `/api/v1/sensors/:id` | Get sensor manifest | |
 | POST | `/api/v1/sensors/:id/execute` | Execute sensor command | |
 
+Plugin-backed sensors registered through `host.devices` use this same API and
+the device inventory. Their stable IDs have the form
+`plugin:<pluginId>:<driverId>:<instanceId>`. Sensor manifests expose command
+result schemas as `resultsSchema`. See `Plugins.md` for registration and
+lifecycle rules.
+
+#### `Bengle EBus Tap` sensor
+
+The Bengle EBus tap (USB interface `2` of a composite Bengle, VID `0x2e8a` /
+PID `0x000a`) is exposed through the generic Sensors surface — no new REST
+path. Manifest:
+
+```json
+{
+  "name": "Bengle EBus Tap",
+  "vendor": "Decent Espresso",
+  "data": [{"key": "bytes", "type": "string", "unit": "base64"}],
+  "commands": [{"id": "write", "paramsSchema": {"bytes": "string"}}]
+}
+```
+
+`GET /api/v1/sensors` lists the tap under its stable ID
+`usb-2e8a-a-<serial>-if02`. Each frame on `/ws/v1/sensors/<id>/snapshot` is one
+serial read chunk:
+
+```json
+{"timestamp": "2026-08-31T12:34:56.789Z", "bytes": "tp4..."}
+```
+
+`bytes` is standard base64; concatenating decoded chunks reproduces the exact
+serial byte stream. Chunk boundaries carry no protocol meaning.
+
+Raw write base64-decodes `bytes`, writes exactly those bytes to the tap, and
+returns the byte count written:
+
+```text
+POST /api/v1/sensors/usb-2e8a-a-<serial>-if02/execute
+{"commandId": "write", "params": {"bytes": "AO4A"}}
+→ {"status": "ok", "result": {"bytesWritten": 3}}
+```
+
+Malformed or missing base64 is rejected before any write. The tap is
+single-owner: no other reader may hold the port while Decaid owns it.
+
 ### Key-Value Store
 
 | Method | Path | Description | Handler |
@@ -489,6 +577,7 @@ The **proxy** lets clients *use* the account without ever seeing the credentials
 | Method | Path | Description | Handler |
 |--------|------|-------------|---------|
 | GET | `/api/v1/info` | Build metadata (version, commit, branch) + gateway LAN IP (`localIp`) | `info_handler.dart` |
+| GET | `/api/v1/diagnostics/ble` | Read-only BLE adapter, scan/watch ownership, reconnect policy, cache, and advertisement diagnostics | `ble_diagnostics_handler.dart` |
 | GET | `/api/v1/update` | App-update state snapshot (`phase`, `latestVersion`, `releaseNotes`, `releaseUrl`, `installable`). Pure read — no network call; force a re-check via `/ws/v1/update`. | `update_handler.dart` |
 | POST | `/api/v1/feedback` | Submit feedback (creates GitHub issue) | `feedback_handler.dart` |
 | GET | `/api/v1/logs` | Recent log entries, newest first. Live log + rotated files `log.txt.1..N` are always stitched chronologically; response is a size-bounded tail window (`?kb=N`, default 1024 KB, clamped to 4096 KB). `?order=asc` for original chronological order | `logs_handler.dart` |

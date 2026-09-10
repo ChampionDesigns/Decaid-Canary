@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'package:reaprime/src/models/device/scale.dart';
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:logging/logging.dart';
@@ -586,6 +587,10 @@ class De1StateManager with WidgetsBindingObserver {
         final scale = _scaleController.connectedScale();
 
         if (scalePowerMode == ScalePowerMode.displayOff) {
+          if (scale is DisconnectToSleepScale &&
+              (scale as DisconnectToSleepScale).disconnectsToSleep) {
+            _connectionManager.markScaleSleeping(scale.deviceId);
+          }
           scale.sleepDisplay().catchError((e) {
             _logger.warning('Failed to sleep scale display: $e');
           });
@@ -814,6 +819,8 @@ class De1StateManager with WidgetsBindingObserver {
       targetProfile: _workflowController.currentWorkflow.profile,
       targetYield:
           _workflowController.currentWorkflow.context?.targetYield ?? 0,
+      targetWaterVolume:
+          _workflowController.currentWorkflow.context?.targetWaterVolume,
       bypassSAW: _settingsController.gatewayMode == GatewayMode.full,
       blockOnNoScale: _settingsController.blockOnNoScale && !scalelessBeverage,
       weightFlowMultiplier: _settingsController.weightFlowMultiplier,

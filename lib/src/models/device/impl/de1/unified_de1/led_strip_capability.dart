@@ -1,38 +1,7 @@
 part of 'unified_de1.dart';
 
-const int kSwitchDefaultAwakeRgb = 0xFFF0C8;
-const int kSwitchDefaultAsleepRgb = 0x555043;
-
 int _toFirmwareRgb(Color16 color) =>
     ((color.red >> 8) << 16) | ((color.green >> 8) << 8) | (color.blue >> 8);
-
-Color16 _fromFirmwareRgb(int rgb) => Color16(
-  ((rgb >> 16) & 0xFF) << 8,
-  ((rgb >> 8) & 0xFF) << 8,
-  (rgb & 0xFF) << 8,
-);
-
-bool _isBlack(Color16 color) =>
-    color.red == 0 && color.green == 0 && color.blue == 0;
-
-Color16 _quantize(Color16 color) =>
-    Color16(color.red & 0xFF00, color.green & 0xFF00, color.blue & 0xFF00);
-
-ZoneLedState _quantizeZone(ZoneLedState zone) => ZoneLedState(
-  awake: _quantize(zone.awake),
-  sleeping: _quantize(zone.sleeping),
-);
-
-ZoneLedState _deriveSwitchPalette(ZoneLedState frontStrip) {
-  return ZoneLedState(
-    awake: _isBlack(frontStrip.awake)
-        ? _fromFirmwareRgb(kSwitchDefaultAwakeRgb)
-        : frontStrip.awake,
-    sleeping: _isBlack(frontStrip.sleeping)
-        ? _fromFirmwareRgb(kSwitchDefaultAsleepRgb)
-        : frontStrip.sleeping,
-  );
-}
 
 mixin LedStripCapability on UnifiedDe1 {
   BehaviorSubject<LedStripState?> _ledStripState =
@@ -44,34 +13,31 @@ mixin LedStripCapability on UnifiedDe1 {
 
   /// Store the palette. Only a zone whose colour changed is written.
   Future<void> setLedStrip(LedStripState state) async {
-    final frontStrip = _quantizeZone(state.frontStrip);
-    final backStrip = _quantizeZone(state.backStrip);
-    final held = _ledStripState.valueOrNull;
-    final heldFront = held == null ? null : _quantizeZone(held.frontStrip);
-    final heldBack = held == null ? null : _quantizeZone(held.backStrip);
+    final stored = state.canonical();
+    final held = _ledStripState.valueOrNull?.canonical();
     try {
-      if (heldFront?.awake != frontStrip.awake) {
+      if (held?.frontStrip.awake != stored.frontStrip.awake) {
         await writeMmrInt(
           BengleMmr.frontLedAwake,
-          _toFirmwareRgb(frontStrip.awake),
+          _toFirmwareRgb(stored.frontStrip.awake),
         );
       }
-      if (heldFront?.sleeping != frontStrip.sleeping) {
+      if (held?.frontStrip.sleeping != stored.frontStrip.sleeping) {
         await writeMmrInt(
           BengleMmr.frontLedSleep,
-          _toFirmwareRgb(frontStrip.sleeping),
+          _toFirmwareRgb(stored.frontStrip.sleeping),
         );
       }
-      if (heldBack?.awake != backStrip.awake) {
+      if (held?.backStrip.awake != stored.backStrip.awake) {
         await writeMmrInt(
           BengleMmr.rearLedAwake,
-          _toFirmwareRgb(backStrip.awake),
+          _toFirmwareRgb(stored.backStrip.awake),
         );
       }
-      if (heldBack?.sleeping != backStrip.sleeping) {
+      if (held?.backStrip.sleeping != stored.backStrip.sleeping) {
         await writeMmrInt(
           BengleMmr.rearLedSleep,
-          _toFirmwareRgb(backStrip.sleeping),
+          _toFirmwareRgb(stored.backStrip.sleeping),
         );
       }
     } catch (e) {
@@ -82,13 +48,8 @@ mixin LedStripCapability on UnifiedDe1 {
     }
     _shownFront = null;
     _shownBack = null;
-    final derived = LedStripState(
-      frontStrip: frontStrip,
-      backStrip: backStrip,
-      frontSwitch: _deriveSwitchPalette(frontStrip),
-    );
     if (!_ledStripState.isClosed) {
-      _ledStripState.add(derived);
+      _ledStripState.add(stored);
     }
   }
 
@@ -165,18 +126,16 @@ mixin LedStripCapability on UnifiedDe1 {
       final frontSleep = await readMmrInt(BengleMmr.frontLedSleep);
       final rearAwake = await readMmrInt(BengleMmr.rearLedAwake);
       final rearSleep = await readMmrInt(BengleMmr.rearLedSleep);
-      final frontStrip = ZoneLedState(
-        awake: _fromFirmwareRgb(frontAwake),
-        sleeping: _fromFirmwareRgb(frontSleep),
-      );
       final state = LedStripState(
-        frontStrip: frontStrip,
-        backStrip: ZoneLedState(
-          awake: _fromFirmwareRgb(rearAwake),
-          sleeping: _fromFirmwareRgb(rearSleep),
+        frontStrip: ZoneLedState(
+          awake: Color16.fromFirmwareRgb(frontAwake),
+          sleeping: Color16.fromFirmwareRgb(frontSleep),
         ),
-        frontSwitch: _deriveSwitchPalette(frontStrip),
-      );
+        backStrip: ZoneLedState(
+          awake: Color16.fromFirmwareRgb(rearAwake),
+          sleeping: Color16.fromFirmwareRgb(rearSleep),
+        ),
+      ).canonical();
       if (!_ledStripState.isClosed) {
         _ledStripState.add(state);
       }

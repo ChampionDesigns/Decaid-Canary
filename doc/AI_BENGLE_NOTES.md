@@ -100,6 +100,13 @@ endpoints 404 only on non-Bengle machines.
 - The firmware stores 8 bits per RGB channel, so the app quantizes
   (`& 0xFF00`) before writing and publishes exactly the quantized
   representation that was written.
+- The Dart home of the quantization and the switch derivation is the single
+  `LedStripState.canonical()` in `lib/src/models/device/led_strip.dart`, which
+  also holds the only copies of the two default constants. The real
+  `LedStripCapability`, `MockBengle` and `MockReplayDe1` all route through it,
+  so "keep in sync" with APIView.cpp means one Dart site, not three. The
+  derivation reads the QUANTIZED front strip: a colour whose low byte alone is
+  non-zero is black on the wire, and the firmware default applies.
 - Hydration happens once per connection; a failed hydration (or a partial
   multi-register write failure) leaves the state unknown (null), never
   fabricated black. commit is a compatibility no-op; reset re-reads the

@@ -151,9 +151,17 @@ class ConnectionManager {
 
   bool get _machineConnected => _disconnectSupervisor.isMachineConnected;
   bool get _scaleConnected => _disconnectSupervisor.isScaleConnected;
+  bool _scaleSleepRequested = false;
   bool get _scaleReconnectBlockedByPowerMode =>
-      settingsController.scalePowerMode == ScalePowerMode.disconnect &&
-      _latestMachineState == MachineState.sleeping;
+      _scaleSleepRequested ||
+      (settingsController.scalePowerMode == ScalePowerMode.disconnect &&
+          _latestMachineState == MachineState.sleeping);
+
+  void markScaleSleeping(String deviceId) {
+    _scaleSleepRequested = true;
+    markExpectingDisconnect(deviceId);
+    _pauseScaleReconnectForPowerMode();
+  }
 
   late final DisconnectSupervisor _disconnectSupervisor;
   late final ScanOrchestrator _scanOrchestrator;
@@ -238,6 +246,15 @@ class ConnectionManager {
   bool get supportsBackgroundScaleWatch =>
       deviceScanner.supportsBackgroundWatch;
 
+  bool get shouldRetryPreferredScale => _shouldRetryPreferredScale();
+  bool get scaleReconnectBlockedByPowerMode =>
+      _scaleReconnectBlockedByPowerMode;
+  int get scaleReconnectFailures => _scaleReconnectFailures;
+  bool get scaleReconnectScheduled => _preferredScaleReconnect != null;
+  Map<String, Object?> get scaleWatchDiagnostics => _scaleWatch.diagnostics;
+  bool get stateWatchdogActive => _stateWatchdog != null;
+  int get diagnosticSnapshotStalenessReconnects => snapshotStalenessReconnects;
+
   ConnectionManager({
     required this.deviceScanner,
     required this.de1Controller,
@@ -269,6 +286,7 @@ class ConnectionManager {
     _scaleWatch = ScaleWatch(
       scanner: deviceScanner,
       shouldWatch: () =>
+          !_isConnecting &&
           _shouldRetryPreferredScale() &&
           _disconnectSupervisor.latestMachine is! BengleInterface,
       preferredScaleId: () => settingsController.preferredScaleId,
@@ -749,6 +767,11 @@ class ConnectionManager {
 
   void markExpectingDisconnect(String deviceId) {
     _disconnectExpectations.mark(deviceId);
+    final scaleId = scaleController.lastConnectedDeviceId;
+    if (_disconnectSupervisor.isScaleConnected &&
+        scaleId == 'bengle-internal-$deviceId') {
+      _disconnectExpectations.mark(scaleId!);
+    }
   }
 
   @visibleForTesting
@@ -942,6 +965,7 @@ class ConnectionManager {
       if (_automaticMachineAttemptSuperseded && !_machineConnected) {
         _automaticMachineAttemptSuperseded = false;
       }
+      _ensureScaleReacquisition();
     }
   }
 
@@ -1011,7 +1035,8 @@ class ConnectionManager {
     required bool scaleOnly,
     required ConnectionAttemptPolicy policy,
   }) async {
-    _cancelScaleReacquisition(resetFailures: !scaleOnly);
+    _cancelPreferredScaleReconnect(resetFailures: !scaleOnly);
+    if (_scaleWatch.hasPendingRequest) await _scaleWatch.disarm();
     if (scaleOnly && _scaleReconnectBlockedByPowerMode) {
       _log.fine(
         'Skipping scale-only scan while machine is sleeping and scale '
@@ -1310,8 +1335,19 @@ class ConnectionManager {
   }
 
   void _cancelScaleReacquisition({bool resetFailures = true}) {
-    unawaited(_scaleWatch.disarm());
+    unawaited(
+      _cancelScaleReacquisitionAndWait(resetFailures: resetFailures).catchError(
+        (e, st) =>
+            _log.warning('Background scale-watch cancellation failed', e, st),
+      ),
+    );
+  }
+
+  Future<void> _cancelScaleReacquisitionAndWait({
+    required bool resetFailures,
+  }) async {
     _cancelPreferredScaleReconnect(resetFailures: resetFailures);
+    if (_scaleWatch.hasPendingRequest) await _scaleWatch.disarm();
   }
 
   Future<void> _connectScaleFromWatch(Scale scale) async {
@@ -1450,6 +1486,7 @@ class ConnectionManager {
         final state = snapshot.state.state;
         if (_latestMachineState == state) return;
         _latestMachineState = state;
+        if (state != MachineState.sleeping) _scaleSleepRequested = false;
         if (_scaleReconnectBlockedByPowerMode) {
           _log.fine(
             'Machine is sleeping and scale power mode is disconnect; '

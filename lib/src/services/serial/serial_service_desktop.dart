@@ -11,6 +11,7 @@ import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/device/impl/decent_scale/scale_serial.dart';
+import 'package:reaprime/src/models/device/impl/sensor/bengle_debug_port.dart';
 import 'package:reaprime/src/models/device/impl/sensor/debug_port.dart';
 import 'package:reaprime/src/models/device/impl/sensor/sensor_basket.dart';
 import 'package:reaprime/src/models/device/transport/serial_port.dart';
@@ -333,6 +334,7 @@ class SerialServiceDesktop implements DeviceDiscoveryService {
     int? vid;
     int? pid;
     String? serial;
+    int? interfaceNumber;
     try {
       name = port.name ?? path;
     } catch (_) {}
@@ -351,12 +353,21 @@ class SerialServiceDesktop implements DeviceDiscoveryService {
     try {
       serial = port.serialNumber;
     } catch (_) {}
-    final stableId = computeUsbStableId(vid: vid, pid: pid, serial: serial);
+    try {
+      interfaceNumber = port.interfaceNumber;
+    } catch (_) {}
+    final stableId = computeUsbStableId(
+      vid: vid,
+      pid: pid,
+      serial: serial,
+      interfaceNumber: interfaceNumber,
+    );
     return _PortMetadata(
       name: name,
       transport: transport,
       productName: productName,
       stableId: stableId,
+      interfaceNumber: interfaceNumber,
     );
   }
 
@@ -368,6 +379,43 @@ class SerialServiceDesktop implements DeviceDiscoveryService {
     if (port.transport.toTransport() == "Bluetooth") {
       port.dispose();
       return null;
+    }
+
+    int? vid;
+    int? pid;
+    int? interfaceNumber;
+    String? productName;
+    try {
+      vid = port.vendorId;
+    } catch (_) {}
+    try {
+      pid = port.productId;
+    } catch (_) {}
+    try {
+      interfaceNumber = port.interfaceNumber;
+    } catch (_) {}
+    try {
+      productName = port.productName;
+    } catch (_) {}
+    if (isBengleEbusTap(
+      vid: vid,
+      pid: pid,
+      interfaceNumber: interfaceNumber,
+      productName: productName,
+    )) {
+      _log.info(
+        "Bengle EBus tap on interface $interfaceNumber ($id)"
+        " — no protocol probe",
+      );
+      final transport = _DesktopSerialPort(
+        port: port,
+        dtrOn: true,
+        decodeUtf8Text: false,
+      );
+      _portPathToTransport[id] = transport;
+      final device = BengleDebugPort(transport: transport);
+      _portPathToDeviceId[id] = device.deviceId;
+      return device;
     }
 
     final transport = _DesktopSerialPort(port: port);
@@ -391,14 +439,6 @@ class SerialServiceDesktop implements DeviceDiscoveryService {
       return device;
     }
 
-    int? vid;
-    int? pid;
-    try {
-      vid = port.vendorId;
-    } catch (_) {}
-    try {
-      pid = port.productId;
-    } catch (_) {}
     final usbModel = matchUsbDevice(usbDeviceTable, vid: vid, pid: pid);
     if (usbModel != null) {
       final device = UnifiedDe1(transport: transport);
@@ -531,6 +571,8 @@ const int _serialWriteTimeoutMs = 500;
 
 class _DesktopSerialPort implements SerialTransport {
   final SerialPort _port;
+  final bool _dtrOn;
+  final bool _decodeUtf8Text;
   late Logger _log;
   final BehaviorSubject<ConnectionState> _open = BehaviorSubject.seeded(
     ConnectionState.discovered,
@@ -542,7 +584,13 @@ class _DesktopSerialPort implements SerialTransport {
   late final String _cachedId = _computeId();
   late final String _cachedName = _safePortName() ?? "Unknown port";
 
-  _DesktopSerialPort({required SerialPort port}) : _port = port {
+  _DesktopSerialPort({
+    required SerialPort port,
+    bool dtrOn = false,
+    bool decodeUtf8Text = true,
+  }) : _port = port,
+       _dtrOn = dtrOn,
+       _decodeUtf8Text = decodeUtf8Text {
     _log = Logger("SerialPort:${port.name}");
     _cachedId;
     _cachedName;
@@ -560,6 +608,7 @@ class _DesktopSerialPort implements SerialTransport {
     int? vid;
     int? pid;
     String? serial;
+    int? interfaceNumber;
     try {
       vid = _port.vendorId;
     } catch (_) {}
@@ -569,7 +618,15 @@ class _DesktopSerialPort implements SerialTransport {
     try {
       serial = _port.serialNumber;
     } catch (_) {}
-    final stable = computeUsbStableId(vid: vid, pid: pid, serial: serial);
+    try {
+      interfaceNumber = _port.interfaceNumber;
+    } catch (_) {}
+    final stable = computeUsbStableId(
+      vid: vid,
+      pid: pid,
+      serial: serial,
+      interfaceNumber: interfaceNumber,
+    );
     if (stable != null) return stable;
     final portName = _safePortName();
     if (portName != null) {
@@ -673,7 +730,7 @@ class _DesktopSerialPort implements SerialTransport {
       cfg.stopBits = 1;
       cfg.rts = 0;
       cfg.cts = 0;
-      cfg.dtr = 0;
+      cfg.dtr = _dtrOn ? 1 : 0;
       cfg.dsr = 0;
       cfg.xonXoff = 0;
       cfg.setFlowControl(0);
@@ -690,6 +747,7 @@ class _DesktopSerialPort implements SerialTransport {
       _portSubscription = reader.stream.listen(
         (data) {
           _rawStreamController.add(data);
+          if (!_decodeUtf8Text) return;
           try {
             final input = utf8.decode(data);
             _log.finest("received serial input: $input");
@@ -776,11 +834,13 @@ class _PortMetadata {
   final String transport;
   final String? productName;
   final String? stableId;
+  final int? interfaceNumber;
   _PortMetadata({
     required this.name,
     required this.transport,
     required this.productName,
     required this.stableId,
+    required this.interfaceNumber,
   });
 }
 

@@ -571,6 +571,8 @@ paths:
         firmware palette registers and persisted there immediately;
         `frontSwitch` is ignored on write (derived hardware behavior, not
         an independent control). There is no separate commit latch.
+        The 200 body is the canonical palette the machine now holds, not
+        an acknowledgement of the request as sent.
         Returns 404 when the connected machine is not a Bengle.
       tags: [Machine]
       requestBody:
@@ -581,7 +583,26 @@ paths:
               $ref: "#/components/schemas/LedStripState"
       responses:
         "200":
-          description: Configuration accepted and persisted
+          description: |
+            Configuration accepted and persisted. The body is the stored
+            canonical palette, identical to what a following
+            `GET /api/v1/machine/ledStrip` returns: `frontStrip` and
+            `backStrip` quantized to the firmware's 8 bits per channel
+            (low bytes dropped), and `frontSwitch` as the derived switch
+            palette rather than the value sent. The legacy
+            `{"status": "accepted"}` acknowledgement remains as a
+            defensive fallback for a machine implementation that reports
+            no stored palette after the write; no shipped implementation
+            produces it, because the write populates the stored palette.
+            Compatibility: this endpoint previously always answered with
+            that acknowledgement, so a client that reads the 200 body must
+            tolerate a `LedStripState`.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/LedStripState"
+                  - $ref: "#/components/schemas/LedStripAccepted"
         "400":
           description: Invalid request body or malformed JSON
         "404":
@@ -1115,6 +1136,7 @@ paths:
     put:
       summary: Tare Scale
       description: |
+        Unsupported plugin Scale tare returns 500 with `code: unsupported_operation`.
         Tares the connected scale. If `blockTareDuringShot` is enabled and an
         app-tracked espresso shot is actively brewing (not idle/finished), the
         request is rejected with `400` rather than tared — see
@@ -1147,39 +1169,63 @@ paths:
                     type: string
         "404":
           description: Scale not found
+        "500":
+          description: Scale command failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScaleCommandError"
 
   /api/v1/scale/timer/start:
     put:
       summary: Start Scale Timer
-      description: Starts the timer on the connected scale. No-op if the scale doesn't support hardware timers.
+      description: >
+        Starts the timer on the connected scale. Native scales without timers retain their no-op behavior.
+        Unsupported plugin Scale timers return 500 with `code: unsupported_operation`.
       tags: [Scale]
       responses:
         "200":
           description: Timer started
         "500":
           description: No scale connected or error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScaleCommandError"
 
   /api/v1/scale/timer/stop:
     put:
       summary: Stop Scale Timer
-      description: Stops the timer on the connected scale. No-op if the scale doesn't support hardware timers.
+      description: >
+        Stops the timer on the connected scale. Native scales without timers retain their no-op behavior.
+        Unsupported plugin Scale timers return 500 with `code: unsupported_operation`.
       tags: [Scale]
       responses:
         "200":
           description: Timer stopped
         "500":
           description: No scale connected or error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScaleCommandError"
 
   /api/v1/scale/timer/reset:
     put:
       summary: Reset Scale Timer
-      description: Resets the timer on the connected scale. No-op if the scale doesn't support hardware timers.
+      description: >
+        Resets the timer on the connected scale. Native scales without timers retain their no-op behavior.
+        Unsupported plugin Scale timers return 500 with `code: unsupported_operation`.
       tags: [Scale]
       responses:
         "200":
           description: Timer reset
         "500":
           description: No scale connected or error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScaleCommandError"
 
   # Sensors API handling
   /api/v1/sensors:
@@ -1312,7 +1358,11 @@ paths:
         and partial request bodies are deep-merged against the workflow state when that request
         reaches the front of the queue. Omitted steam-setting fields keep their current values;
         supplied values replace them. Steam settings are non-nullable, so explicit `null` for
-        `steamSettings` or any of its fields returns `400`.
+        `steamSettings` or any of its fields returns `400`. The `context` object is likewise
+        non-nullable, and inside it `targetYield` is non-nullable too, because null and `0` both
+        mean stop-at-weight is off: send `0` to turn it off. Every other `context` field still
+        accepts an explicit `null` to clear it, so clearing is per field — there is no
+        whole-object clear.
         The server does not debounce or combine separate requests. Machine side effects from
         workflow PUT requests do not execute concurrently,
         so a request may wait behind an in-flight machine operation. Each response describes
@@ -1424,9 +1474,12 @@ paths:
         "400":
           description: >
             Invalid request body — the merged JSON failed to parse (e.g. an
-            invalid enum value, a missing required profile field, or an
-            unparseable number). The response body contains an `error` and
-            `message` field describing the validation failure.
+            invalid enum value, a missing required profile field, an
+            unparseable number, a non-numeric `context.targetYield`, or an
+            explicit `null` on a non-nullable patch field such as
+            `steamSettings`, `context` or `context.targetYield`). The
+            response body contains an `error` and `message` field describing
+            the validation failure.
           content:
             application/json:
               schema:
@@ -1690,7 +1743,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ShotRecord"
+              $ref: "#/components/schemas/ShotUpdateRequest"
             examples:
               updateNotes:
                 summary: Update only espresso notes
@@ -1712,7 +1765,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ShotRecord"
         "400":
-          description: Bad Request (ID mismatch)
+          description: |
+            Bad Request. Covers an ID in the body that does not match the
+            path ID, a body containing `measurements`, and a body containing
+            the system-managed fields `createdAt` or `updatedAt`.
           content:
             application/json:
               schema:
@@ -4888,6 +4944,22 @@ paths:
                   - appStore
                   - fullVersion
                   - localIp
+  /api/v1/diagnostics/ble:
+    get:
+      summary: Read-only BLE reconnect diagnostics
+      description: >
+        Returns adapter, native scan ownership, background watch, reconnect
+        policy, discovery cache, advertisement, and scan-failure state. This
+        endpoint does not start, stop, or otherwise mutate BLE operations.
+      tags: [System]
+      responses:
+        "200":
+          description: Current BLE diagnostics snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BleDiagnosticsSnapshot"
+
   /api/v1/update:
     get:
       summary: Get app update state
@@ -5469,6 +5541,30 @@ paths:
 
 components:
   schemas:
+    ScaleCommandError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          description: Optional plugin error code, including unsupported_operation.
+    BleDiagnosticsSnapshot:
+      type: object
+      required: [timestamp, ble, connection]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        ble:
+          type: object
+          additionalProperties: true
+        connection:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
     FlowSmoothingConfig:
       type: object
       required: [windowMs, movingAverageSamples]
@@ -5801,6 +5897,14 @@ components:
             the front strip, substituting product defaults when the strip
             colour is black. Ignored on write.
 
+    LedStripAccepted:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+
     ZoneLedState:
       type: object
       properties:
@@ -5977,6 +6081,8 @@ components:
           cleaingGroup,
           cleanSoaking,
           cleaningSteam,
+          pausedSteam,
+          puffing,
           errorNaN,
           errorInf,
           errorGeneric,
@@ -6698,7 +6804,7 @@ components:
                 type: string
                 enum: ["quick", "full"]
             required: ["mode"]
-        resultSchema:
+        resultsSchema:
           type: object
           additionalProperties: true
           example:
@@ -6745,7 +6851,12 @@ components:
       type: object
       description: |
         Partial workflow update. Omitted fields preserve their current values.
-        Fields in `steamSettings` are non-nullable and reject explicit `null`.
+        Nullability here is the PUT-patch contract, not the workflow model: a
+        stored or returned workflow may hold `null` where this schema refuses it.
+        `steamSettings` and every field inside it are non-nullable and reject an
+        explicit `null`. The `context` object is non-nullable as well; inside it,
+        only `targetYield` is non-nullable, and every other context field still
+        accepts an explicit `null` to clear it. See `WorkflowContextPatch`.
       properties:
         name:
           type: string
@@ -6754,7 +6865,7 @@ components:
         profile:
           $ref: "#/components/schemas/Profile"
         context:
-          $ref: "#/components/schemas/WorkflowContext"
+          $ref: "#/components/schemas/WorkflowContextPatch"
         steamSettings:
           $ref: "#/components/schemas/SteamSettingsPatch"
         hotWaterData:
@@ -6932,6 +7043,25 @@ components:
           type: string
         timestamp:
           type: string
+        createdAt:
+          type: string
+          format: date-time
+          description: |
+            ISO-8601 UTC instant when the shot entered local storage
+            (always ends in `Z`). System-managed: rejected with 400 if
+            supplied to PUT /api/v1/shots/{id}. Falls back to `timestamp`
+            for legacy records that predate the field.
+        updatedAt:
+          type: string
+          format: date-time
+          description: |
+            ISO-8601 UTC instant of the last meaningful content change
+            (always ends in `Z`). System-managed: rejected with 400 if
+            supplied to PUT /api/v1/shots/{id}. Does not advance for writes
+            confined to the bookkeeping keys `uploaded_to_decent`,
+            `decent_upload_rejected`, and `visualizerId` inside
+            annotations.extras. Falls back to
+            `createdAt`, then `timestamp`, for legacy records.
         measurements:
           type: array
           items:
@@ -6965,6 +7095,35 @@ components:
           deprecated: true
           description: "Deprecated request alias for annotations.extras; response value mirrors the canonical field"
 
+    ShotUpdateRequest:
+      type: object
+      description: |
+        Partial-update payload for PUT /api/v1/shots/{id}. Only the fields
+        included in the body are changed; all other fields are preserved from
+        the existing record. `measurements`, `createdAt`, and `updatedAt` are
+        not editable and are rejected with 400. The `uploaded_to_decent`,
+        `decent_upload_rejected`, and `visualizerId` keys inside
+        annotations.extras are reserved bookkeeping:
+        writes confined to them persist without advancing `updatedAt`.
+      properties:
+        annotations:
+          $ref: "#/components/schemas/ShotAnnotations"
+        stopReason:
+          type: string
+          nullable: true
+          description: Why the shot ended (open set — tolerate unknown values). See ShotRecord.stopReason.
+        shotNotes:
+          type: string
+          nullable: true
+          deprecated: true
+          description: "Deprecated request alias for annotations.espressoNotes; response value mirrors the canonical field"
+        metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+          deprecated: true
+          description: "Deprecated request alias for annotations.extras; response value mirrors the canonical field"
+
     ShotRecordSummary:
       type: object
       description: |
@@ -6975,6 +7134,18 @@ components:
           type: string
         timestamp:
           type: string
+        createdAt:
+          type: string
+          format: date-time
+          description: |
+            ISO-8601 UTC instant when the shot entered local storage
+            (always ends in `Z`). See ShotRecord.createdAt.
+        updatedAt:
+          type: string
+          format: date-time
+          description: |
+            ISO-8601 UTC instant of the last meaningful content change
+            (always ends in `Z`). See ShotRecord.updatedAt.
         workflow:
           $ref: "#/components/schemas/WorkflowRequest"
         annotations:
@@ -7090,7 +7261,66 @@ components:
           type: array
           items:
             type: string
-            enum: [log, api, emit, pluginStorage, events.machine, events.shots, proxy.decent_api, proxy.decent_api.write]
+            enum: [log, api, emit, pluginStorage, events.machine, events.shots, events.workflow, proxy.decent_api, proxy.decent_api.write, network.websocket, network.tcp, network.tls, transport.ble]
+        drivers:
+          type: array
+          maxItems: 8
+          description: Device classes this plugin may register. Driver declarations do not grant transport permissions.
+          items:
+            type: object
+            required: [id, type]
+            properties:
+              id:
+                type: string
+                pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+              type:
+                type: string
+                enum: [sensor, scale]
+              capabilities:
+                type: array
+                uniqueItems: true
+                description: Scale-only capabilities. displayControl and disconnectToSleep are mutually exclusive.
+                items:
+                  type: string
+                  enum: [battery, flow, timerTelemetry, tare, timerControl, displayControl, disconnectToSleep]
+              ble:
+                type: object
+                additionalProperties: false
+                required: [match]
+                description: At most one driver per plugin may declare a BLE matcher. A declaration does not grant transport.ble permission.
+                properties:
+                  match:
+                    type: object
+                    additionalProperties: false
+                    minProperties: 1
+                    properties:
+                      name:
+                        type: object
+                        additionalProperties: false
+                        minProperties: 1
+                        maxProperties: 1
+                        description: Case-insensitive predicate; advertised names are not trimmed.
+                        properties:
+                          exact:
+                            type: string
+                            minLength: 1
+                            maxLength: 248
+                          prefix:
+                            type: string
+                            minLength: 1
+                            maxLength: 248
+                          contains:
+                            type: string
+                            minLength: 1
+                            maxLength: 248
+                      serviceUuids:
+                        type: array
+                        minItems: 1
+                        maxItems: 64
+                        description: Any-of services, combined with the name predicate using AND. Unavailable or incomplete metadata remains indeterminate.
+                        items:
+                          type: string
+                          pattern: '^([0-9a-fA-F]{4}|[0-9a-fA-F]{8}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$'
         settings:
           type: object
           description: >
@@ -7621,12 +7851,104 @@ components:
             push:
               $ref: "#/components/schemas/SyncPhaseResult"
 
+    WorkflowContextPatch:
+      type: object
+      description: |
+        The `context` form accepted by `PUT /api/v1/workflow`. The object itself is
+        non-nullable: `{"context": null}` returns `400`, because dropping the whole
+        context would clear `targetYield` too. Omitted fields keep their current
+        value and an explicit `null` clears that one field, with one exception:
+        `targetYield` is non-nullable here, so an explicit `null` returns `400`.
+        The stored and returned form is `WorkflowContext`, where every field
+        including `targetYield` is nullable.
+      properties:
+        targetDoseWeight:
+          type: number
+          format: double
+          nullable: true
+          description: Input dose weight in grams (dry coffee)
+          example: 18.0
+        targetYield:
+          type: number
+          format: double
+          description: |
+            Target output weight in grams (beverage), and the single source of
+            truth for stop-at-weight. Null and 0 both mean stop-at-weight is
+            off, so an explicit null on this field is ambiguous and returns
+            400, as does a value that is not a number. Omit the field to keep
+            the current value, or send 0 to turn stop-at-weight off
+            deliberately. A stored workflow may still hold null here; see
+            `WorkflowContext.targetYield`.
+          example: 36.0
+        targetWaterVolume:
+          type: number
+          format: double
+          nullable: true
+          description: |
+            DE1-integrated machine water volume in milliliters. Overrides the
+            profile targetVolume only for the existing volumetric fallback when
+            no usable scale stop is available. Null inherits the profile target;
+            0 disables volumetric stopping for this workflow.
+          example: 55.0
+        grinderId:
+          type: string
+          nullable: true
+          description: ID of a managed Grinder entity. When set, links to a grinder in /api/v1/grinders.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        grinderModel:
+          type: string
+          nullable: true
+          description: Grinder model name (display string)
+          example: "Niche Zero"
+        grinderSetting:
+          type: string
+          nullable: true
+          description: Current grinder setting value
+          example: "5.2"
+        beanBatchId:
+          type: string
+          nullable: true
+          description: ID of a managed BeanBatch entity. When set, links to a batch in /api/v1/bean-batches.
+          example: "660e8400-e29b-41d4-a716-446655440001"
+        coffeeName:
+          type: string
+          nullable: true
+          description: Coffee bean name (display string)
+          example: "Ethiopia Yirgacheffe"
+        coffeeRoaster:
+          type: string
+          nullable: true
+          description: Coffee roaster name (display string)
+          example: "Square Mile"
+        finalBeverageType:
+          type: string
+          nullable: true
+          description: Beverage classification (e.g., espresso, filter, lungo)
+          example: "espresso"
+        baristaName:
+          type: string
+          nullable: true
+          description: Name of the person pulling the shot
+          example: "Alice"
+        drinkerName:
+          type: string
+          nullable: true
+          description: Name of the person drinking the beverage
+          example: "Bob"
+        extras:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Arbitrary key-value pairs for plugin data or custom fields
+
     WorkflowContext:
       type: object
       description: |
         Unified shot metadata containing dose, grinder, coffee, and people information.
-        All fields are nullable for flexible usage — from minimal (dose only) to full
-        (with entity IDs linking to managed beans/grinders).
+        This is the stored and returned form, in which all fields are nullable for
+        flexible usage — from minimal (dose only) to full (with entity IDs linking to
+        managed beans/grinders). `PUT /api/v1/workflow` validates its `context` against
+        the stricter `WorkflowContextPatch`.
       properties:
         targetDoseWeight:
           type: number
@@ -7638,8 +7960,24 @@ components:
           type: number
           format: double
           nullable: true
-          description: Target output weight in grams (beverage)
+          description: |
+            Target output weight in grams (beverage). It is the single source
+            of truth for stop-at-weight. Null means this workflow sets no
+            weight target, which is the same as 0: stop-at-weight is off, and
+            a machine that stops autonomously has its firmware target set to 0.
+            A stored or returned workflow may therefore legitimately hold null
+            here. A PUT patch may not: see `WorkflowContextPatch.targetYield`.
           example: 36.0
+        targetWaterVolume:
+          type: number
+          format: double
+          nullable: true
+          description: |
+            DE1-integrated machine water volume in milliliters. Overrides the
+            profile targetVolume only for the existing volumetric fallback when
+            no usable scale stop is available. Null inherits the profile target;
+            0 disables volumetric stopping for this workflow.
+          example: 55.0
         grinderId:
           type: string
           nullable: true

@@ -207,6 +207,21 @@ Discovery services use name-based matching via `DeviceMatcher` to create appropr
    - Broadcast stream of discovered devices
    - Updates when new devices found or existing devices disconnect
 
+### BLE discovery cache ownership
+
+`UniversalBleDiscoveryService` owns discovered-device cache entries, not native
+connection teardown. A fresh advertisement preserves cached devices whose state
+is unknown, discovered, connecting, or disconnecting. A cached connected device
+is replaced only when repeated native probes confirm that its link is gone and
+its cache identity and Dart state remain stale across the intervening awaits.
+The final cache-identity and Dart-state validation runs after the last native
+probe, with no await permitted between that validation and removal of the cache
+entry, so a connection transition during the final probe cannot be missed.
+Cache replacement never calls `disconnect(deviceId)`; connection lifecycle
+owners perform native teardown. Disconnect listeners mutate the cache only when
+the emitting device instance still owns that entry, so delayed events from an
+older generation cannot remove its replacement.
+
 ### Android USB attach recovery
 
 `DeviceAttachNotifier` is an optional discovery-service capability.
@@ -743,6 +758,42 @@ sensor is connected, skins can call the `measure` command through the existing
 Sensors API and read TDS, temperature, refractive index, and status values from
 the sensor data stream.
 
+`PluginDeviceService` is a `DeviceDiscoveryService` that contributes sensors
+registered by plugin generations. This keeps plugin-backed sensors on the same
+`DeviceController` → `SensorController` path as native sensors. Public identity
+comes from plugin id, declared driver id, and plugin-local instance id; unload
+removes the retiring generation without changing that identity for a later
+reload. Plugin connection handlers must complete protocol initialization before
+the sensor reports `connected`. Registrations are runtime-only and are not added
+to remembered-device selection.
+
+### Bengle EBus tap
+
+Bengle composite devices (VID `0x2e8a`, PID `0x000a`) may expose a second CDC
+function as the `Bengle EBus Tap` Sensor
+(`lib/src/models/device/impl/sensor/bengle_debug_port.dart`).
+
+- **Identity.** The tap is identified by VID/PID, the exact USB product name
+  `Bengle`, and logical USB interface `2`, never by unstable device paths.
+  VID/PID alone are shared Pico SDK identifiers, so the product name is
+  required to reject other Pico boards. Its ID appends `-if02` to the
+  machine's USB stable ID; interface `0` retains the existing machine ID. Android opens the
+  paired bulk-data interface `3` while preserving logical `if02` identity.
+- **Duplicate descriptors.** When multiple physical Bengle devices report the
+  same USB descriptors, Android appends `UsbDevice.deviceId` to each tap ID for
+  session-level disambiguation and emits at most one machine for the shared
+  stable ID.
+- **Raw tunnel.** Each serial read chunk becomes one snapshot with `bytes`
+  encoded as base64. Decoded chunks reproduce the serial stream exactly;
+  `write` sends the decoded bytes unchanged. ReaPrime adds no framing,
+  capture, compression, or upload behavior.
+- **Transport ownership.** The tap transport asserts DTR and permits one reader.
+  Transport errors leave the Sensor disconnected rather than reconnecting it
+  internally. Other serial-device DTR defaults are unchanged.
+
+Hardware verification steps:
+[`doc/AI_BUILD_NOTES.md`](AI_BUILD_NOTES.md#bengle-ebus-tap-hardware-verification).
+
 ### RememberedDevicesController
 
 **File:** `lib/src/controllers/remembered_devices_controller.dart`
@@ -865,6 +916,10 @@ attach recovery"). Explicit native, REST, and WebSocket scans call
 `idle → connectingMachine → ready` on success. On failure:
 `connectingMachine` is published before the attempt, then phase falls
 through to `scanning` (existing scan path).
+
+Android serial discovery replaces a registry entry when quick-connect detects
+a new device instance with the same `deviceId`, so REST and WebSocket inventory
+never retain the disconnected instance beside its connected replacement.
 
 ### Initial App Startup
 
@@ -1539,7 +1594,6 @@ _log.info('Found serial ports: $ports');
 - `lib/src/models/device/impl/mock_scale/` - Mock scale for testing
 
 ### UI Components
-- `lib/src/permissions_feature/permissions_view.dart` - Initial scan and DE1 selection
 - `lib/src/home_feature/tiles/status_tile.dart` - Connection status display
 - `lib/src/sample_feature/sample_item_list_view.dart` - Device list debugging
 
@@ -1590,6 +1644,45 @@ push fires for the replacement device.
 sequence as normal connection. It receives the same generation and
 device protections — a stale init from an adopted machine is rejected
 identically.
+
+## Plugin BLE Ownership
+
+Plugin Scales with `disconnectToSleep` mark deliberate sleep before disconnecting
+in display-off power mode. Host Scale recovery pauses until an awake machine
+snapshot, just as radio-disconnect power management waits for wake. Protocol
+failure outside deliberate sleep still follows normal recovery policy.
+Intermediate `disconnecting` cleanup preserves the previous connected state for
+terminal disconnect classification; an expected sleep consumes its expectation
+without starting recovery.
+
+The existing BLE discovery service arbitrates plugin ownership before native
+matching, including nameless advertisements, system results, background watch,
+and remembered native quick-connect. Initial scanning waits for plugin loading
+to settle, including failed or disabled plugins. Factories do not perform
+hardware initialization during registration.
+
+On Apple platforms, remembered quick-connect records fresh system-device names
+and services before arbitration, with service evidence still incomplete. Persisted
+remembered names are not fresh ownership evidence on any platform.
+
+One definite plugin match wins only when no other matcher is unresolved. Multiple
+definite matches conflict; missing or incomplete required evidence stays pending.
+A complete observation proving a required field absent is a definite non-match.
+Pending and conflict exclude native fallback and remain visible in BLE diagnostics
+through the normal scan deadline. Evidence is generation-scoped and replaced as
+whole observations, never merged across packets.
+
+Loading or unloading a driver re-evaluates unconnected candidates. Occupied links
+keep their ownership until teardown; native admission and plugin admission both
+reserve the normalized physical ID before connecting. A failed plugin handshake
+does not trigger native fallback in the same attempt. A timed-out teardown retains
+the claim until native disconnection is confirmed. Adapter loss revokes sessions
+without attempting protocol cleanup over a lost link.
+
+Plugin Sensors join the existing SensorController and REST/WebSocket APIs. Their
+public IDs include plugin, driver, and physical identity. Remembered plugin IDs
+are not reconstructed through native quick-connect: fresh discovery must establish
+current ownership. See `doc/Plugins.md` for the session-bound GATT contract.
 
 ## Glossary
 

@@ -204,6 +204,20 @@ class ShotsHandler {
         });
       }
 
+      if (json.containsKey('measurements')) {
+        return jsonBadRequest({
+          "error": "measurements is not editable via this endpoint",
+        });
+      }
+
+      if (json.containsKey('createdAt') || json.containsKey('updatedAt')) {
+        return jsonBadRequest({
+          "error":
+              "createdAt and updatedAt are system-managed and cannot be "
+              "modified via this endpoint",
+        });
+      }
+
       final existingShot = await _controller.storageService.getShot(id);
       if (existingShot == null) {
         return jsonNotFound({"error": "Shot not found"});
@@ -215,6 +229,17 @@ class ShotsHandler {
       );
       _synchronizeLegacyAnnotationAliases(merged);
       merged['id'] = id;
+
+      final contentChanged = !ShotRecord.fromJson(
+        merged,
+      ).sameContent(existingShot);
+      merged['updatedAt'] =
+          (contentChanged
+                  ? DateTime.now().toUtc()
+                  : existingShot.updatedAt ??
+                        existingShot.createdAt ??
+                        existingShot.timestamp)
+              .toIso8601String();
 
       final updatedShot = ShotRecord.fromJson(merged);
       await _controller.updateShot(updatedShot);

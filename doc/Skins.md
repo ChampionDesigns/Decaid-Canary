@@ -64,6 +64,33 @@ backgrounded. After ten minutes in the background, it unloads the page and
 reloads the selected skin when the app returns. Skin state that must survive
 this reload should be persisted through the Decaid API or browser storage.
 
+### Skin Origins and Browser Storage
+
+Each installed skin is served from its own **stable origin** — a port derived
+from the skin's identity and remembered across restarts. Persistent browser
+storage is keyed by origin, so `localStorage` and IndexedDB written by a skin
+are still there the next time the app starts.
+
+`sessionStorage` is not covered by that guarantee. It is scoped to a page
+session, so it is cleared when the page is unloaded — including the background
+unload described above — and it never survives an app restart.
+
+Ports are assigned from 24800 upward. 3000, 4001 and 8080 are reserved, so a
+skin never lands on the entry point, the local listener or the REST API.
+`localhost:3000` remains the entry point and redirects to the skin's own
+origin.
+
+**The fallback, and what it costs.** If a skin's assigned port cannot be bound
+— another process holds it — Decaid retries briefly, then falls back to a
+**temporary origin** for that run. The skin loads and works normally, but
+because the origin differs, **persistent browser storage written under the
+stable origin is not visible**, and anything written during that run is not
+visible after it. Nothing is deleted; it is simply keyed to a different origin.
+
+A skin that must not lose state across such a run should persist it through the
+Decaid API rather than browser storage. The KV endpoints are unaffected by
+origin, because that data lives in the app.
+
 ### Offline Operation
 
 Decaid serves installed skins from `localhost`, so Wi-Fi and internet access
@@ -142,6 +169,15 @@ The snapshot WebSocket sends complete machine state at regular intervals:
 ```
 
 ---
+
+## BLE Reconnect Diagnostics
+
+Diagnostic builds (`--dart-define=diagnostics=true`) bundle the temporary
+`ble-reconnect-diagnostics` skin. It samples `/api/v1/diagnostics/ble`, listens
+to `/ws/v1/devices` and `/ws/v1/machine/snapshot`, guides the sleep and
+scale-power sequence, and exports a timestamped JSON report. The diagnostics
+endpoint is read-only; discovery probes are explicit calls to
+`/api/v1/devices/scan?connect=false` or `connect=true`.
 
 ## Core API Endpoints
 
@@ -262,6 +298,8 @@ Returns current machine state snapshot.
 - `cleaingGroup` - Cleaning group head
 - `cleanSoaking` - Soaking during clean
 - `cleaningSteam` - Steam cleaning
+- `pausedSteam` - Steam paused between pours
+- `puffing` - Steam purge after steam stops
 
 #### Request State Change
 ```http
@@ -557,9 +595,11 @@ Update just the profile:
 
 #### Workflow Data Structure Reference
 
-**WorkflowContext** (recommended — all fields nullable):
+**WorkflowContext** (recommended — all fields nullable, except `targetYield` on a PUT):
 - `targetDoseWeight` (number): Input dose in grams (dry coffee)
-- `targetYield` (number): Target output in grams (beverage)
+- `targetYield` (number): Target output in grams (beverage). Null and `0` both mean
+  stop-at-weight is off, so a PUT refuses an explicit `null` with `400`; send `0` to disable it.
+  A PUT also refuses a whole `"context": null` and a non-numeric `targetYield` with `400`
 - `grinderId` (string): ID of a managed Grinder entity (see Grinders API)
 - `grinderModel` (string): Grinder model name (display string)
 - `grinderSetting` (string): Current grinder setting
