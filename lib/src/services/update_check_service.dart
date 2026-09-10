@@ -60,6 +60,8 @@ class UpdateCheckService {
 
   bool get canInstall => _isAndroid;
 
+  bool get canCheck => !_isMacOS && !externallyManaged;
+
   AppUpdateState _snapshot(
     AppUpdatePhase phase, {
     double? progress,
@@ -91,7 +93,11 @@ class UpdateCheckService {
 
   Future<void> requestCheck() async {
     if (_inProgress) return;
-    await checkForUpdate();
+    try {
+      await checkForUpdate();
+    } catch (e) {
+      _log.fine('Manual update check failed; error state already emitted: $e');
+    }
   }
 
   Future<void> downloadAndInstall() async {
@@ -99,7 +105,12 @@ class UpdateCheckService {
     if (!_isAndroid) return;
 
     if (_availableUpdate == null) {
-      await checkForUpdate();
+      try {
+        await checkForUpdate();
+      } catch (e, st) {
+        _log.warning('Update check before install failed', e, st);
+        return;
+      }
       if (_availableUpdate == null) {
         return;
       }
@@ -152,7 +163,7 @@ class UpdateCheckService {
       final lastCheck = await _settingsService.lastUpdateCheckTime();
       if (lastCheck == null ||
           DateTime.now().difference(lastCheck) > _checkInterval) {
-        await checkForUpdate();
+        await checkForUpdate(quiet: true);
         await _updateManagedContent();
       }
     }
@@ -160,7 +171,7 @@ class UpdateCheckService {
     _periodicTimer?.cancel();
     _periodicTimer = Timer.periodic(_checkInterval, (_) async {
       if (!_isMacOS) {
-        await checkForUpdate();
+        await checkForUpdate(quiet: true);
       }
       await _updateManagedContent();
     });
@@ -192,7 +203,7 @@ class UpdateCheckService {
     }
   }
 
-  Future<UpdateInfo?> checkForUpdate() async {
+  Future<UpdateInfo?> checkForUpdate({bool quiet = false}) async {
     if (externallyManaged) {
       _availableUpdate = null;
       _emit(AppUpdatePhase.idle);
@@ -235,8 +246,16 @@ class UpdateCheckService {
       return updateInfo;
     } catch (e, stackTrace) {
       _log.warning('Error checking for updates', e, stackTrace);
+      if (quiet) {
+        _emit(
+          _availableUpdate != null
+              ? AppUpdatePhase.available
+              : AppUpdatePhase.idle,
+        );
+        return null;
+      }
       _emit(AppUpdatePhase.error, error: 'Update check failed: $e');
-      return null;
+      rethrow;
     }
   }
 
