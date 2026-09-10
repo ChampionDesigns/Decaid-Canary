@@ -571,6 +571,8 @@ paths:
         firmware palette registers and persisted there immediately;
         `frontSwitch` is ignored on write (derived hardware behavior, not
         an independent control). There is no separate commit latch.
+        The 200 body is the canonical palette the machine now holds, not
+        an acknowledgement of the request as sent.
         Returns 404 when the connected machine is not a Bengle.
       tags: [Machine]
       requestBody:
@@ -581,7 +583,26 @@ paths:
               $ref: "#/components/schemas/LedStripState"
       responses:
         "200":
-          description: Configuration accepted and persisted
+          description: |
+            Configuration accepted and persisted. The body is the stored
+            canonical palette, identical to what a following
+            `GET /api/v1/machine/ledStrip` returns: `frontStrip` and
+            `backStrip` quantized to the firmware's 8 bits per channel
+            (low bytes dropped), and `frontSwitch` as the derived switch
+            palette rather than the value sent. The legacy
+            `{"status": "accepted"}` acknowledgement remains as a
+            defensive fallback for a machine implementation that reports
+            no stored palette after the write; no shipped implementation
+            produces it, because the write populates the stored palette.
+            Compatibility: this endpoint previously always answered with
+            that acknowledgement, so a client that reads the 200 body must
+            tolerate a `LedStripState`.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/LedStripState"
+                  - $ref: "#/components/schemas/LedStripAccepted"
         "400":
           description: Invalid request body or malformed JSON
         "404":
@@ -5773,6 +5794,14 @@ components:
             independent switch register: the firmware derives these from
             the front strip, substituting product defaults when the strip
             colour is black. Ignored on write.
+
+    LedStripAccepted:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [accepted]
 
     ZoneLedState:
       type: object

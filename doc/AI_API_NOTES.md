@@ -55,6 +55,35 @@ stalled body. Workflow PUT retains its smaller semantic bounds.
 - Remote sync clients accept legacy flat section maps and structured `sections` responses, but fail closed for missing sections, malformed semantic fields, contradictory declarations, or a hybrid representation.
 - In every sync mode, omitted sections mean all locally registered sections; explicit empty, unknown, or malformed section lists are rejected before network activity.
 
+## LED Strip PUT Response Shape
+
+`PUT /api/v1/machine/ledStrip` answers with the stored canonical palette rather
+than a write acknowledgement. The request value and the stored value are not the
+same thing on this endpoint: the firmware holds 8 bits per RGB channel, so the
+app quantizes before writing, and `frontSwitch` has no register of its own and is
+derived from the front strip. An acknowledgement therefore could not tell a caller
+what the machine actually holds, and a client had to issue a second GET to find
+out. The 200 body is now byte-identical to that GET.
+
+The acknowledgement survives as a defensive fallback for a machine implementation
+that reports no stored palette after the write, which is why the spec documents the
+200 as an `anyOf`. No shipped implementation produces that branch: every
+implementation populates the stored palette on the success path of the write, so a
+failed hydration is repaired by the write rather than surfaced here. Both branches
+are covered in `test/services/webserver/de1handler_led_strip_test.dart`, the
+fallback through a test double that reports no state at all.
+
+This is a deliberate divergence from the sibling `PUT /api/v1/machine/cupWarmer`,
+which still returns `{"status": "accepted"}`. Only the ledStrip endpoint moved;
+there is no repo-wide convention change. Cup-warmer writes are stored as sent, so
+an echo would carry no information the caller does not already have.
+
+The canonicalisation itself lives in one place, `LedStripState.canonical()` in
+`lib/src/models/device/led_strip.dart`. The real capability, `MockBengle` and
+`MockReplayDe1` all route their writes through it, and the replay mock seeds its
+starting palette with it too, so a mock cannot hold or store a palette the machine
+could not produce.
+
 ## WebSocket Conventions
 
 - WebSocket topics are path-based: `/ws/v1/machine/state`, `/ws/v1/machine/shotState`, `/ws/v1/scale/snapshot`, etc.
