@@ -165,9 +165,10 @@ null range, because an omitted one is stored as 0.
 property from `required` permits omission only; without `nullable` the published
 contract would still refuse the explicit null the parser accepts.
 
-`POST /api/v1/profile` used to answer such a body with a 500 while `PUT` answered
-400: a limiter carrying only a `value` threw a `TypeError`, and only the update
-path caught it. Both now catch it and answer 400.
+`POST /api/v1/profiles` used to answer such a body with a 500 while
+`PUT /api/v1/profiles/{id}` answered 400: a limiter carrying only a `value` threw
+a `TypeError`, and only the update path caught it. Both now catch it and answer
+400.
 
 ## Keeping Notes Fresh
 
