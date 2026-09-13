@@ -8,10 +8,11 @@ example.
 
 ## Instance ownership
 
-- `create()` must return an independent driver instance for one physical
-  device. Every timer, subscription, pending read, callback, connection
-  context, publication state, command state, and generation belongs to that
-  instance.
+- For BLE drivers, `create()` must return an independent driver instance for
+  one physical device. Every timer, subscription, pending read, callback,
+  connection context, publication state, command state, and generation belongs
+  to that instance. Sensor registrations use the same per-instance ownership
+  rule in their `onLoad` and registration state.
 - A plugin must support two physical devices with the same model or driver at
   the same time. Never key mutable state only by model, driver id, or a single
   module-level `active` value.
@@ -35,14 +36,13 @@ subscriptions; sibling bindings from the same plugin remain active. Unloading
 a whole plugin generation retires all of its bindings, while bindings owned by
 other plugins remain active.
 
-## Future dosing controls
+## Dosing controls
 
-`DosingScaleController` from #834 is not merged into `main`. Do not describe it
-as an existing production API or implement a speculative role map. When a
-plugin integrates dosing controls, verify the live accepted design and exact
-#834 compatibility contract, preserve its separate review boundary, and retain
-the reserved dosing physical ID, external-dosing exclusion, and Bengle
-integrated-scale ownership.
+`DosingScaleController` owns the configured dosing role and its
+`/api/v1/scale/dosing/*` routes. A plugin integrating dosing controls must use
+the accepted role contract, retain the reserved dosing physical ID, external-
+dosing exclusion, and Bengle integrated-scale ownership, and keep dosing
+publication separate from the brewing scale.
 
 Role routing is explicit: circle tares only the originating currently assigned
 scale role; square is a brewing-role action only, and does nothing for a dosing
@@ -70,3 +70,9 @@ When working on scale buttons or dosing, also cover brewing and dosing
 reservations, circle-origin tare, brewing-only square routing, same-ID
 reconnect, and queued machine replacement. When working on E64 sensors, also
 cover two E64 instances alongside brewing/dosing scales and a milk probe.
+
+For per-device plugin settings, declare a driver `settingsEndpoint` that names
+an `api` HTTP endpoint. The native Device Management page routes that action to
+`/api/v1/plugins/:id/:endpoint` with `ui=1`, `deviceId`, and `deviceName`; the page
+uses `url_launcher` with `LaunchMode.inAppBrowserView`, while the plugin owns
+validation and persistence.
