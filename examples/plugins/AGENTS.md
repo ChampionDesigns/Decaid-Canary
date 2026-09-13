@@ -13,9 +13,11 @@ example.
   connection context, publication state, command state, and generation belongs
   to that instance. Sensor registrations use the same per-instance ownership
   rule in their `onLoad` and registration state.
-- A plugin must support two physical devices with the same model or driver at
-  the same time. Never key mutable state only by model, driver id, or a single
-  module-level `active` value.
+- A single-device stage must still keep one physical instance's state isolated
+  and reject a second binding under the existing device quota. When concurrent
+  same-model support is introduced, the plugin must support two physical
+  devices at the same time. Never key mutable state only by model, driver id,
+  or a single module-level `active` value.
 - Persisted settings and published data use the physical identity supplied by
   the host. Reconnecting or retiring one binding must not alter its sibling.
 
@@ -59,14 +61,15 @@ test tiers. Keep outside-in test-first ordering: start at public plugin/API
 behavior, then cover multi-instance integration, then unit parsing and command
 details.
 
-For every plugin, cover zero, one, and two same-model instances; different
-physical IDs; concurrent connections; per-instance state; disconnect,
-reconnect, and binding retirement while a sibling stays active; stale
-callbacks; permission revocation; quotas; and whole-plugin unload isolation.
-Use deterministic fake GATT and two simulator instances where the host
-boundary is under test. Add command, timer, settings, and publication cases
-when the plugin declares those contracts, and report real hardware validation
-separately.
+For an initial single-device stage, cover zero and one instance, a second
+binding rejected under the existing quota, the physical ID, per-instance
+state, disconnect, reconnect, stale callbacks, permission revocation, and
+whole-plugin unload isolation. When concurrent same-model support is added,
+expand the matrix to two physical IDs, concurrent connections, and retirement
+of one binding while its sibling stays active. Use deterministic fake GATT and
+two simulator instances only when the host boundary supports that concurrent
+case. Add command, timer, settings, and publication cases when the plugin
+declares those contracts, and report real hardware validation separately.
 
 When working on scale buttons or dosing, also cover brewing and dosing
 reservations, circle-origin tare, brewing-only square routing, same-ID

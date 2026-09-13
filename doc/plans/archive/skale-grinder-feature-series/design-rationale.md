@@ -2,6 +2,20 @@
 
 This document records the architecture decisions behind the new feature series. It is a lasting rationale archive, not an implementation checklist.
 
+## Phase ordering
+
+The first Skale driver stage is single-device and depends on metadata draft
+#844 plus the reworked brewing-only actions draft #845. It excludes host
+multi-binding prerequisites #843 and the external dosing contract #834. This
+stage retains per-physical-instance state and reconnect/session fencing, and it
+must reject a second binding under the existing device quota.
+
+A subsequent Skale multi-device draft depends on the accepted first stage,
+#843, and #834. It restores the dosing projection and role checks, then adds
+two independent same-model instances and the concurrent binding matrix. The
+generic native settings entry in #849 remains later and continues to call the
+plugin-owned endpoint and persistence authority.
+
 ## Ownership and identity
 
 Dart owns discovery, physical I/O, permissions, binding lifetime, teardown, reconnect, quotas, and host routing. JavaScript owns protocol parsing, per-instance timers and callbacks, plugin settings, and device-specific button policy. A same-model device is still a distinct physical/public instance: mutable state, settings, metadata, callbacks, request IDs, and connection epochs are never keyed only by model or driver.
