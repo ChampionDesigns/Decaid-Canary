@@ -58,8 +58,8 @@ sleeping start path and no retry against a replacement session.
 
 Write behavior tests before implementation and choose the smallest applicable
 test tiers. Keep outside-in test-first ordering: start at public plugin/API
-behavior, then cover multi-instance integration, then unit parsing and command
-details.
+behavior, then cover instance integration when concurrent support is
+introduced, then unit parsing and command details.
 
 For an initial single-device stage, cover zero and one instance, a second
 binding rejected under the existing quota, the physical ID, per-instance
@@ -71,10 +71,11 @@ two simulator instances only when the host boundary supports that concurrent
 case. Add command, timer, settings, and publication cases when the plugin
 declares those contracts, and report real hardware validation separately.
 
-When working on scale buttons or dosing, also cover brewing and dosing
-reservations, circle-origin tare, brewing-only square routing, same-ID
-reconnect, and queued machine replacement. When working on E64 sensors, also
-cover two E64 instances alongside brewing/dosing scales and a milk probe.
+When working on scale buttons, cover circle-origin tare, brewing-only square
+routing, same-ID reconnect, and queued machine replacement. When integrating
+dosing, also cover brewing and dosing reservations and the dosing-role tare
+and square exclusions. When working on E64 sensors, also cover two E64
+instances alongside brewing/dosing scales and a milk probe.
 
 For per-device plugin settings, draft PR #849 proposes declaring a driver
 `settingsEndpoint` that names an `api` HTTP endpoint. Verify the live accepted
