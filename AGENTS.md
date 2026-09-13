@@ -100,6 +100,7 @@ GitHub Issues on `decentespresso/decaid` is the canonical issue tracker. Use `gh
 ## Deep References
 
 - Fast file routing: `doc/AI_REPO_MAP.md`.
+- Example plugin guidance: `examples/plugins/AGENTS.md`.
 - BLE footguns, transport threading, connection lifecycle: `doc/AI_BLE_NOTES.md`.
 - Device-specific hardware, protocols, and firmware behavior: `doc/device-notes/`.
 - Build, flash, simulate, platform quirks: `doc/AI_BUILD_NOTES.md`.
