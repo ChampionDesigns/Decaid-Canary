@@ -1,6 +1,6 @@
 # Plugin scale and grinder feature-series rationale
 
-This document records the architecture decisions behind the new feature series. It is rationale for later archival, not an implementation checklist.
+This document records the architecture decisions behind the new feature series. It is a lasting rationale archive, not an implementation checklist.
 
 ## Ownership and identity
 

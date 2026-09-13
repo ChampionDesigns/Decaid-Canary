@@ -38,11 +38,13 @@ other plugins remain active.
 
 ## Dosing controls
 
-`DosingScaleController` owns the configured dosing role and its
-`/api/v1/scale/dosing/*` routes. A plugin integrating dosing controls must use
-the accepted role contract, retain the reserved dosing physical ID, external-
-dosing exclusion, and Bengle integrated-scale ownership, and keep dosing
-publication separate from the brewing scale.
+The proposed `DosingScaleController` contract and its
+`/api/v1/scale/dosing/*` routes are tracked in draft PR #834 and the guarded
+actions draft #845; they are not asserted as current upstream APIs. Before
+integrating dosing controls, verify the live accepted design and exact branch
+contract. Retain the reserved dosing physical ID, external-dosing exclusion,
+and Bengle integrated-scale ownership, and keep dosing publication separate
+from the brewing scale.
 
 Role routing is explicit: circle tares only the originating currently assigned
 scale role; square is a brewing-role action only, and does nothing for a dosing
@@ -71,8 +73,9 @@ reservations, circle-origin tare, brewing-only square routing, same-ID
 reconnect, and queued machine replacement. When working on E64 sensors, also
 cover two E64 instances alongside brewing/dosing scales and a milk probe.
 
-For per-device plugin settings, declare a driver `settingsEndpoint` that names
-an `api` HTTP endpoint. The native Device Management page routes that action to
-`/api/v1/plugins/:id/:endpoint` with `ui=1`, `deviceId`, and `deviceName`; the page
-uses `url_launcher` with `LaunchMode.inAppBrowserView`, while the plugin owns
-validation and persistence.
+For per-device plugin settings, draft PR #849 proposes declaring a driver
+`settingsEndpoint` that names an `api` HTTP endpoint. Verify the live accepted
+branch contract before relying on it. When available, the native Device
+Management page routes that action to `/api/v1/plugins/:id/:endpoint` with
+`ui=1`, `deviceId`, and `deviceName`; the page uses `url_launcher` with
+`LaunchMode.inAppBrowserView`, while the plugin owns validation and persistence.
