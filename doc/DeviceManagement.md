@@ -1,5 +1,20 @@
 # Device Management in Decaid
 
+## Scale connection ownership
+
+ScaleController owns the single primary scale used by brewing and shot logic.
+Additional scales are runtime-only auxiliary sessions in the auxiliary scale
+registry. Auxiliary sessions have no persisted preference or Decaid role; an
+explicit API client selects a discovered device and supplies the auxiliary
+connection role. Primary automatic selection excludes reserved auxiliary IDs.
+Disconnect releases only that auxiliary reservation after transport cleanup.
+
+When a Bengle is primary, automatic external primary-scale selection remains
+disabled and the integrated Bengle scale remains the ScaleController scale.
+Explicit auxiliary discovery and connection still use the normal device scanner
+and may connect an external scale concurrently. Auxiliary snapshots and tare
+commands never enter ShotSequencer or stop-at-weight logic.
+
 This document explains how devices (DE1 machines, scales, sensors) are discovered, connected, and managed throughout the Decaid application lifecycle.
 Open the management page from Settings > Devices or from the dashboard.
 
@@ -85,9 +100,44 @@ Discovery services are responsible for scanning and creating device instances. E
   - `lib/src/services/serial/serial_service_android.dart` (Android)
   - `lib/src/services/serial/serial_service.dart` (factory)
 - **Discovery:** Enumerates serial ports, probes for device identification
-- **Device protocols:** See [`device-notes/de1.md`](device-notes/de1.md),
-  [`device-notes/bengle.md`](device-notes/bengle.md), and
-  [`device-notes/scales.md`](device-notes/scales.md).
+- **Desktop serial identity:** One canonical id is resolved once per enumerated port: `usb-{vid}-{pid}-{serial}` (plus `-ifNN` for interfaces above 0) when USB descriptors are available, otherwise `serial-<basename>`. Candidates are deduplicated before probing, so a macOS adapter exposed as both `/dev/cu.X` and `/dev/tty.X` appears once and `/dev/cu.X` is the endpoint probed. The resolved id is injected into the transport and is the value used for scan dedup, `Device.deviceId`, remembered devices and API inventory. `serial-<basename>` stays accepted as a legacy quick-connect alias; after a successful alias connect the remembered record and `preferredMachineId` migrate to the canonical id. Android keeps its existing `UsbDevice.deviceId`-suffixed identities.
+- **HDS USB readiness:** `HDSSerial` enables the 10 Hz OpenScale binary stream and remains `connecting` until a checksum-valid weight frame arrives. Its buffered decoder accepts fragmented/coalesced frames mixed with firmware text; only valid weight frames refresh the watchdog.
+
+  DE1-family detection uses product names and the normal protocol probe:
+  1. Exact `productName == "DE1"` creates `UnifiedDe1`; exact
+     `productName == "Bengle"` creates `Bengle`.
+  2. Devices admitted by the existing generic serial-name rules are opened and
+     identified through the normal `v13Model` MMR read. Bengle model values
+     create `Bengle`; stock-DE1 values create `UnifiedDe1`.
+
+  USB VID/PID values do not participate in Bengle recognition. Devices whose
+  descriptors match neither a known product name nor the generic serial-name
+  rules are outside the current discovery policy.
+
+  Serial protocol parity rules:
+  - `<F>` (`writeToMMR`) frames are exactly 20 bytes. Short payloads are
+    zero-padded without changing their length byte; oversized payloads fail.
+  - One-shot A/J/R reads use temporary `<+X>` subscriptions correlated by
+    representation and always attempt `<-X>` cleanup.
+  - Persistent reads return only observed wire data or explicit local state
+    recorded after a successful write. They never return seeded zero buffers.
+  - After Bengle identity is confirmed, serial enables the `S` (`0xA013`)
+    telemetry stream and disables the redundant `M` (`0xA00D`) stream. Plain
+    DE1 machines remain on `M`.
+  - Missing observed data is temporarily unavailable; endpoints without a
+    serial representation are unsupported. These are distinct errors.
+  - Notification liveness uses the existing snapshot watchdog and normal
+    `ConnectionManager` reconnect lifecycle. Serial has no separate keepalive
+    or reconnect loop.
+  - A DE1 pushes `K` (shot settings) only when the settings change, and
+    hardware verification on a stock DE1 over USB showed it never pushes a
+    `[K]` on connect, re-arm or write. The app therefore owns the frame on
+    serial: `UnifiedDe1Transport` keeps a local mirror of the 9-byte shot
+    settings (stock firmware defaults initially, refreshed by live `[K]`
+    frames and by every `updateShotSettings` write) and seeds the
+    shot-settings subject from it right after `<B>02`. `De1Controller`'s
+    initial read therefore succeeds and startup defaults (including
+    configured steam duration) are applied without any machine cooperation.
 
 ### Bengle firmware-synced state (post-connect)
 
@@ -655,6 +705,8 @@ Future<void> connectToDe1(De1Interface de1Interface) async {
 
 Device implementations define their own readiness gate before `ScaleController`
 adopts them. See [`device-notes/scales.md`](device-notes/scales.md).
+
+Decent Scale sleep is capability-gated but never intentionally disconnects a healthy link. After a connection is confirmed the scale runs an unawaited profile negotiation: the canonical LED ON/status command (`0A 01`, heartbeat byte `00`) followed by the HDS `0x22` voltage probe. Only a valid `0x22` response promotes the connection to Half Decent Scale capabilities (extended commands and power off). `displayOff` sends the shared `0A 00` display-off command and keeps the connection for unknown, original and pre-modern HDS scales; proven HDS SoftSleep (`0A 04`) is attempted first and falls back to `0A 00` on failure. Wake restores the same connection (`0A 01`, or `0A 04 00` then `0A 01` after SoftSleep). Decent Scale no longer advertises `DisconnectToSleepScale`, so `De1StateManager` does not mark it sleeping on machine sleep. Power-off is withheld unless the profile proves support. Capabilities are re-confirmed on every physical connection and are discarded if a response arrives after a reconnect.
 
 **Connection Flow:**
 ```dart

@@ -38,21 +38,30 @@ subscriptions; sibling bindings from the same plugin remain active. Unloading
 a whole plugin generation retires all of its bindings, while bindings owned by
 other plugins remain active.
 
-## Dosing controls
+## Primary and auxiliary scale connections
 
-The proposed `DosingScaleController` contract and its
-`/api/v1/scale/dosing/*` routes are tracked in draft PR #834 and the guarded
-actions draft #845; they are not asserted as current upstream APIs. Before
-integrating dosing controls, verify the live accepted design and exact branch
-contract. Retain the reserved dosing physical ID, external-dosing exclusion,
-and Bengle integrated-scale ownership, and keep dosing publication separate
-from the brewing scale.
+The connected primary scale remains the singular brewing scale. Additional
+connections are generic runtime-only auxiliary devices under the architecture
+decision in [#833](https://github.com/decentespresso/decaid/issues/833). A
+client may use an auxiliary connection for dosing, grinder comparison, or
+diagnostics, but Decaid does not persist `dosingScaleId`, define a dosing role,
+or add `/api/v1/scale/dosing/*` routes. The later multi-device work in #859 is
+the consumer of the generic auxiliary registry supplied by a separate core/API
+change; #843 supplies the bounded host binding capability and #858 supplies
+the opaque-ID route boundary.
 
-Role routing is explicit: circle tares only the originating currently assigned
-scale role; square is a brewing-role action only, and does nothing for a dosing
-role. Keep the documented machine-state, generation, identity, and GHC checks
-at command dispatch and immediately before the machine write. There is no
-sleeping start path and no retry against a replacement session.
+The #846 single-device Skale stage stays independently reviewable on the
+primary brewing path. Guarded machine actions from #845 are primary-only:
+auxiliary connections cannot invoke them. In that stage, circle is a tare for
+the active primary scale. In the later multi-device stage, circle follows the
+active primary or auxiliary binding, while brewing square remains primary-only
+and follows the documented machine-state, generation, identity, and GHC checks
+at dispatch and immediately before the machine write. There is no sleeping
+start path or retry against a replacement session.
+
+The earlier #834 `DosingScaleController` proposal is historical context and is
+superseded by [#833](https://github.com/decentespresso/decaid/issues/833). Do
+not use it as a current host or plugin contract.
 
 ## Required verification matrix
 
@@ -65,17 +74,20 @@ For an initial single-device stage, cover zero and one instance, a second
 binding rejected under the existing quota, the physical ID, per-instance
 state, disconnect, reconnect, stale callbacks, permission revocation, and
 whole-plugin unload isolation. When concurrent same-model support is added,
-expand the matrix to two physical IDs, concurrent connections, and retirement
-of one binding while its sibling stays active. Use deterministic fake GATT and
+expand the matrix to one primary plus at least two auxiliary physical IDs,
+concurrent primary/auxiliary connections, release of an auxiliary binding back
+to primary eligibility after disconnect, and retirement of one binding while its sibling stays
+active. Use deterministic fake GATT and
 two simulator instances only when the host boundary supports that concurrent
 case. Add command, timer, settings, and publication cases when the plugin
 declares those contracts, and report real hardware validation separately.
 
-When working on scale buttons, cover circle-origin tare, brewing-only square
-routing, same-ID reconnect, and queued machine replacement. When integrating
-dosing, also cover brewing and dosing reservations and the dosing-role tare
-and square exclusions. When working on E64 sensors, also cover two E64
-instances alongside brewing/dosing scales and a milk probe.
+When working on scale buttons, cover primary circle tare, auxiliary circle
+binding, primary-only square routing, same-ID reconnect, and queued machine
+replacement. Do not add tests for
+a persisted dosing role or dosing-specific endpoint. When working on E64
+sensors, cover two E64 instances alongside the primary/auxiliary scale
+connections and a milk probe.
 
 For per-device plugin settings, draft PR #849 proposes declaring a driver
 `settingsEndpoint` that names an `api` HTTP endpoint. Verify the live accepted

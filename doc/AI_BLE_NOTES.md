@@ -1,5 +1,18 @@
 # AI BLE Notes
 
+## Concurrent scale ownership
+
+ScaleController remains the primary scale owner. Auxiliary scales are held by a
+runtime registry keyed by device ID, with one physical device claim at a time.
+Claims reserve IDs before asynchronous connect work, retain closing reservations
+until subscriptions and transport cleanup settle, and release only the owning
+session. Auxiliary sessions forward device snapshots independently and do not
+feed shot or primary-scale state.
+
+The primary policy filters auxiliary reservations from automatic and picker
+selection. Explicit auxiliary connection is a separate intent and remains
+available while automatic Bengle primary selection skips external scales.
+
 Read this when changing BLE transport, scanning, connection lifecycle, GATT error handling, or transport abstractions. Skip it for pure REST/WS, UI, profile, or plugin changes.
 
 ## Source Of Truth
@@ -162,6 +175,36 @@ This behavior depends on DE1 firmware. See
 
 **Field triage:** `ScaleWatch` logs sightings at INFO. `Background device watch started` with no `Preferred scale … sighted` → scan/screen problem (this footgun, or unfiltered-scan screen-off suspension). `sighted` with no connect → connect-path problem.
 
+## Decent Scale / HDS Profile Negotiation (#839)
+
+**Symptom:** An original full-height Decent Scale connects and streams weight, then drops with Android GATT 133 during a periodic write; repeated disconnects shortly after the DE1 enters sleep.
+
+**Root cause:** `DecentScale` mixed the shared Decent protocol with HDS-only behaviour — unconditional HDS SoftSleep (`0A 04`), a LED/status write every other 4s maintenance tick, and a trailing heartbeat byte of `01` on tare while heartbeat support is disabled.
+
+**Design:** identity is evidence, capabilities control behaviour. `profile.dart` holds `DecentScaleIdentity`, `DecentScaleCapabilities`, and pure frame parsers; a connection starts conservative and only widens on positive protocol evidence.
+
+- A `0x0A` status response or a 10-byte timestamped weight frame identifies an original Decent Scale (the timestamped variant adds power off and drops the unreliable command buffer).
+- Only a valid `0x22` voltage response promotes to HDS, and that alone grants extended commands and power off, not SoftSleep. HDS firmware v2.5.8 introduced `0x22` but SoftSleep only arrived in v2.6.3, so a voltage probe is not evidence of SoftSleep.
+- SoftSleep is gated separately on trustworthy modern firmware: HDS identity plus a decoded firmware version with major `>= 3`. HDS firmware before 3.0.1 does not report a version at all, so those scales use the shared display-off command while staying connected, rather than risk a `0A 04` they may not understand.
+- Display off, HDS SoftSleep, power off and BLE disconnect are separate. `ScalePowerMode.displayOff` never disconnects a healthy Decent Scale: original, unknown and pre-modern HDS scales all use the shared `0A 00` display-off command and keep weighing.
+- Unidentified scales stay conservative: shared weighing/tare/timer and shared display-off only, never `0A 04`, never power off.
+
+**Rules that came out of this:**
+
+- Maintenance is read-only. No periodic LED/status writes; notification age alone drives re-subscribe (12s) and disconnect (20s).
+- No heartbeat subsystem at all; every heartbeat-control byte is `00`.
+- Negotiation is unawaited so `connected` is still published promptly. Evidence is guarded by a profile-attempt token that is bound into the notification callback and re-armed on every connect and wake, so a late status/voltage frame after sleep, or a stale initialization attempt, cannot promote capabilities on a newer connection. Connection ownership uses a separate connection-attempt token: a superseded `onConnect()` returns before it can cancel the live transport listener or the maintenance loop.
+- Nonessential writes (LED/status, SoftSleep, power off) tolerate transient failures while notifications are still arriving; tare/timer still fail loudly.
+- Sleep never intentionally disconnects a healthy link. `displayOff` sends the shared `0A 00` command and retains the connection; proven HDS SoftSleep is attempted first and falls back to `0A 00` on failure. A failed display-off write is logged and the connection kept - only the transport watchdog tears down a genuinely dead link. Field report #874 showed the old disconnect-on-sleep policy churning a healthy original v1.1 scale after a 30-minute session.
+- Wake restores the same physical connection: `0A 01` LED-on for display-off, `0A 04 00` plus `0A 01` for SoftSleep. Capabilities are re-established only on a genuinely new connection, never merely because the display was toggled.
+- The 50ms duplicate write from the canonical de1app is applied only to profiles with the unreliable command buffer (7-byte weight frames).
+
+**Firmware decode:** status byte 5 is decoded against `{0xFE: 1.0, 0x02: 1.1, 0x03: 1.2}` (the public `pydecentscale` client's table, consistent with the plan's `original-fw=0x02 -> fw=1.1` example). Only v1.0 needs the 50ms duplicate command; only v1.2 supports power off. A timestamped 10-byte weight frame independently proves v1.2+. An unrecognised marker stays conservative.
+
+For modern HDS the same bytes 5-6 are a version: byte 5 is BCD (`majorTens << 4 | majorUnits`), byte 6 packs `minor << 4 | patch`. The low nibbles are raw 0-15, not decimal BCD digit pairs, so 3.1.14 legitimately arrives as `0x03 0x1E`. The 10-byte weight frame's `timestampMillis` is decisecond-resolution on the wire (`minute*600 + second*10 + decisecond`) and is scaled to milliseconds in the parser.
+
+**Known gap:** the marker table comes from a third-party client, not from Decent firmware source. Sub-version labelling needs confirmation against the original full-height hardware before the duplicate/power-off gates are trusted in the field.
+
 ## Gone-Device Error Handling
 
 `UniversalBleTransport._handleGattError()` catches `UniversalBleException` with gone-device codes:
@@ -238,8 +281,27 @@ This behavior is firmware-specific. See
 
 ## Comms-Layer Patterns
 
-Named scale protocols, readiness gates, and maintenance behavior live in
-[`device-notes/scales.md`](device-notes/scales.md).
+An awake Decent Scale connection requires a recognised FFF4 status or weight frame after subscription and a status request. Two seconds of silence triggers one immediate re-subscribe and status request; a second silent window tears down the transport without sending the physical power-off command so ConnectionManager owns the next reconnect. A deliberately sleeping reconnect only restores the subscription while remaining dark and defers the same readiness probe until wake.
+
+Acaia parsing is frame-bounded. Payload lengths above 64 bytes and impossible lengths for known settings or weight events trigger header resynchronization; complete unsupported frames are consumed whole so embedded `EF DD` bytes cannot become top-level frames. Only accepted settings, weight, or timer frames refresh liveness. Event 11 selector 5 carries weight, while selector 7 is timer data. Connection readiness requires a decoded valid weight rather than an arbitrary notification.
+
+AtomHeart Eclair uses service `B905EAEA-2E63-0E04-7582-7913F10D8F81`, data/status characteristic `AD736C5F-BBC9-1F96-D304-CB5D5F41E160`, and command characteristic `4F9A45BA-8E1B-4E07-E157-0814D393B968`. Its connection remains `connecting` until a valid checksummed `0x57` weight frame arrives. Silence for 800 ms resets the notification subscription at most twice; a third silent window tears down the transport so ConnectionManager owns recovery. Timer reset/start/stop commands are `520101`, `530101`, and `450101`; tare remains `540101`.
+
+Eclair battery notifications use the command characteristic. Current firmware sends the 3-byte frame `42 <level> <xor>`, while legacy firmware may send the 5-byte frame `42 <level> <reserved> <reserved> <xor>`. In both forms, the XOR covers every payload byte between the header and checksum, and the first payload byte is the battery percentage from 0 through 100.
+
+A readiness gate that only reports "timed out" cannot be diagnosed from a user log. The Eclair connect timeout names how many notifications arrived and the last frame that failed validation, which separates a dead subscription (zero notifications, a CCCD or GATT problem) from a frame format the parser rejects (notifications arriving, none accepted). Issue #629 was closed without a root cause for want of exactly that distinction.
+
+A characteristic advertises write-with-response, write-without-response, or both, and the requested type must match. CoreBluetooth rejects a mismatch locally, before any radio traffic: universal_ble surfaces `characteristicDoesNotSupportWrite` or `characteristicDoesNotSupportWriteWithoutResponse` in single-digit milliseconds. The Eclair command characteristic is write-with-response only on current firmware, so every `540101` tare issued as write-without-response failed instantly (issue #780). `AtomheartScale` therefore issues its commands with response; the device contract belongs at the caller.
+
+The two ATT write procedures are not equivalent, so the transport never substitutes one for the other freely. A write request is acknowledged and has a server error path; a write command is not and does not. `UniversalBleTransport.write` retries in one direction only: a write the caller asked to send unacknowledged that the platform rejects for its property is retried once with response, which adds an acknowledgement the caller did not ask for but never removes one it did. A rejected write-with-response is surfaced as-is, never downgraded.
+
+The retry cannot duplicate a command. Darwin, Android, and Windows all validate the requested property against the GATT database and return the error before dispatching anything to the radio, so a rejected write never reached the device. BlueZ does not report these codes at all and never enters the retry path. A write that the platform accepts is issued exactly once, with the property the caller asked for.
+
+`_handleGattError` must log before it rethrows. An unmapped `UniversalBleException` used to escape silently, which is why #780 reached the tracker as a bare HTTP 500 with no cause anywhere in the log. REST handlers that turn an exception into a 500 body must log it too; a response body the user never sees is not evidence.
+
+The Eclair weight frame is fixed at exactly 10 bytes: `0x57` header, four little-endian weight bytes in milligrams, four timer bytes, and one XOR checksum over bytes 1 to 8. Accept only that exact width. A shorter frame makes the last payload byte double as the checksum, so `57 00 00 00 00 00 00 00 00` would otherwise XOR-validate as a zero-weight snapshot and satisfy the readiness gate.
+
+Scale maintenance uses self-scheduling one-shot timers and owns each asynchronous operation before scheduling another cycle. Do not perform asynchronous BLE writes directly from `Timer.periodic`; that permits overlap and leaves failures unowned. Decent notification recovery remains single-flight across connection generations, so reconnect waits for an unresolved prior subscription operation.
 
 Three reusable idioms from the comms-harden effort:
 

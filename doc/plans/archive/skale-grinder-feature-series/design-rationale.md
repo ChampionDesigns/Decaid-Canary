@@ -4,17 +4,27 @@ This document records the architecture decisions behind the new feature series. 
 
 ## Phase ordering
 
-The first Skale driver stage is single-device and depends on metadata draft
-#844 plus the reworked brewing-only actions draft #845. It excludes host
-multi-binding prerequisites #843 and the external dosing contract #834. This
-stage retains per-physical-instance state and reconnect/session fencing, and it
-must reject a second binding under the existing device quota.
+The first Skale driver stage (#846) is single-device and depends on metadata
+#844 plus the primary-scale machine-action contract in #845. It is independently
+reviewable and excludes host multi-binding #843 and the superseded dosing draft
+#834. This stage retains per-physical-instance state and reconnect/session
+fencing, and rejects a second binding under the existing one-binding quota.
 
-A subsequent Skale multi-device draft depends on the accepted first stage,
-#843, and #834. It restores the dosing projection and role checks, then adds
-two independent same-model instances and the concurrent binding matrix. The
-generic native settings entry in #849 remains later and continues to call the
-plugin-owned endpoint and persistence authority.
+A later multi-device stage (#859) depends on the accepted single-device stage,
+the bounded host capability in #843, the opaque-ID routing boundary in #858,
+and the primary/auxiliary decision in #833. It consumes the generic
+runtime-only auxiliary connection registry supplied by the separate core/API
+change and covers independent same-model instances. A client may use an
+auxiliary connection for dosing, grinder comparison, or diagnostics; Decaid
+does not persist a dosing selection or expose a dosing-specific role or
+endpoint. The generic native settings entry in #849 remains a separate,
+client-facing settings surface and does not own connection roles.
+
+The earlier #834 proposal for `DosingScaleController`, `dosingScaleId`, and
+`/api/v1/scale/dosing/*` is retained as historical context only. The later
+maintainer decision in [#833](https://github.com/decentespresso/decaid/issues/833)
+supersedes that shape; no current series stage may treat it as an accepted
+dependency.
 
 ## Ownership and identity
 
@@ -22,7 +32,14 @@ Dart owns discovery, physical I/O, permissions, binding lifetime, teardown, reco
 
 The host's bounded multi-binding registry is therefore a prerequisite for two identical Skale devices. Connected firmware and battery metadata is session-scoped and uses the existing narrow scale-info projection. `PluginProtocolDevice.connectionId` is a typed identity for the active plugin connection; it is not an inventory extension and does not carry USB provenance. Retired sessions lose publication authority before a replacement can publish.
 
-Guarded machine actions carry an expected machine identity and connection generation plus the originating role, public device ID, connection ID, and selection generation. The queued start rechecks those values, machine state, definite GHC state, and gateway mode before writing. Stop bypasses the command queue and the full-gateway start restriction; the hardware request itself remains asynchronous. A stop advances the shared cancellation epoch so an older queued start cannot issue a later espresso request after the stop. The generic API consumes the exact external DosingScaleController contract; it does not invent a role registry or replace that controller.
+Guarded machine actions are primary-scale actions. They carry the expected
+machine identity and connection generation, public device ID, connection ID,
+and selection generation. The queued start rechecks those values, machine
+state, definite GHC state, and gateway mode before writing. Auxiliary
+connections cannot invoke the machine-action contract. Stop bypasses the
+command queue and the full-gateway start restriction; the hardware request
+itself remains asynchronous. A stop advances the shared cancellation epoch so
+an older queued start cannot issue a later espresso request after the stop.
 
 ## Settings authority
 
@@ -30,7 +47,16 @@ USB power is an explicit default-off per-device declaration. It is not inferred 
 
 ## Button safety
 
-Circle is a tare for the currently assigned originating role only. Dosing square is ignored. Brewing square is a guarded state transition with a narrow contract: inactive-GHC idle can request espresso; active espresso can request idle. Sleeping, unknown or missing machine, active or unknown GHC for start, stale source identity, replacement generation, and full gateway start conditions are safe no-ops/rejections. Stop uses the direct path and may proceed through a full gateway. This preserves legacy unguarded machine requests while making plugin opt-in actions intent- and identity-fenced.
+In the single-device stage (#846), circle is a tare for the active primary
+scale. In the later multi-device stage, circle targets the active binding's
+scale, whether that binding is primary or auxiliary; brewing square remains a
+primary-scale action. Brewing square is a guarded state transition with a
+narrow contract: inactive-GHC idle can request espresso; active espresso can
+request idle. Sleeping, unknown or missing machine, active or unknown GHC for
+start, stale source identity, replacement generation, and full gateway start
+conditions are safe no-ops/rejections. Stop uses the direct path and may
+proceed through a full gateway. This preserves legacy unguarded machine
+requests while making plugin opt-in actions intent- and identity-fenced.
 
 ## Grinder read-only boundary
 
