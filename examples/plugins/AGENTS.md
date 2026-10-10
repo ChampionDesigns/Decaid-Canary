@@ -13,11 +13,11 @@ example.
   connection context, publication state, command state, and generation belongs
   to that instance. Sensor registrations use the same per-instance ownership
   rule in their `onLoad` and registration state.
-- A single-device stage must still keep one physical instance's state isolated
-  and reject a second binding under the existing device quota. When concurrent
-  same-model support is introduced, the plugin must support two physical
-  devices at the same time. Never key mutable state only by model, driver id,
-  or a single module-level `active` value.
+- Keep one physical instance's state isolated and enforce the host's configured
+  device quota. Production permits up to four active BLE bindings per plugin
+  generation; test the zero, one, quota limit, and over-quota cases that apply
+  to the driver. Never key mutable state only by model, driver id, or a single
+  module-level `active` value.
 - Persisted settings and published data use the physical identity supplied by
   the host. Reconnecting or retiring one binding must not alter its sibling.
 
@@ -50,8 +50,9 @@ the consumer of the generic auxiliary registry supplied by a separate core/API
 change; #843 supplies the bounded host binding capability and #858 supplies
 the opaque-ID route boundary.
 
-The #846 single-device Skale stage stays independently reviewable on the
-primary brewing path. Guarded machine actions from #845 are primary-only:
+The original #846 single-device Skale stage stays independently reviewable on
+the primary brewing path. Guarded machine actions from the held #845/#853
+proposal are primary-only if accepted:
 auxiliary connections cannot invoke them. In that stage, circle is a tare for
 the active primary scale. In the later multi-device stage, circle follows the
 active primary or auxiliary binding, while brewing square remains primary-only
@@ -85,13 +86,13 @@ declares those contracts, and report real hardware validation separately.
 When working on scale buttons, cover primary circle tare, auxiliary circle
 binding, primary-only square routing, same-ID reconnect, and queued machine
 replacement. Do not add tests for
-a persisted dosing role or dosing-specific endpoint. When working on E64
-sensors, cover two E64 instances alongside the primary/auxiliary scale
-connections and a milk probe.
+a persisted dosing role or dosing-specific endpoint. When working on network-
+backed or BLE grinders, cover independent Grinder instances alongside the
+primary/auxiliary scale connections as applicable.
 
-For per-device plugin settings, draft PR #849 proposes declaring a driver
-`settingsEndpoint` that names an `api` HTTP endpoint. Verify the live accepted
-branch contract before relying on it. When available, the native Device
-Management page routes that action to `/api/v1/plugins/:id/:endpoint` with
-`ui=1`, `deviceId`, and `deviceName`; the page uses `url_launcher` with
-`LaunchMode.inAppBrowserView`, while the plugin owns validation and persistence.
+For per-device plugin settings, declare a validated driver `surfaces` entry with
+`role: "settings"` and a same-plugin `api` endpoint. The host resolves the
+surface through `PluginDeviceSurfaceAuthority` and routes it with `ui=1`, the
+runtime `deviceId`, and display-only `deviceName`; the plugin owns validation
+and persistence through its namespaced KV store. Do not invent a URL from a
+device ID or use the superseded `settingsEndpoint` draft.

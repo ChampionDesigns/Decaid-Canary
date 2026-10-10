@@ -643,6 +643,7 @@ This is the safety net. Device implementations should ALSO catch
 Device preferences are stored via `SettingsController`:
 - `preferredMachineId` — auto-set on successful machine connection
 - `preferredScaleId` — auto-set on successful scale connection
+- `preferredGrinderDeviceId` — auto-set on successful runtime grinder connection
 - Configurable in Settings → Device Management
 
 Identity remains per transport. BLE and USB IDs for the same physical machine
@@ -746,6 +747,24 @@ removes the retiring generation without changing that identity for a later
 reload. Plugin connection handlers must complete protocol initialization before
 the sensor reports `connected`. Registrations are runtime-only and are not added
 to remembered-device selection.
+
+Plugin-backed Grinder devices use the same generic controller and
+REST/WebSocket lifecycle. `GrinderController` owns one selected runtime
+`GrinderDevice`, its latest validated snapshot, and command forwarding.
+Replacement disconnects the old instance and generation-fences late
+publications. `ConnectionManager.connectGrinder()` connects
+`preferredGrinderDeviceId` only when the device appears in a normal scan after
+machine and primary-scale selection resolves. Grinder failures do not change
+machine or scale connection status.
+
+Runtime grinder identity is not equipment metadata. Persisted `Grinder.id` is a
+UUID used by `/api/v1/grinders` and workflow records; `GrinderDevice.deviceId`
+identifies the live transport/plugin device. Fixed controls and session
+overrides are published with `context.publishInfo({controls, surfaces})` and
+validated by the shared `PluginDeviceSurfaceAuthority`. The connected Grinder
+info endpoint projects those validated controls and surfaces; inventory and
+snapshots do not contain them. Plugin settings remain owned by the plugin's
+namespaced KV store.
 
 ### Bengle EBus tap
 
@@ -1488,10 +1507,13 @@ does not trigger native fallback in the same attempt. A timed-out teardown retai
 the claim until native disconnection is confirmed. Adapter loss revokes sessions
 without attempting protocol cleanup over a lost link.
 
-Plugin Sensors join the existing SensorController and REST/WebSocket APIs. Their
-public IDs include plugin, driver, and physical identity. Remembered plugin IDs
-are not reconstructed through native quick-connect: fresh discovery must establish
-current ownership. See `doc/Plugins.md` for the session-bound GATT contract.
+Plugin Sensors and Grinders join the existing controllers and REST/WebSocket
+APIs. Their public IDs include plugin, driver, and physical identity.
+Remembered plugin IDs are not reconstructed through native quick-connect:
+fresh discovery must establish current ownership. A BLE plugin driver may keep
+up to four physical bindings active at once; each binding owns its own
+transport, session, publications, and teardown claim. See `doc/Plugins.md` for
+the session-bound GATT contract.
 
 ## Plugin device settings
 

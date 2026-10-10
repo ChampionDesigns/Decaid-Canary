@@ -4,8 +4,9 @@ This document records the architecture decisions behind the new feature series. 
 
 ## Phase ordering
 
-The first Skale driver stage (#846) is single-device and depends on metadata
-#844 plus the primary-scale machine-action contract in #845. It is independently
+The original first Skale driver stage (#846) was single-device and was proposed
+to depend on metadata #844 plus the primary-scale machine-action contract in
+#845. It is independently
 reviewable and excludes host multi-binding #843 and the superseded dosing draft
 #834. This stage retains per-physical-instance state and reconnect/session
 fencing, and rejects a second binding under the existing one-binding quota.
@@ -58,9 +59,35 @@ conditions are safe no-ops/rejections. Stop uses the direct path and may
 proceed through a full gateway. This preserves legacy unguarded machine
 requests while making plugin opt-in actions intent- and identity-fenced.
 
-## Grinder read-only boundary
+## Historical grinder read-only boundary
 
-The E64 integration is an opt-in sensor plugin over the existing host-owned WebSocket transport. Each configured grinder owns an independent registration, socket, request counter, pending map, timer, and epoch. The initial contract has four reads: state, config, machine info, and log messages. Unknown and action/write commands are rejected before transmission. No motor, calibration, brew-event, GBS, TLS-trust-bypass, or configuration-write surface is introduced. The #831 SteamSequencer selection fix is a prerequisite so an E64 object channel cannot steal the declared milk-temperature source.
+The original E64 proposal was an opt-in Sensor plugin over the existing
+host-owned WebSocket transport. Each configured device owned an independent
+registration, socket, request counter, pending map, timer, and epoch. Its
+initial contract had four reads: state, config, machine info, and log messages;
+unknown and action/write commands were rejected before transmission. This
+historical proposal introduced no motor, calibration, brew-event, GBS,
+TLS-trust-bypass, or configuration-write surface. The #831 SteamSequencer
+selection fix was a prerequisite so an E64 object channel could not steal the
+declared milk-temperature source.
+
+## Adopted direction (October 2026)
+
+The runtime-v2 work subsequently adopted a connected `Grinder` domain. E64 is
+owned by an independently distributed concrete plugin that registers a
+`type: "grinder"` device, using the shared network transport and session
+fencing. It is no longer represented as an alternative milk-temperature
+Sensor. Grinder settings and diagnostics use manifest-declared `surfaces`,
+validated by `PluginDeviceSurfaceAuthority`; plugin endpoints and namespaced KV
+storage remain the persistence authority.
+
+The guarded machine-action proposal in #845 and its issue #853 remain held for
+human review. This archive does not define them as an accepted runtime
+contract. The current host exposes no public connection-ID metadata primitive;
+`connectionId` in the historical sequencing above is an internal typed session
+identity, not an inventory field or metadata API. Scale firmware and nullable
+battery information use `context.publishInfo` and the existing connected-scale
+info endpoint.
 
 ## Review and release posture
 
