@@ -766,6 +766,12 @@ info endpoint projects those validated controls and surfaces; inventory and
 snapshots do not contain them. Plugin settings remain owned by the plugin's
 namespaced KV store.
 
+The opt-in [E64 WebSocket plugin](https://github.com/MaxRink/decaid-e64ws-plugin)
+is an external `type: "grinder"` consumer targeting the current Decaid `main`
+baseline. Its initial network boundary is read-only: state, configuration,
+machine information, and log reads are allowed; motor, calibration, and
+configuration-write commands remain unavailable.
+
 ### Bengle EBus tap
 
 See [`device-notes/bengle.md`](device-notes/bengle.md#ebus-tap).

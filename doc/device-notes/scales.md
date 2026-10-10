@@ -97,3 +97,10 @@ Timer frames and information frames must not establish readiness.
 ## API metadata boundary
 
 Device inventory remains discovery-oriented, including connected, available, and remembered-absent scales. Connection-scoped metadata such as firmware revision and battery level is exposed through the generic connected-scale role-info endpoint, `GET /api/v1/scale/info`, rather than inventory entries or the device-inventory WebSocket.
+
+## External Skale plugin
+
+The opt-in [Skale plugin](https://github.com/MaxRink/decaid-skale-plugin) is the
+concrete external consumer of the Scale plugin API. It targets the current
+Decaid `main` baseline; machine-action behavior remains subject to the held
+#845/#853 review and is not implied by this device note.
