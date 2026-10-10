@@ -99,13 +99,25 @@ special_arg="value with spaces;\$(touch $TEST_SENTINEL)"
 run_sb_dev start \
   --app-arg --serial \
   --app-arg --no-account \
+  --app-arg --bypass-onboarding \
   --app-arg "$special_arg"
 run_sb_dev restart
 run_sb_dev stop
 
-test "$(grep -Fxc -- '--dart-entrypoint-args=--serial' "$TEST_ARGS")" -eq 2
-test "$(grep -Fxc -- '--dart-entrypoint-args=--no-account' "$TEST_ARGS")" -eq 2
-test "$(grep -Fxc -- "--dart-entrypoint-args=$special_arg" "$TEST_ARGS")" -eq 2
+expected_app_args="$TEMP_DIR/expected-app-args"
+{
+  printf '%s\n' \
+    '--dart-entrypoint-args=--serial' \
+    '--dart-entrypoint-args=--no-account' \
+    '--dart-entrypoint-args=--bypass-onboarding' \
+    "--dart-entrypoint-args=$special_arg" \
+    '--dart-entrypoint-args=--serial' \
+    '--dart-entrypoint-args=--no-account' \
+    '--dart-entrypoint-args=--bypass-onboarding' \
+    "--dart-entrypoint-args=$special_arg"
+} > "$expected_app_args"
+grep '^--dart-entrypoint-args=' "$TEST_ARGS" > "$TEMP_DIR/actual-app-args"
+diff "$expected_app_args" "$TEMP_DIR/actual-app-args"
 test ! -e "$TEST_SENTINEL"
 
 set +e

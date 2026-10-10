@@ -280,7 +280,7 @@ The app supports several command-line flags for headless/calibration-station use
 ./flutter_with_commit.sh run --dart-define=simulate=1 \
   --serial                    # Serial-only mode; skip BLE service creation
   --bypass-onboarding         # Skip onboarding, go straight to launcher
-  --direct                    # Skip scan, connect directly to --serial device
+  --direct                    # Auto-select the first discovered device; skip picker
   --skin=<id>                 # Pre-select skin by ID
   --skin-path=<path>          # Pre-select skin by filesystem path
   --no-account                # Skip DecentAccountService (headless Linux with no desktop session)
