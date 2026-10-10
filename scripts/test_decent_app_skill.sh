@@ -98,7 +98,7 @@ diff "$indexed_scenarios" "$actual_scenarios"
 special_arg="value with spaces;\$(touch $TEST_SENTINEL)"
 run_sb_dev start \
   --app-arg --serial \
-  --app-arg --no-account \
+  --app-arg=--no-account \
   --app-arg --bypass-onboarding \
   --app-arg "$special_arg"
 run_sb_dev restart
@@ -125,9 +125,13 @@ missing_value_output="$(run_sb_dev start --app-arg 2>&1)"
 missing_value_rc=$?
 newline_output="$(run_sb_dev start --app-arg $'bad\nvalue' 2>&1)"
 newline_rc=$?
+equals_newline_output="$(run_sb_dev start --app-arg=$'bad\nvalue' 2>&1)"
+equals_newline_rc=$?
 set -e
 
 test "$missing_value_rc" -eq 2
 grep -Fq 'Missing value for --app-arg' <<<"$missing_value_output"
 test "$newline_rc" -eq 2
 grep -Fq 'App arguments cannot contain newlines' <<<"$newline_output"
+test "$equals_newline_rc" -eq 2
+grep -Fq 'App arguments cannot contain newlines' <<<"$equals_newline_output"
