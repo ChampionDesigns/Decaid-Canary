@@ -64,10 +64,25 @@ Hardware settle delays belong at the device implementation boundary as
 injectable immutable durations. Production keeps hardware-safe defaults;
 tests that only need initialization inject zero durations.
 
-Mock machines advance a fixed 100 ms of model time per tick. Shortening the
-injectable wall-clock tick interval accelerates tests without changing the
-trajectory; scale wall waits by the same factor. Keep real durations for tests
-that explicitly validate elapsed-time behavior.
+Mock machines advance a fixed 100 ms of model time per tick. For tests of
+tick-based machine flow/pressure trajectories, shorten the injectable
+`simulationTickInterval` and scale wall waits by the same factor. Do not change
+the model time-step or scale waits alone. Tests of real elapsed-time behavior
+(for example, a timeout measured with a Stopwatch) keep real durations.
+
+Weight synthesis (`SimulatedShotWeightModel.ingest`) and Bengle probe heating
+integrate snapshot timestamp deltas, not tick counts. Keep production durations
+and tick cadence for these tests and virtualize time with
+[`FakeTime`](../../test/helpers/fake_time.dart). Create and connect timer-owning
+devices inside `time.run(...)`, then advance with `await time.elapse(...)`.
+Disconnect and dispose normally, cancel subscriptions, and assert
+`time.pendingTimers` is empty in teardown. See the
+[Bengle probe tests](../../test/models/device/impl/bengle/mock_bengle_steam_probe_test.dart).
+
+`FakeTime` virtualizes timers and `clock.now`; its 10 ms steps let root-zone async
+work settle between advances. Use it for coarse simulation/timeout tests, not
+sub-10 ms ordering assertions, and keep advancing time while awaiting a virtual
+timeout.
 
 ## Simulated shot execution
 

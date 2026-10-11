@@ -183,6 +183,10 @@ A hostname that resolves to a device address does pass the port-3000 entry redir
 The protocol is DE1-specific. See
 [`device-notes/de1.md`](device-notes/de1.md#protocol-source-of-truth).
 
+MMR (Memory-Mapped Register) reads serve DE1 debug logs, firmware settings, and
+advanced machine state. Use the profile and workflow APIs for general profile
+or workflow operations, not raw MMR access.
+
 ## Workflow Dual Representation
 
 Workflow JSON has both `context` (new: `WorkflowContext` with `grinderModel`, `coffeeName`, etc.) and legacy fields (`grinderData`, `coffeeData`, `doseData`). `Workflow.fromJson()` backfills context from legacy fields. UI reads from `context`; API clients can write to either. Always keep both in sync when modifying serialization.

@@ -71,11 +71,15 @@ test tiers. Keep outside-in test-first ordering: start at public plugin/API
 behavior, then cover instance integration when concurrent support is
 introduced, then unit parsing and command details.
 
-For an initial single-device stage, cover zero and one instance, a second
-binding rejected under the existing quota, the physical ID, per-instance
-state, disconnect, reconnect, stale callbacks, permission revocation, and
-whole-plugin unload isolation. When concurrent same-model support is added,
-expand the matrix to one primary plus at least two auxiliary physical IDs,
+The historical single-device stage used a one-binding quota. A fixture that
+expects the second binding to fail must explicitly set
+`PluginBleRegistry(activeBindingLimit: 1)`; this is not the production default.
+Under the production quota, test zero, one, and four active BLE bindings per
+plugin generation, then rejection of a fifth binding without disturbing the
+four live bindings. Also cover the physical ID, per-instance state, disconnect,
+reconnect, stale callbacks, permission revocation, and whole-plugin unload
+isolation. For concurrent same-model support, include one primary plus at least
+two auxiliary physical IDs,
 concurrent primary/auxiliary connections, release of an auxiliary binding back
 to primary eligibility after disconnect, and retirement of one binding while its sibling stays
 active. Use deterministic fake GATT and

@@ -15,7 +15,7 @@ Explicit auxiliary discovery and connection still use the normal device scanner
 and may connect an external scale concurrently. Auxiliary snapshots and tare
 commands never enter ShotSequencer or stop-at-weight logic.
 
-This document explains how devices (DE1 machines, scales, sensors) are discovered, connected, and managed throughout the Decaid application lifecycle.
+This document explains how devices (DE1 machines, scales, grinders, sensors) are discovered, connected, and managed throughout the Decaid application lifecycle.
 Open the management page from Settings > Devices or from the dashboard.
 
 ## Table of Contents
@@ -49,6 +49,7 @@ Decaid uses a layered architecture for device management:
 ┌─────────────────▼───────────────────────────────────────┐
 │              Controller Layer                            │
 │   De1Controller  │  ScaleController  │  SensorController│
+│                  GrinderController                     │
 └─────────────────┬───────────────────────────────────────┘
                   │
 ┌─────────────────▼───────────────────────────────────────┐
@@ -367,6 +368,21 @@ List<Device> get devices =>
 
 The ConnectionManager is the centralized orchestrator for all device connection decisions. It replaces the previously scattered auto-connect logic that was spread across DeviceController, ScaleController, and De1StateManager.
 
+### Pending connect attempts
+
+Machine and primary-scale attempts track the device instance, ID, transport,
+and owning scan/selection session. Timeout, cancellation by that owner, BLE
+adapter loss, explicit disconnect, or shutdown invalidate an attempt and release
+admission immediately. An unrelated direct or background-watch connect survives
+scan cancellation. Generation checks prevent late source completion from
+adopting a stale candidate; cleanup waits for that source work to settle.
+
+Retirement targets the attempted instance and protects same-link replacements;
+see [the BLE retirement rules](AI_BLE_NOTES.md#stale-retirement-is-deferred-only-for-a-shared-ble-link).
+Failed retirement is quarantined for explicit-disconnect retry without blocking
+new connects. Shutdown waits for pending source work and retirement. An already
+started preference write is not cancelled by the attempt fence.
+
 ### Connection Status
 
 ConnectionManager exposes a `ConnectionStatus` stream driven by the
@@ -517,7 +533,9 @@ indefinitely because nothing ever rescanned for the machine.
 When a machine is connected but the preferred scale is missing (scale
 powered off, unexpected drop, machine wake without the scale), scale
 reacquisition runs in one of two modes, selected by
-`DeviceScanner.supportsBackgroundWatch`:
+`ConnectionManager.supportsBackgroundScaleWatch`. This requires
+`DeviceScanner.supportsBackgroundWatch` and excludes a preferred scale known
+through discovery or remembered devices to use serial or WiFi transport:
 
 - **Watch mode (Android):** one persistent, low-duty-cycle BLE scan.
   `UniversalBleDiscoveryService` starts an `AndroidScanMode.balanced`
@@ -535,8 +553,8 @@ reacquisition runs in one of two modes, selected by
   typically 1–5s after the scale powers on. Caveat: Android suspends
   OS-unfiltered scans while the screen is off, so a scale powered on
   with the display asleep connects once the screen wakes.
-- **Legacy mode (all other platforms, and fallback when the watch fails
-  to start):** periodic 15s scale-only burst scans with 5s→60s
+- **Legacy mode (serial/WiFi preferred scales, all other platforms, and fallback
+  when the watch fails to start):** periodic 15s scale-only burst scans with 5s→60s
   exponential backoff (the pre-watch behavior, unchanged).
 
 The watch replaced the backoff loop on Android because each lowLatency
@@ -707,6 +725,20 @@ Future<void> connectToDe1(De1Interface de1Interface) async {
 Device implementations define their own readiness gate before `ScaleController`
 adopts them. See [`device-notes/scales.md`](device-notes/scales.md).
 
+#### Scale Power Settings
+
+`scalePowerMode` controls automatic primary-scale power management on machine
+state transitions: `displayOff` sleeps/wakes the display, `disconnect` disconnects
+on sleep and permits recovery on wake, and `disabled` sends no sleep power
+command. During graceful exit, `disabled` uses `TransportHandoffScale` when
+available to release the transport without power-off; other drivers use their
+normal disconnect. Manual disconnects and auxiliary cleanup keep their existing
+behavior. See [terminal lifecycle teardown](AI_BLE_NOTES.md#terminal-lifecycle-teardown).
+
+Settings changes need no restart and apply on the next transition or graceful
+exit; they do not reverse a power action already taken while sleeping. Firmware
+auto-sleep and operating-system force stops remain outside these guarantees.
+
 Decent Scale sleep is capability-gated but never intentionally disconnects a healthy link. After a connection is confirmed the scale runs an unawaited profile negotiation: the canonical LED ON/status command (`0A 01`, heartbeat byte `00`) followed by the HDS `0x22` voltage probe. Only a valid `0x22` response promotes the connection to Half Decent Scale capabilities (extended commands and power off). `displayOff` sends the shared `0A 00` display-off command and keeps the connection for unknown, original and pre-modern HDS scales; proven HDS SoftSleep (`0A 04`) is attempted first and falls back to `0A 00` on failure. Wake restores the same connection (`0A 01`, or `0A 04 00` then `0A 01` after SoftSleep). Decent Scale no longer advertises `DisconnectToSleepScale`, so `De1StateManager` does not mark it sleeping on machine sleep. Power-off is withheld unless the profile proves support. Capabilities are re-confirmed on every physical connection and are discarded if a response arrives after a reconnect.
 
 **Connection Flow:**
@@ -739,14 +771,15 @@ Future<void> connectToScale(Scale scale) async {
 Named sensor behavior lives in
 [`device-notes/sensors.md`](device-notes/sensors.md).
 
-`PluginDeviceService` is a `DeviceDiscoveryService` that contributes sensors
-registered by plugin generations. This keeps plugin-backed sensors on the same
-`DeviceController` → `SensorController` path as native sensors. Public identity
+`PluginDeviceService` is a `DeviceDiscoveryService` that publishes `PluginScale`,
+`PluginGrinder`, and sensor adapters registered by plugin generations. They enter
+the normal `DeviceController` discovery inventory and the matching
+`ScaleController`, `GrinderController`, or `SensorController` lifecycle. Public identity
 comes from plugin id, declared driver id, and plugin-local instance id; unload
 removes the retiring generation without changing that identity for a later
 reload. Plugin connection handlers must complete protocol initialization before
-the sensor reports `connected`. Registrations are runtime-only and are not added
-to remembered-device selection.
+the device reports `connected`. Registrations are runtime-only; sensor
+registrations are not added to remembered-device selection.
 
 Plugin-backed Grinder devices use the same generic controller and
 REST/WebSocket lifecycle. `GrinderController` owns one selected runtime
@@ -793,11 +826,13 @@ of vanishing. Cross-transport (BLE/USB/WiFi) by construction.
   `{id, name, type}` off the connected device. A null emission (disconnect)
   does **not** forget — the device stays remembered.
 - **Availability:** computed at the API layer. `DevicesStateAggregator` /
-  `DevicesHandler` merge discovered devices and the actively connected scale
+  `DevicesHandler` merge discovered devices, the actively connected primary scale
+  and grinder, and connected auxiliary scales
   (`available: true`) with remembered devices that aren't present
   (`available: false`, `state: "disconnected"`) via the shared
   `buildAvailabilityDeviceList`. The aggregator re-emits when the registry or
-  connected scale changes. `DeviceController` itself stays discovery-only.
+  connected scale/grinder or auxiliary sessions change. `DeviceController` itself
+  stays discovery-only.
 - **Forget:** `RememberedDevicesController.forget(id)`, exposed as
   `PUT /api/v1/devices/forget` (deviceId in body/query). A GUI Forget control
   lives in the web skin (separate repo), driven by this endpoint.
@@ -901,12 +936,13 @@ never retain the disconnected instance beside its connected replacement.
    ↓
 2. Create discovery services with device mappings
    ↓
-3. Create DeviceController(services), De1Controller, ScaleController
+3. Create DeviceController(services), De1Controller, ScaleController,
+   GrinderController, AuxiliaryScaleRegistry, SensorController
    ↓
 4. Create RememberedDevicesController, initialize (loads + migrates registry)
    ↓
 5. Create ConnectionManager(deviceController, de1Controller, scaleController,
-   settingsController, rememberedDevices)
+   grinderController, auxiliaryScaleRegistry, settingsController, rememberedDevices)
    ↓
 6. runApp(MyApp(...))
    ↓

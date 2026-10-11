@@ -187,7 +187,10 @@ endpoints 404 only on non-Bengle machines.
 ## Integrated scale
 
 When Bengle is connected, `BengleVirtualScale` is attached automatically and
-external scale scanning is skipped. The virtual scale appears in REST and
+automatic external primary-scale selection is skipped. Explicit discovery and
+connection of external auxiliary scales remain supported; see
+[scale connection ownership](../DeviceManagement.md#scale-connection-ownership).
+The virtual scale appears in REST and
 WebSocket inventory, but connect and disconnect commands reject its ID because
 its lifecycle follows the machine.
 

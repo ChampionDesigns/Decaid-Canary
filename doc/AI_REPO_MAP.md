@@ -12,15 +12,16 @@ Use this for unfamiliar or multi-subsystem tasks. For known files or exact symbo
 | DE1 firmware, serial behavior, profile sync | `doc/device-notes/de1.md` | `lib/src/models/device/impl/de1/`, `lib/src/controllers/de1_controller.dart` |
 | Named scale protocols and readiness | `doc/device-notes/scales.md` | `lib/src/models/device/impl/`, `lib/src/controllers/scale_controller.dart` |
 | Named sensor protocols | `doc/device-notes/sensors.md` | `lib/src/models/device/impl/sensor/`, `lib/src/controllers/sensor_controller.dart` |
-| Simulated device behavior | `doc/device-notes/simulators.md` | `lib/src/services/simulated_device_service.dart`, `lib/src/models/device/impl/mock/` |
+| Simulated device behavior | `doc/device-notes/simulators.md` | `lib/src/services/simulated_device_service.dart`, `lib/src/models/device/impl/` (`mock_de1/`, `mock_scale/`, `bengle/mock_bengle.dart`, `replay/mock_replay_de1.dart`, `sensor/mock/`, `simulated_shot_weight_model.dart`) |
 | REST/WS endpoint changes | `doc/AI_API_NOTES.md`, read spec first | `lib/src/services/webserver/` |
 | DE1 machine state, shot state | — | `lib/src/controllers/de1_state_manager.dart`, `de1_controller.dart`, `shot_sequencer.dart` |
 | Profile/workflow serialization | `doc/Profiles.md` | `lib/src/models/data/`, `lib/src/daos/` |
 | Database schema/migration | `doc/AI_STORAGE_NOTES.md` | `lib/src/database/app_database.dart`, `lib/src/daos/`, `lib/src/mappers/` |
 | Plugin API or permissions | `doc/Plugins.md` | `lib/src/plugins/plugin_manager.dart`, `plugin_host.dart` |
+| Bundled plugin implementation | `doc/AI_PLUGINS_NOTES.md`, `doc/Plugins.md` | `assets/plugins/`, pinned upstream repositories for generated bundles |
 | Example plugin implementation | `examples/plugins/AGENTS.md`, `doc/Plugins.md` | `examples/plugins/*/plugin.js`, matching `README.md`, manifest and host boundary |
 | Skin serving or WebUI | `doc/Skins.md` | `lib/src/webui_support/`, `lib/src/services/webserver/webui/` |
-| Device discovery or connection | `doc/DeviceManagement.md` | `lib/src/controllers/connection/connection_manager.dart` |
+| Device discovery or connection | `doc/DeviceManagement.md` | `lib/src/controllers/connection_manager.dart` |
 | Build, platform, CLI flags | `doc/AI_BUILD_NOTES.md` | `Makefile`, `pubspec.yaml` |
 | Crashes, error tracing | `doc/AI_DEBUG_NOTES.md` | `lib/src/services/crashlytics_error_filter.dart` |
 | Onboarding or settings UI | — | `lib/src/onboarding_feature/`, `lib/src/settings/`, `lib/src/launcher/` |
