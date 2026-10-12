@@ -1007,6 +1007,22 @@ retain the 64 KiB JSON limit. Bridge failures carry `code`, including
 `stale_session`, `permission_denied`, `resource_limit`, `attribute_unavailable`,
 `link_lost`, and `timeout`; other native BLE codes are preserved.
 
+Each `create` call must return independent state for one physical device,
+including timers, subscriptions, pending reads, and command state. Asynchronous
+callbacks retain that connection's context; they must not switch to a replacement
+session's context when an old operation completes. Retiring one binding cancels
+only its own timers and subscriptions. Plugin unload retires all bindings owned
+by that generation without affecting other plugins.
+
+Test zero, one, and four active BLE bindings under the production quota, then
+rejection of a fifth without disturbing the four live bindings. A fixture that
+expects the second binding to fail must explicitly use
+`PluginBleRegistry(activeBindingLimit: 1)`. Also verify independent physical
+identities and state, disconnect/reconnect, stale callbacks and command results,
+permission revocation, sibling-binding isolation, and whole-plugin unload.
+Deterministic fake GATT tests establish host and protocol behavior; report real
+hardware validation separately.
+
 BLE Scale bindings reuse the Scale adapter and declared capability checks. The
 opt-in Felicita Arc and Bookoo examples exercise BLE Scale bindings with fake GATT.
 Felicita hardware verification covers live notifications, weight, tare, timer

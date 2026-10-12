@@ -19,7 +19,7 @@ Use this for unfamiliar or multi-subsystem tasks. For known files or exact symbo
 | Database schema/migration | `doc/AI_STORAGE_NOTES.md` | `lib/src/database/app_database.dart`, `lib/src/daos/`, `lib/src/mappers/` |
 | Plugin API or permissions | `doc/Plugins.md` | `lib/src/plugins/plugin_manager.dart`, `plugin_host.dart` |
 | Bundled plugin implementation | `doc/AI_PLUGINS_NOTES.md`, `doc/Plugins.md` | `assets/plugins/`, pinned upstream repositories for generated bundles |
-| Example plugin implementation | `examples/plugins/AGENTS.md`, `doc/Plugins.md` | `examples/plugins/*/plugin.js`, matching `README.md`, manifest and host boundary |
+| Example plugin implementation | `doc/Plugins.md` | `examples/plugins/*/plugin.js`, matching `README.md`, manifest and host boundary |
 | Skin serving or WebUI | `doc/Skins.md` | `lib/src/webui_support/`, `lib/src/services/webserver/webui/` |
 | Device discovery or connection | `doc/DeviceManagement.md` | `lib/src/controllers/connection_manager.dart` |
 | Build, platform, CLI flags | `doc/AI_BUILD_NOTES.md` | `Makefile`, `pubspec.yaml` |
