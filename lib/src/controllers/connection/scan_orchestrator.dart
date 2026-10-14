@@ -24,12 +24,14 @@ class ScanRunResult {
   final List<GrinderDevice> grinders;
 
   final ScanReportBuilder reportBuilder;
+  final bool preferredScaleStopRequested;
 
   const ScanRunResult({
     required this.machines,
     required this.scales,
     required this.grinders,
     required this.reportBuilder,
+    this.preferredScaleStopRequested = false,
   });
 }
 
@@ -67,6 +69,10 @@ class ScanOrchestrator {
     required void Function() onEarlyAttemptComplete,
     required DateTime scanStartTime,
     ScanFilter? scaleFilter,
+    String? stopOnPreferredScaleId,
+    bool Function()? canStopOnPreferredScale,
+    bool requireConfirmedTeardown = false,
+    void Function(bool)? onScanTeardown,
   }) async {
     final reportBuilder = ScanReportBuilder(scanStartTime: scanStartTime)
       ..recordAdapterStateAtStart(_scanner.currentAdapterState);
@@ -91,16 +97,65 @@ class ScanOrchestrator {
     );
     earlyConnect.start();
 
+    var stopRequested = false;
+    var stopFailed = false;
+    final stopOnScale = stopOnPreferredScaleId == null
+        ? null
+        : _scanner.deviceStream.skip(1).listen((devices) {
+            if (stopRequested || canStopOnPreferredScale?.call() != true) {
+              return;
+            }
+            if (!devices.whereType<Scale>().any(
+              (scale) => scale.deviceId == stopOnPreferredScaleId,
+            )) {
+              return;
+            }
+            stopRequested = true;
+            try {
+              _scanner.stopScan();
+            } catch (e, st) {
+              stopFailed = true;
+              _log.warning('Preferred-scale scan stop failed', e, st);
+            }
+          });
+
     final ScanResult scanResult;
     try {
       scanResult = await _scanner.scanForDevices(filter: scaleFilter);
     } catch (e) {
       earlyConnect.stop();
+      if (stopRequested || requireConfirmedTeardown) {
+        onScanTeardown?.call(false);
+      }
       _emitScanStartError(e);
       return null;
+    } finally {
+      await stopOnScale?.cancel();
     }
     earlyConnect.stop();
     reportBuilder.recordScanDuration(scanResult.duration);
+
+    final teardownConfirmed =
+        !stopFailed &&
+        !_scanner.isScanning &&
+        scanResult.failedServices.isEmpty;
+    if (stopRequested || requireConfirmedTeardown) {
+      onScanTeardown?.call(teardownConfirmed);
+    }
+    if ((stopRequested || requireConfirmedTeardown) && !teardownConfirmed) {
+      _emitScanStartError(StateError('Scan teardown was not confirmed'));
+      return null;
+    }
+    if (stopRequested && canStopOnPreferredScale?.call() != true) {
+      _statusPublisher.publish(
+        _statusPublisher.current.copyWith(
+          phase: _isMachineConnected()
+              ? ConnectionPhase.ready
+              : ConnectionPhase.idle,
+        ),
+      );
+      return null;
+    }
 
     _clearStickyScanError();
 
@@ -124,6 +179,7 @@ class ScanOrchestrator {
       scales: scales,
       grinders: grinders,
       reportBuilder: reportBuilder,
+      preferredScaleStopRequested: stopRequested,
     );
   }
 

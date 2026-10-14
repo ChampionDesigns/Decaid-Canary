@@ -117,6 +117,22 @@ paths:
           schema:
             type: boolean
             default: true
+        - name: connectPreferredScaleEarly
+          description: >
+            Opt-in preferred primary scale reconnect, only with connect=true.
+            When a non-Bengle machine is connected and ownership is resolved,
+            the primary scale slot is empty, and a preferred scale is configured,
+            a matching sighting requests scan termination. Connection begins only
+            after successful scan teardown, without restarting full discovery.
+            Pending machine/selection work, occupied slots, auxiliary claims,
+            and sleeping-scale restrictions disable the shortcut. Otherwise the
+            normal full explicit scan applies. Failed or uncertain teardown never
+            starts an early connection. Independent of quick; does not affect
+            automatic startup. Opt-in is retained when connect requests coalesce.
+          in: query
+          schema:
+            type: boolean
+            default: false
         - name: quick
           description: If true, Decaid returns an empty array immediately while the same scan-first policy continues in the background, after any post-wake deferral has elapsed. Useful when polling for device updates manually.
           in: query

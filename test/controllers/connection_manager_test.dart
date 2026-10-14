@@ -14,7 +14,9 @@ import 'package:reaprime/src/models/device/simulated_device.dart';
 import 'package:reaprime/src/controllers/device_controller.dart';
 import 'package:reaprime/src/models/adapter_state.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
+import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/device.dart';
+import 'package:reaprime/src/models/device/scan_result.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/models/device/transport/ble_connect_exception.dart';
 import 'package:reaprime/src/models/device/device_implementation.dart';
@@ -100,6 +102,8 @@ class _FakeDe1 implements De1Interface {
   @override
   dynamic noSuchMethod(Invocation invocation) => null;
 }
+
+class _FakeBengle extends _FakeDe1 implements BengleInterface {}
 
 class _BlockingDe1 extends _FakeDe1 {
   _BlockingDe1({
@@ -1663,6 +1667,345 @@ void main() {
           expect(mockDe1Controller.connectCalls, [same(preferred)]);
         },
       );
+
+      group('preferred-scale explicit reconnect', () {
+        Future<void> prepare({bool machine = true}) async {
+          await settingsController.setPreferredScaleId('preferred-scale');
+          if (machine) {
+            mockDe1Controller.de1Subject.add(_FakeDe1());
+          }
+          await Future<void>.delayed(Duration.zero);
+          mockScanner.scanCompleter = Completer<void>();
+        }
+
+        test(
+          'stops once on sighting and waits for teardown before GATT',
+          () async {
+            await prepare();
+            final scale = TestScale(deviceId: 'preferred-scale');
+            final scan = connectionManager.requestExternalScan(
+              connect: true,
+              connectPreferredScaleEarly: true,
+            );
+            await Future<void>.delayed(Duration.zero);
+            mockScanner.addDevice(scale);
+            mockScanner.addDevice(scale);
+            await Future<void>.delayed(Duration.zero);
+
+            expect(mockScanner.stopScanCallCount, 1);
+            expect(mockScaleController.connectCalls, isEmpty);
+            expect(mockScanner.isScanning, isTrue);
+
+            mockScanner.completeScan();
+            await scan;
+            expect(mockScaleController.connectCalls, [same(scale)]);
+            expect(mockScanner.scanCallCount, 1);
+          },
+        );
+
+        for (final option in [null, false]) {
+          test('option $option keeps full explicit discovery', () async {
+            await prepare();
+            final scale = TestScale(deviceId: 'preferred-scale');
+            final scan = option == null
+                ? connectionManager.requestExternalScan(connect: true)
+                : connectionManager.requestExternalScan(
+                    connect: true,
+                    connectPreferredScaleEarly: option,
+                  );
+            await Future<void>.delayed(Duration.zero);
+            mockScanner.addDevice(scale);
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScanner.stopScanCallCount, 0);
+            expect(mockScaleController.connectCalls, isEmpty);
+            mockScanner.completeScan();
+            await scan;
+            expect(mockScaleController.connectCalls, [same(scale)]);
+          });
+        }
+
+        for (final guard in [
+          'machine unresolved',
+          'occupied primary',
+          'wrong scale',
+          'preferred absent',
+          'no preference',
+          'auxiliary claimed',
+        ]) {
+          test('$guard does not short-circuit', () async {
+            await prepare(machine: guard != 'machine unresolved');
+            if (guard == 'occupied primary') {
+              mockScaleController.mockEmitConnectionState(
+                ConnectionState.connected,
+              );
+              await Future<void>.delayed(Duration.zero);
+            }
+            if (guard == 'no preference') {
+              await settingsController.setPreferredScaleId(null);
+            }
+            final scale = TestScale(
+              deviceId: guard == 'wrong scale'
+                  ? 'other-scale'
+                  : 'preferred-scale',
+            );
+            if (guard == 'auxiliary claimed') {
+              await connectionManager.connectScale(
+                scale,
+                role: ScaleConnectionRole.auxiliary,
+              );
+            }
+            final scan = connectionManager.requestExternalScan(
+              connect: true,
+              connectPreferredScaleEarly: true,
+            );
+            await Future<void>.delayed(Duration.zero);
+            if (guard != 'preferred absent') mockScanner.addDevice(scale);
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScanner.stopScanCallCount, 0);
+            expect(mockScaleController.connectCalls, isEmpty);
+            mockScanner.completeScan();
+            await scan;
+            if ([
+              'occupied primary',
+              'auxiliary claimed',
+              'preferred absent',
+            ].contains(guard)) {
+              expect(mockScaleController.connectCalls, isEmpty);
+            }
+          });
+        }
+
+        test(
+          'unresolved Bengle selection does not stop or connect a scale',
+          () async {
+            await settingsController.setPreferredScaleId('preferred-scale');
+            mockScanner.addDevice(_FakeDe1(deviceId: 'external-machine'));
+            mockScanner.addDevice(_FakeBengle());
+            await connectionManager.scanAndConnect();
+            expect(
+              connectionManager.currentStatus.pendingAmbiguity,
+              AmbiguityReason.machinePicker,
+            );
+            mockScanner.scanCompleter = Completer<void>();
+            final scan = connectionManager.requestExternalScan(
+              connect: true,
+              connectPreferredScaleEarly: true,
+            );
+            await Future<void>.delayed(Duration.zero);
+            mockScanner.addDevice(TestScale(deviceId: 'preferred-scale'));
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScanner.stopScanCallCount, 0);
+            expect(mockScaleController.connectCalls, isEmpty);
+            mockScanner.completeScan();
+            await scan;
+            expect(
+              connectionManager.currentStatus.pendingAmbiguity,
+              AmbiguityReason.machinePicker,
+            );
+            expect(mockScaleController.connectCalls, isEmpty);
+          },
+        );
+
+        test(
+          'machine ownership lost during teardown does not connect',
+          () async {
+            await prepare();
+            final scan = connectionManager.requestExternalScan(
+              connect: true,
+              connectPreferredScaleEarly: true,
+            );
+            await Future<void>.delayed(Duration.zero);
+            mockScanner.addDevice(TestScale(deviceId: 'preferred-scale'));
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScanner.stopScanCallCount, 1);
+            mockDe1Controller.de1Subject.add(null);
+            await Future<void>.delayed(Duration.zero);
+            mockScanner.completeScan();
+            await scan;
+            expect(mockScaleController.connectCalls, isEmpty);
+          },
+        );
+
+        for (final failure in ['stop throws', 'service failure']) {
+          test('$failure never starts GATT', () async {
+            mockScanner.supportsWatch = true;
+            await prepare();
+            if (failure == 'stop throws') {
+              mockScanner.failStopScanWith = StateError('stop denied');
+            } else {
+              mockScanner.scanFailures = [
+                ServiceScanFailure(
+                  serviceName: 'BLE',
+                  error: StateError('native stop denied'),
+                  stackTrace: StackTrace.current,
+                ),
+              ];
+            }
+            final scan = connectionManager.requestExternalScan(
+              connect: true,
+              connectPreferredScaleEarly: true,
+            );
+            await Future<void>.delayed(Duration.zero);
+            mockScanner.addDevice(TestScale(deviceId: 'preferred-scale'));
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScanner.stopScanCallCount, 1);
+            mockScanner.completeScan();
+            await scan;
+            expect(mockScaleController.connectCalls, isEmpty);
+          });
+        }
+
+        test(
+          'queued and coalesced explicit scans preserve the opt-in',
+          () async {
+            await prepare();
+            final first = connectionManager.scanAndConnect();
+            await Future<void>.delayed(Duration.zero);
+            final queued = connectionManager.requestExternalScan(
+              connect: true,
+              connectPreferredScaleEarly: true,
+            );
+            final coalesced = connectionManager.requestExternalScan(
+              connect: true,
+            );
+            final initialStopCount = mockScanner.stopScanCallCount;
+            mockScanner.completeScan();
+            mockScanner.scanCompleter = Completer<void>();
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScanner.scanCallCount, 2);
+            final scale = TestScale(deviceId: 'preferred-scale');
+            mockScanner.addDevice(scale);
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScanner.stopScanCallCount, initialStopCount + 1);
+            expect(mockScaleController.connectCalls, isEmpty);
+            mockScanner.completeScan();
+            await Future.wait([first, queued, coalesced]);
+            expect(mockScaleController.connectCalls, [same(scale)]);
+          },
+        );
+
+        test(
+          'automatic startup still resolves the preferred machine first',
+          () async {
+            await prepare(machine: false);
+            await settingsController.setPreferredMachineId('preferred-machine');
+            final machine = _FakeDe1(deviceId: 'preferred-machine');
+            final scale = TestScale(deviceId: 'preferred-scale');
+            mockScanner.addDevice(scale);
+            final connect = connectionManager.connect();
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScaleController.connectCalls, isEmpty);
+            mockScanner.addDevice(machine);
+            await Future<void>.delayed(Duration.zero);
+            expect(mockDe1Controller.connectCalls, [same(machine)]);
+            mockScanner.completeScan();
+            await connect;
+            expect(mockDe1Controller.connectCalls, [same(machine)]);
+            expect(mockScaleController.connectCalls, [same(scale)]);
+          },
+        );
+
+        test(
+          'confirmed retry restores scale reacquisition after a stop fault',
+          () async {
+            mockScanner.supportsWatch = true;
+            await prepare();
+            mockScanner.scanFailures = [
+              ServiceScanFailure(
+                serviceName: 'BLE',
+                error: StateError('native stop denied'),
+                stackTrace: StackTrace.current,
+              ),
+            ];
+            final failed = connectionManager.requestExternalScan(
+              connect: true,
+              connectPreferredScaleEarly: true,
+            );
+            await Future<void>.delayed(Duration.zero);
+            final scale = TestScale(deviceId: 'preferred-scale');
+            mockScanner.addDevice(scale);
+            await Future<void>.delayed(Duration.zero);
+            mockScanner.completeScan();
+            await failed;
+            expect(mockScaleController.connectCalls, isEmpty);
+            expect(mockScanner.watchActive, isFalse);
+            expect(connectionManager.scaleReconnectScheduled, isFalse);
+
+            mockScanner.scanFailures = const [];
+            await connectionManager.requestExternalScan(
+              connect: true,
+              connectPreferredScaleEarly: true,
+            );
+            expect(mockScaleController.connectCalls, [same(scale)]);
+            mockScaleController.mockEmitConnectionState(
+              ConnectionState.disconnected,
+            );
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScaleController.connectCalls, hasLength(2));
+          },
+        );
+
+        for (final fallback in ['machine unresolved', 'preferred absent']) {
+          test(
+            '$fallback preserves partial-service-failure post-scan policy',
+            () async {
+              await prepare(machine: fallback != 'machine unresolved');
+              mockScanner.scanFailures = [
+                ServiceScanFailure(
+                  serviceName: 'unrelated service',
+                  error: StateError('unrelated scan failed'),
+                  stackTrace: StackTrace.current,
+                ),
+              ];
+              final machine = _FakeDe1(deviceId: 'fallback-machine');
+              if (fallback == 'machine unresolved') {
+                mockScanner.addDevice(machine);
+              }
+              final scale = TestScale(
+                deviceId: fallback == 'preferred absent'
+                    ? 'other-scale'
+                    : 'preferred-scale',
+              );
+              final scan = connectionManager.requestExternalScan(
+                connect: true,
+                connectPreferredScaleEarly: true,
+              );
+              await Future<void>.delayed(Duration.zero);
+              mockScanner.addDevice(scale);
+              await Future<void>.delayed(Duration.zero);
+              expect(mockScanner.stopScanCallCount, 0);
+              expect(mockScaleController.connectCalls, isEmpty);
+              mockScanner.completeScan();
+              await scan;
+              if (fallback == 'machine unresolved') {
+                expect(mockDe1Controller.connectCalls, [same(machine)]);
+                expect(mockScaleController.connectCalls, [same(scale)]);
+              } else {
+                expect(
+                  connectionManager.currentStatus.pendingAmbiguity,
+                  AmbiguityReason.scalePicker,
+                );
+              }
+            },
+          );
+        }
+
+        test('uncertain ownership never starts GATT', () async {
+          mockScanner.supportsWatch = true;
+          await prepare();
+          final scan = connectionManager.requestExternalScan(
+            connect: true,
+            connectPreferredScaleEarly: true,
+          );
+          await Future<void>.delayed(Duration.zero);
+          mockScanner.addDevice(TestScale(deviceId: 'preferred-scale'));
+          await Future<void>.delayed(Duration.zero);
+          expect(mockScanner.stopScanCallCount, 1);
+          mockScanner.scanCompleter!.complete();
+          await scan;
+          expect(mockScaleController.connectCalls, isEmpty);
+        });
+      });
 
       test('no preferred, 0 machines → stays idle', () async {
         await connectionManager.connect();

@@ -472,6 +472,28 @@ Automatic `connect()` scans may early-connect preferred devices as they appear. 
    - No preferred, multiple → show picker (`machinePicker`)
 2. **Scale phase** — after machine resolution, apply the same policy to a missing scale. If no machine is found, an unambiguous scale can still connect while the overall phase remains `idle`. Machine ambiguity is resolved before scale ambiguity, and selecting a machine continues with scale candidates retained from the same scan. Bengle skips external-scale policy because its integrated scale always owns the slot.
 
+REST and devices-WebSocket scan callers can opt in with
+`connectPreferredScaleEarly=true` (default false, only with `connect=true`).
+This selects `ConnectionAttemptPolicy.explicitPreferredScaleReconnect`, not the
+automatic early-connect policy. It requires an already-connected non-Bengle
+machine with resolved ownership, no pending machine/selection work, an empty
+primary scale slot, and a configured preferred scale without an auxiliary claim.
+Sleeping-scale restrictions still apply. When that scale appears, discovery is
+stopped and its scan future must confirm successful teardown before the normal
+scale phase starts GATT. No exhaustive rescan is required. Eligibility is
+rechecked on sighting and after teardown; losing ownership after the stop aborts
+the shortcut. After shortcut activation, failed services or uncertain teardown
+also abort without GATT.
+After unconfirmed teardown, scale reacquisition stays blocked until a later scan
+confirms teardown, including ScaleWatch cached-device connections. A confirmed
+retry restores normal recovery.
+Ineligible requests, other scales and an absent preferred scale retain normal
+full explicit discovery and post-scan policy, including partial-service-failure
+handling unless an earlier shortcut teardown fault is still latched. `quick`
+controls waiting only;
+automatic `connect()` and Bengle precedence are unchanged. Coalesced connect
+requests preserve an opt-in from any caller, including post-wake deferral.
+
 The `ScanReport` covers this full selection session. It is finalized after any
 picker continuation and retained scale work complete; a newer full scan or a
 disconnect finalizes the superseded session as cancelled.
