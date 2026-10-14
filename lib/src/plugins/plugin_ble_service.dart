@@ -141,6 +141,20 @@ class PluginBleService {
           'sleepDisplay',
           'wakeDisplay',
         ],
+        if (driver.declaration.grinderCapabilities.contains(
+          PluginGrinderCapability.startStop,
+        )) ...[
+          'start',
+          'stop',
+        ],
+        if (driver.declaration.grinderCapabilities.contains(
+          PluginGrinderCapability.grindSetting,
+        ))
+          'setGrindSetting',
+        if (driver.declaration.grinderCapabilities.contains(
+          PluginGrinderCapability.rpmControl,
+        ))
+          'setRpm',
       };
       for (final operation in PluginDeviceOperation.values) {
         final name = operation.name;
@@ -214,6 +228,14 @@ class PluginBleService {
     generation,
     handle,
   ).publish(snapshot, session, sample: sample);
+
+  void publishInfo(
+    String pluginId,
+    int generation,
+    String handle,
+    Map<String, dynamic> info,
+    String? session,
+  ) => _binding(pluginId, generation, handle).publishInfo(info, session);
 
   void reportDisconnected(
     String pluginId,

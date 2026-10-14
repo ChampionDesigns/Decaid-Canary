@@ -41,7 +41,9 @@
 		<string>_decentscale._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Needed to capture photos for shot notes and feedback when picking images via the file picker</string>
+	<string>Needed for camera-enabled skins, shot notes and feedback. Skins need your consent before receiving live camera images.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Needed to include sound when you choose to record a video using a skin's system camera picker. Live microphone access from skins is not allowed.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Needed to import photos for shot notes and feedback</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

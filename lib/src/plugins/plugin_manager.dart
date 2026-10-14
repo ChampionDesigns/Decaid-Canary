@@ -368,6 +368,9 @@ class PluginManager {
         // Add HTTP response handling
         const __nativeSendMessage = sendMessage;
         const __nativeJsonStringify = JSON.stringify.bind(JSON);
+        const __nativeNumberIsFinite = Number.isFinite;
+        const __nativeNumberValueOf = Number.prototype.valueOf;
+        const __nativeBigIntValueOf = typeof BigInt === "function" ? BigInt.prototype.valueOf : null;
         const __NativePromise = Promise;
         const __NativeError = Error;
         const __nativeFreeze = Object.freeze.bind(Object);
@@ -447,7 +450,7 @@ class PluginManager {
           return __nativeFreeze(wrapped);
         }
 
-        function __decentProxy(pluginId, generation, bridgeToken, path, method, query, body, contentType) {
+        function __decentProxy(pluginId, generation, bridgeToken, path, method, query, body, contentType, gzip) {
           const requestId = "__decent_proxy_" + __decentProxyNonce + "_" + (++__decentProxySeq);
           const promise = new __NativePromise((resolve, reject) => {
             const pendingByPlugin = __pendingDecentProxyByPlugin(pluginId);
@@ -463,7 +466,8 @@ class PluginManager {
                 method: method,
                 query: query,
                 body: body,
-                contentType: contentType
+                contentType: contentType,
+                gzip: gzip
               });
             } catch (e) {
               __mapDelete(pendingByPlugin, requestId);
@@ -764,17 +768,44 @@ class PluginManager {
 
         const __devicePending = new Map();
         const __deviceHandlers = new Map();
-        function __sendDeviceMessage(message) {
-          __nativeSendMessage("devices", __nativeJsonStringify(message));
+        function __isBoxedNumericValue(value) {
+          if (value === null || typeof value !== "object") return false;
+          try {
+            __nativeReflectApply(__nativeNumberValueOf, value, []);
+            return true;
+          } catch (_) {}
+          if (__nativeBigIntValueOf !== null) {
+            try {
+              __nativeReflectApply(__nativeBigIntValueOf, value, []);
+              return true;
+            } catch (_) {}
+          }
+          return false;
+        }
+        function __deviceJsonValue(key, value) {
+          if ((typeof value === "number" && !__nativeNumberIsFinite(value)) || typeof value === "bigint" || __isBoxedNumericValue(value)) {
+            const error = new __NativeError("Device payload numbers must be finite, unboxed and not BigInt");
+            error.code = "invalid_argument";
+            throw error;
+          }
+          return value;
+        }
+        function __sendDeviceMessage(message, replacer) {
+          __nativeSendMessage("devices", __nativeJsonStringify(message, replacer));
         }
         __frozenTransportGlobal("__deviceRequest", function (bridgeToken, generation, requestId, type, payload) {
-          __sendDeviceMessage({
-            bridgeToken: bridgeToken,
-            generation: generation,
-            requestId: requestId,
-            type: type,
-            payload: payload
-          });
+          try {
+            __sendDeviceMessage({
+              bridgeToken: bridgeToken,
+              generation: generation,
+              requestId: requestId,
+              type: type,
+              payload: payload
+            }, __deviceJsonValue);
+          } catch (error) {
+            __mapDelete(__devicePending, requestId);
+            throw error;
+          }
         });
         __frozenTransportGlobal("__deviceRegisterPending", function (requestId, entry) {
           __mapSet(__devicePending, requestId, entry);
@@ -819,6 +850,10 @@ class PluginManager {
           try {
             const handlerResult = operation === "connect"
               ? handler(entry.connectTransport(invocationId, payload))
+              : operation === "setGrindSetting"
+              ? handler(payload.setting)
+              : operation === "setRpm"
+              ? handler(payload.rpm)
               : handler(payload);
             const promise = __nativeReflectApply(
               __nativePromiseResolve,
@@ -1310,6 +1345,22 @@ class PluginManager {
             sample: sample as String?,
           );
           _replyDevice(requestId, bridgeToken, result: const {});
+        case 'blePublishInfo':
+          final info = data['info'];
+          if (info is! Map) {
+            throw const PluginBleException(
+              'invalid_argument',
+              'Invalid BLE info',
+            );
+          }
+          bleService.publishInfo(
+            pluginId,
+            generation,
+            registrationHandle,
+            Map<String, dynamic>.from(info),
+            data['session'] as String?,
+          );
+          _replyDevice(requestId, bridgeToken, result: const {});
         case 'bleDisconnected':
           bleService.reportDisconnected(
             pluginId,
@@ -1336,7 +1387,8 @@ class PluginManager {
             );
           }
           final driver = declarations.single;
-          if (driver.type == PluginDriverType.scale) {
+          if (driver.type == PluginDriverType.scale ||
+              driver.type == PluginDriverType.grinder) {
             final requiredHandlers = {
               'connect',
               'disconnect',
@@ -1355,6 +1407,20 @@ class PluginManager {
                 'sleepDisplay',
                 'wakeDisplay',
               ],
+              if (driver.grinderCapabilities.contains(
+                PluginGrinderCapability.startStop,
+              )) ...[
+                'start',
+                'stop',
+              ],
+              if (driver.grinderCapabilities.contains(
+                PluginGrinderCapability.grindSetting,
+              ))
+                'setGrindSetting',
+              if (driver.grinderCapabilities.contains(
+                PluginGrinderCapability.rpmControl,
+              ))
+                'setRpm',
             };
             for (final operation in PluginDeviceOperation.values) {
               final present =
@@ -1367,7 +1433,7 @@ class PluginManager {
                   'true';
               if (present != requiredHandlers.contains(operation.name)) {
                 throw PluginDeviceException(
-                  'Scale handler ${operation.name} does not match declared capabilities',
+                  '${driver.type.name} handler ${operation.name} does not match declared capabilities',
                   code: 'invalid_argument',
                 );
               }
@@ -1402,6 +1468,24 @@ class PluginManager {
             generation: generation,
             registrationHandle: registrationHandle,
             snapshot: Map<String, dynamic>.from(snapshot),
+            session: data['session'] is String
+                ? data['session'] as String
+                : null,
+          );
+          _replyDevice(requestId, bridgeToken, result: const {});
+        case 'publishInfo':
+          final info = data['info'];
+          if (info is! Map) {
+            throw const PluginDeviceException(
+              'Invalid plugin device info',
+              code: 'invalid_argument',
+            );
+          }
+          deviceService.publishInfo(
+            pluginId: pluginId,
+            generation: generation,
+            registrationHandle: registrationHandle,
+            info: Map<String, dynamic>.from(info),
             session: data['session'] is String
                 ? data['session'] as String
                 : null,
@@ -2115,7 +2199,7 @@ class PluginManager {
             : () => rejectPermission("transport.ble"),
           register(definition, handlers) {
             const driver = definition && declaredDrivers.find((entry) => entry.id === definition.driverId);
-            if (!driver || (driver.type !== "sensor" && driver.type !== "scale")) {
+            if (!driver || !["sensor", "scale", "grinder"].includes(driver.type)) {
               return Promise.reject(new Error("Device driver is not declared by this plugin"));
             }
             if (!handlers || typeof handlers.connect !== "function" ||
@@ -2124,11 +2208,16 @@ class PluginManager {
               return Promise.reject(new Error("Device handlers connect, disconnect, and execute are required"));
             }
             const registrationHandle = "device_" + pluginGeneration + "_" + __deviceNonce + "_" + (++__deviceSeq);
+            let retired = false;
+            const sessionCall = (type, payload) => retired
+              ? Promise.reject(Object.assign(new Error('Device session retired'), {code: 'stale_session'}))
+              : __deviceCall(type, payload);
             __deviceSetHandlers(registrationHandle, {
               pluginId: pluginId,
               generation: pluginGeneration,
               bridgeToken: pluginBridgeToken,
               handlers: handlers,
+              dispose: () => { retired = true; },
               connectTransport: (invocationId, payload) => {
                 const transport = __connectTransport(registrationHandle, invocationId);
                 if (driver.type === "sensor") return transport;
@@ -2136,12 +2225,17 @@ class PluginManager {
                 return Object.freeze({
                   transport: transport,
                   publish(snapshot) {
-                    return __deviceCall("publish", {
+                    return sessionCall("publish", {
                       registrationHandle: registrationHandle, session: session, snapshot: snapshot
                     });
                   },
+                  publishInfo(info) {
+                    return sessionCall("publishInfo", {
+                      registrationHandle: registrationHandle, session: session, info: info
+                    });
+                  },
                   reportDisconnected() {
-                    return __deviceCall("reportDisconnected", {
+                    return sessionCall("reportDisconnected", {
                       registrationHandle: registrationHandle, session: session
                     });
                   }
@@ -2178,7 +2272,7 @@ class PluginManager {
                     );
                   }
                 };
-                if (driver.type === "scale") {
+                if (driver.type === "scale" || driver.type === "grinder") {
                   delete device.publish;
                   delete device.reportDisconnected;
                 }
@@ -2211,6 +2305,9 @@ class PluginManager {
             if (method === "POST" && !${manifest.permissions.contains(PluginPermissions.proxyDecentApiWrite)}) {
               return rejectPermission("proxy.decent_api.write");
             }
+            if (options.gzip !== undefined && typeof options.gzip !== "boolean") {
+              return Promise.reject(new TypeError("gzip must be a boolean"));
+            }
             return globalThis.__reaprimePluginBridge.decentProxy(
               pluginId,
               pluginGeneration,
@@ -2219,7 +2316,8 @@ class PluginManager {
               options.method || "GET",
               options.query || {},
               options.body ?? null,
-              options.contentType ?? null
+              options.contentType ?? null,
+              options.gzip === undefined ? false : options.gzip
             );
           },
           transport: transport,
@@ -2827,6 +2925,7 @@ class PluginManager {
         query: _stringMap(msg['query']),
         body: msg['body'] as String?,
         contentType: msg['contentType'] as String?,
+        gzipBody: msg.containsKey('gzip') ? msg['gzip'] as bool : false,
       );
       _completeOp(op, result: response);
     } on DecentProxyConsentDeniedException catch (e) {
@@ -2854,6 +2953,7 @@ class PluginManager {
     Map<String, String>? query,
     String? body,
     String? contentType,
+    bool gzipBody = false,
   }) async {
     _ensureActive();
     return _decentProxyBridge.proxyForPlugin(
@@ -2864,6 +2964,7 @@ class PluginManager {
       query: query,
       body: body,
       contentType: contentType,
+      gzipBody: gzipBody,
     );
   }
 
@@ -2962,6 +3063,9 @@ class PluginManager {
     _pendingOps[op.key] = op;
     return completer.future;
   }
+
+  bool isPluginRuntimeActive(String pluginId) =>
+      _plugins[pluginId]?.isAlive == true;
 
   List<PluginRuntime> get loadedPlugins => _plugins.values.toList();
 

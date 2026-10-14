@@ -5,6 +5,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/controllers/connection_error.dart';
 import 'package:reaprime/src/controllers/connection_manager.dart';
+import 'package:reaprime/src/controllers/de1_controller.dart';
 import 'package:reaprime/src/controllers/auxiliary_scale_registry.dart';
 import 'package:reaprime/src/controllers/remembered_devices_controller.dart';
 import 'package:reaprime/src/controllers/scale_controller.dart';
@@ -45,6 +46,7 @@ class _FakeDe1 implements De1Interface {
   final Object? disconnectError;
   final Completer<void>? disconnectStarted;
   final Completer<void>? disconnectCompleter;
+  int disconnectCalls = 0;
 
   @override
   DeviceType get type => DeviceType.machine;
@@ -68,6 +70,9 @@ class _FakeDe1 implements De1Interface {
   @override
   Future<void> dispose() async {}
 
+  @override
+  Future<void> onConnect() async {}
+
   _FakeDe1({
     this.deviceId = 'fake-de1',
     String? name,
@@ -83,6 +88,7 @@ class _FakeDe1 implements De1Interface {
 
   @override
   Future<void> disconnect() async {
+    disconnectCalls++;
     disconnectOrder?.add('machine');
     if (disconnectStarted != null && !disconnectStarted!.isCompleted) {
       disconnectStarted!.complete();
@@ -93,6 +99,116 @@ class _FakeDe1 implements De1Interface {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _BlockingDe1 extends _FakeDe1 {
+  _BlockingDe1({
+    super.deviceId,
+    super.disconnectError,
+    this.sourceTransport = TransportType.unknown,
+  });
+
+  final TransportType sourceTransport;
+  @override
+  TransportType get transportType => sourceTransport;
+
+  final started = Completer<void>();
+  final proceed = Completer<void>();
+
+  @override
+  Future<void> onConnect() async {
+    started.complete();
+    await proceed.future;
+  }
+}
+
+class _TransportDe1 extends _FakeDe1 {
+  _TransportDe1({required super.deviceId, required this.transport});
+
+  final TransportType transport;
+  @override
+  TransportType get transportType => transport;
+}
+
+/// One physical link per device ID, as `UniversalBle.disconnect(deviceId)` plus
+/// the per-device `BleLifecycleGate` behave: disconnecting any instance tears
+/// the link down for every instance of that device.
+class _SharedDeviceLink {
+  bool tornDown = false;
+}
+
+class _SharedLinkDe1 extends _FakeDe1 {
+  _SharedLinkDe1({
+    required super.deviceId,
+    super.disconnectStarted,
+    required this.link,
+    this.fail = false,
+  });
+
+  final _SharedDeviceLink link;
+  final bool fail;
+  final Completer<void> started = Completer<void>();
+  final Completer<void> proceed = Completer<void>();
+
+  @override
+  TransportType get transportType => TransportType.ble;
+
+  @override
+  Future<void> onConnect() async {
+    started.complete();
+    await proceed.future;
+    if (link.tornDown) throw StateError('shared link torn down');
+    if (fail) throw StateError('connect failed after link opened');
+  }
+
+  @override
+  Future<void> disconnect() async {
+    link.tornDown = true;
+    await super.disconnect();
+  }
+}
+
+class _SharedLinkScale extends TestScale {
+  _SharedLinkScale({
+    required super.deviceId,
+    required this.link,
+    this.fail = false,
+  });
+
+  final _SharedDeviceLink link;
+  final bool fail;
+  final Completer<void> started = Completer<void>();
+  final Completer<void> proceed = Completer<void>();
+  int disconnectCalls = 0;
+
+  @override
+  TransportType get transportType => TransportType.ble;
+
+  @override
+  Future<void> onConnect() async {
+    started.complete();
+    await proceed.future;
+    if (link.tornDown) throw StateError('shared link torn down');
+    if (fail) throw StateError('connect failed after link opened');
+    setConnectionState(ConnectionState.connected);
+  }
+
+  @override
+  Future<void> disconnect() async {
+    link.tornDown = true;
+    disconnectCalls++;
+    setConnectionState(ConnectionState.disconnected);
+  }
+}
+
+/// Unblocks pending fake connects when a test aborts mid-flight, so a failing
+/// assertion reports immediately instead of waiting for the teardown dispose.
+void _unblockOnFailure(List<Completer<void>> pending) {
+  addTearDown(() {
+    for (final completer in pending) {
+      if (!completer.isCompleted) completer.complete();
+    }
+  });
 }
 
 class _FakeSimulatedDe1 extends _FakeDe1 implements SimulatedDevice {
@@ -125,6 +241,8 @@ class _BlockingScale extends TestScale {
 
   final Completer<void> started = Completer<void>();
   final Completer<void> proceed = Completer<void>();
+  final Completer<void> retired = Completer<void>();
+  int disconnectCalls = 0;
 
   @override
   Future<void> onConnect() async {
@@ -132,6 +250,41 @@ class _BlockingScale extends TestScale {
     await proceed.future;
     setConnectionState(ConnectionState.connected);
   }
+
+  @override
+  Future<void> disconnect() async {
+    disconnectCalls++;
+    setConnectionState(ConnectionState.disconnected);
+    if (!retired.isCompleted) retired.complete();
+  }
+}
+
+class _BlockingPreferencesService extends MockSettingsService {
+  final machineStarted = Completer<void>();
+  final machineProceed = Completer<void>();
+  final scaleStarted = Completer<void>();
+  final scaleProceed = Completer<void>();
+
+  @override
+  Future<void> setPreferredMachineId(String? id) async {
+    if (!machineStarted.isCompleted) machineStarted.complete();
+    await machineProceed.future;
+    await super.setPreferredMachineId(id);
+  }
+
+  @override
+  Future<void> setPreferredScaleId(String? id) async {
+    if (!scaleStarted.isCompleted) scaleStarted.complete();
+    await scaleProceed.future;
+    await super.setPreferredScaleId(id);
+  }
+}
+
+class _BlockingBleScale extends _BlockingScale {
+  _BlockingBleScale(super.deviceId);
+
+  @override
+  TransportType get transportType => TransportType.ble;
 }
 
 class _FailingFakeDe1 implements De1Interface {
@@ -364,6 +517,677 @@ void main() {
         expect(settingsController.preferredScaleId, 'reusable-scale');
       },
     );
+
+    group('late connect ownership', () {
+      late De1Controller realDe1Controller;
+      late ScaleController realScaleController;
+      late ConnectionManager manager;
+
+      Future<void> createManager({
+        Duration timeout = const Duration(milliseconds: 1),
+        SettingsController? settings,
+      }) async {
+        realDe1Controller = De1Controller(
+          controller: DeviceController([dummyDiscoveryService]),
+        );
+        realScaleController = ScaleController();
+        manager = ConnectionManager(
+          deviceScanner: mockScanner,
+          de1Controller: realDe1Controller,
+          scaleController: realScaleController,
+          settingsController: settings ?? settingsController,
+          connectTimeout: timeout,
+        );
+        addTearDown(() async => manager.dispose());
+      }
+
+      test('timed-out machine source cannot be adopted later', () async {
+        await createManager();
+        final machine = _BlockingDe1();
+        final connecting = manager.connectMachine(machine);
+        await machine.started.future;
+        expect((await connecting).outcome, ConnectionOutcome.timedOut);
+        machine.proceed.complete();
+        await Future<void>.delayed(Duration.zero);
+        expect(realDe1Controller.connectedDe1OrNull, isNull);
+        expect(machine.disconnectCalls, 1);
+        expect(settingsController.preferredMachineId, isNull);
+      });
+
+      test('timed-out scale source cannot be adopted later', () async {
+        await createManager();
+        final scale = _BlockingScale('late-scale');
+        final connecting = manager.connectScale(scale);
+        await scale.started.future;
+        expect((await connecting).outcome, ConnectionOutcome.timedOut);
+        scale.proceed.complete();
+        await Future<void>.delayed(Duration.zero);
+        expect(scale.disconnectCalls, 1);
+        expect(
+          () => realScaleController.connectedScale(),
+          throwsA(isA<DeviceNotConnectedException>()),
+        );
+        expect(settingsController.preferredScaleId, isNull);
+      });
+
+      test(
+        'cancelled machine cannot replace a new same-device attempt',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final old = _BlockingDe1(
+            deviceId: 'same-machine',
+            sourceTransport: TransportType.ble,
+          );
+          final replacement = _TransportDe1(
+            deviceId: 'same-machine',
+            transport: TransportType.ble,
+          );
+          mockScanner.addDevice(old);
+          final cancelled = manager.scanAndConnect();
+          await old.started.future;
+          manager.cancelActiveScan();
+
+          expect((await manager.connectMachine(replacement)).success, isTrue);
+          expect(realDe1Controller.connectedDe1OrNull, same(replacement));
+
+          old.proceed.complete();
+          await cancelled;
+          expect(realDe1Controller.connectedDe1OrNull, same(replacement));
+          expect(old.disconnectCalls, 0);
+        },
+      );
+
+      test(
+        'cancelling a scan leaves an unrelated direct connect alone',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final machine = _BlockingDe1();
+          final connecting = manager.connectMachine(machine);
+          await machine.started.future;
+          manager.cancelActiveScan();
+          machine.proceed.complete();
+          expect((await connecting).success, isTrue);
+          expect(machine.disconnectCalls, 0);
+          expect(realDe1Controller.connectedDe1OrNull, same(machine));
+        },
+      );
+
+      test('cancelling an owned scan retires its pending machine', () async {
+        await createManager(timeout: const Duration(seconds: 1));
+        final machine = _BlockingDe1();
+        mockScanner.addDevice(machine);
+        final scan = manager.scanAndConnect();
+        await machine.started.future;
+        manager.cancelActiveScan();
+        machine.proceed.complete();
+        await scan;
+        expect(machine.disconnectCalls, 1);
+        expect(realDe1Controller.connectedDe1OrNull, isNull);
+      });
+
+      test(
+        'cancelling a session leaves an unrelated direct connect alone',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          mockScanner.addDevice(_FakeDe1(deviceId: 'picker-a'));
+          mockScanner.addDevice(_FakeDe1(deviceId: 'picker-b'));
+          await manager.scanAndConnect();
+          expect(
+            manager.currentStatus.pendingAmbiguity,
+            AmbiguityReason.machinePicker,
+          );
+          final machine = _BlockingDe1(deviceId: 'direct-machine');
+          final connecting = manager.connectMachine(machine);
+          await machine.started.future;
+          manager.cancelSelectionSession();
+          machine.proceed.complete();
+          expect((await connecting).success, isTrue);
+          expect(machine.disconnectCalls, 0);
+          expect(realDe1Controller.connectedDe1OrNull, same(machine));
+        },
+      );
+
+      test(
+        'cancelling a session without one leaves direct connect alone',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final scale = _BlockingScale('direct-scale');
+          final connecting = manager.connectScale(scale);
+          await scale.started.future;
+          manager.cancelSelectionSession();
+          scale.proceed.complete();
+          expect((await connecting).success, isTrue);
+          expect(scale.disconnectCalls, 0);
+          expect(realScaleController.connectedScale(), same(scale));
+        },
+      );
+
+      test(
+        'cancelled scan retires an adopted machine after preference await',
+        () async {
+          final service = _BlockingPreferencesService();
+          final settings = SettingsController(service);
+          await settings.loadSettings();
+          await createManager(
+            settings: settings,
+            timeout: const Duration(seconds: 1),
+          );
+          final machine = _BlockingDe1();
+          mockScanner.addDevice(machine);
+          final scan = manager.scanAndConnect();
+          await machine.started.future;
+          machine.proceed.complete();
+          await service.machineStarted.future;
+          manager.cancelActiveScan();
+          service.machineProceed.complete();
+          await scan;
+          expect(machine.disconnectCalls, 1);
+          expect(realDe1Controller.connectedDe1OrNull, isNull);
+          expect(
+            manager.currentStatus.error?.kind,
+            isNot(ConnectionErrorKind.machineDisconnected),
+          );
+        },
+      );
+
+      test(
+        'cancelled scan retires an adopted scale after preference await',
+        () async {
+          final service = _BlockingPreferencesService();
+          final settings = SettingsController(service);
+          await settings.loadSettings();
+          await createManager(
+            settings: settings,
+            timeout: const Duration(seconds: 1),
+          );
+          final scale = _BlockingScale('late-preference-scale');
+          mockScanner.addDevice(scale);
+          final scan = manager.scanAndConnect();
+          await scale.started.future;
+          scale.proceed.complete();
+          await service.scaleStarted.future;
+          manager.cancelActiveScan();
+          service.scaleProceed.complete();
+          await scan;
+          expect(scale.disconnectCalls, 1);
+          expect(
+            () => realScaleController.connectedScale(),
+            throwsA(isA<DeviceNotConnectedException>()),
+          );
+        },
+      );
+
+      test(
+        'same-deviceId different-transport adoption retires the stale link',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final old = _BlockingDe1(
+            deviceId: 'same-id',
+            sourceTransport: TransportType.ble,
+          );
+          final usb = _TransportDe1(
+            deviceId: 'same-id',
+            transport: TransportType.serial,
+          );
+          final connecting = manager.connectMachine(old);
+          await old.started.future;
+          await manager.disconnectMachine();
+          realDe1Controller.adoptDevice(usb);
+          old.proceed.complete();
+          await connecting;
+          expect(old.disconnectCalls, 1);
+          expect(realDe1Controller.connectedDe1OrNull, same(usb));
+        },
+      );
+
+      test(
+        'same-ID same-transport adoption preserves the replacement',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final old = _BlockingDe1(
+            deviceId: 'same-id',
+            sourceTransport: TransportType.ble,
+          );
+          final replacement = _TransportDe1(
+            deviceId: 'same-id',
+            transport: TransportType.ble,
+          );
+          final connecting = manager.connectMachine(old);
+          await old.started.future;
+          await manager.disconnectMachine();
+          realDe1Controller.adoptDevice(replacement);
+          old.proceed.complete();
+          await connecting;
+          expect(old.disconnectCalls, 0);
+          expect(realDe1Controller.connectedDe1OrNull, same(replacement));
+        },
+      );
+
+      test(
+        'stale same-link machine leaves a pending replacement link intact',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final link = _SharedDeviceLink();
+          final stale = _SharedLinkDe1(
+            deviceId: 'shared-link-machine',
+            link: link,
+          );
+          final replacement = _SharedLinkDe1(
+            deviceId: 'shared-link-machine',
+            link: link,
+          );
+          _unblockOnFailure([stale.proceed, replacement.proceed]);
+
+          final connecting = manager.connectMachine(stale);
+          await stale.started.future;
+          await manager.disconnectMachine();
+          final replacing = manager.connectMachine(replacement);
+          await replacement.started.future;
+
+          stale.proceed.complete();
+          expect((await connecting).outcome, ConnectionOutcome.conflict);
+          expect(stale.disconnectCalls, 0);
+          expect(link.tornDown, isFalse);
+
+          replacement.proceed.complete();
+          expect((await replacing).success, isTrue);
+          expect(realDe1Controller.connectedDe1OrNull, same(replacement));
+        },
+      );
+
+      test(
+        'stale same-link scale leaves a pending replacement link intact',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final link = _SharedDeviceLink();
+          final stale = _SharedLinkScale(
+            deviceId: 'shared-link-scale',
+            link: link,
+          );
+          final replacement = _SharedLinkScale(
+            deviceId: 'shared-link-scale',
+            link: link,
+          );
+          _unblockOnFailure([stale.proceed, replacement.proceed]);
+
+          final connecting = manager.connectScale(stale);
+          await stale.started.future;
+          await manager.disconnectScale();
+          final replacing = manager.connectScale(replacement);
+          await replacement.started.future;
+
+          stale.proceed.complete();
+          expect((await connecting).outcome, ConnectionOutcome.conflict);
+          expect(stale.disconnectCalls, 0);
+          expect(link.tornDown, isFalse);
+
+          replacement.proceed.complete();
+          expect((await replacing).success, isTrue);
+          expect(realScaleController.connectedScale(), same(replacement));
+        },
+      );
+
+      test(
+        'timed-out machine source failure retires its live link once',
+        () async {
+          await createManager();
+          final link = _SharedDeviceLink();
+          final retired = Completer<void>();
+          final machine = _SharedLinkDe1(
+            deviceId: 'failed-after-link',
+            link: link,
+            fail: true,
+            disconnectStarted: retired,
+          );
+          _unblockOnFailure([machine.proceed]);
+
+          final connecting = manager.connectMachine(machine);
+          await machine.started.future;
+          expect((await connecting).outcome, ConnectionOutcome.timedOut);
+          expect(link.tornDown, isFalse);
+          expect(machine.disconnectCalls, 0);
+
+          machine.proceed.complete();
+          await retired.future.timeout(const Duration(seconds: 1));
+          expect(link.tornDown, isTrue);
+          expect(machine.disconnectCalls, 1);
+          expect(realDe1Controller.connectedDe1OrNull, isNull);
+        },
+      );
+
+      test(
+        'failed same-link machine replacement retires deferred link',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final link = _SharedDeviceLink();
+          final stale = _SharedLinkDe1(deviceId: 'shared-failure', link: link);
+          final replacement = _SharedLinkDe1(
+            deviceId: 'shared-failure',
+            link: link,
+            fail: true,
+          );
+          _unblockOnFailure([stale.proceed, replacement.proceed]);
+
+          final connecting = manager.connectMachine(stale);
+          await stale.started.future;
+          await manager.disconnectMachine();
+          final replacing = manager.connectMachine(replacement);
+          await replacement.started.future;
+
+          stale.proceed.complete();
+          expect((await connecting).outcome, ConnectionOutcome.conflict);
+          expect(stale.disconnectCalls, 0);
+          expect(link.tornDown, isFalse);
+
+          replacement.proceed.complete();
+          expect((await replacing).success, isFalse);
+          expect(link.tornDown, isTrue);
+          expect(stale.disconnectCalls, 1);
+        },
+      );
+
+      test('invalidated failed replacement retires deferred link', () async {
+        await createManager(timeout: const Duration(seconds: 1));
+        final link = _SharedDeviceLink();
+        final stale = _SharedLinkDe1(
+          deviceId: 'shared-invalidated',
+          link: link,
+        );
+        final replacement = _SharedLinkDe1(
+          deviceId: 'shared-invalidated',
+          link: link,
+          fail: true,
+        );
+        _unblockOnFailure([stale.proceed, replacement.proceed]);
+
+        final connecting = manager.connectMachine(stale);
+        await stale.started.future;
+        await manager.disconnectMachine();
+        final replacing = manager.connectMachine(replacement);
+        await replacement.started.future;
+        stale.proceed.complete();
+        expect((await connecting).outcome, ConnectionOutcome.conflict);
+        expect(link.tornDown, isFalse);
+
+        await manager.disconnectMachine();
+        replacement.proceed.complete();
+        expect((await replacing).outcome, ConnectionOutcome.conflict);
+        expect(link.tornDown, isTrue);
+        expect(replacement.disconnectCalls + stale.disconnectCalls, 1);
+      });
+
+      test('transferred same-link retirements disconnect only once', () async {
+        await createManager(timeout: const Duration(seconds: 1));
+        final link = _SharedDeviceLink();
+        final stale = _SharedLinkDe1(deviceId: 'shared-chain', link: link);
+        final middle = _SharedLinkDe1(deviceId: 'shared-chain', link: link);
+        final last = _SharedLinkDe1(
+          deviceId: 'shared-chain',
+          link: link,
+          fail: true,
+        );
+        _unblockOnFailure([stale.proceed, middle.proceed, last.proceed]);
+
+        final first = manager.connectMachine(stale);
+        await stale.started.future;
+        await manager.disconnectMachine();
+        final second = manager.connectMachine(middle);
+        await middle.started.future;
+        stale.proceed.complete();
+        expect((await first).outcome, ConnectionOutcome.conflict);
+        expect(link.tornDown, isFalse);
+
+        await manager.disconnectMachine();
+        final third = manager.connectMachine(last);
+        await last.started.future;
+        middle.proceed.complete();
+        expect((await second).outcome, ConnectionOutcome.conflict);
+        expect(link.tornDown, isFalse);
+        last.proceed.complete();
+        expect((await third).success, isFalse);
+        expect(link.tornDown, isTrue);
+        expect(stale.disconnectCalls + middle.disconnectCalls, 1);
+      });
+
+      test(
+        'failed same-link scale replacement retires deferred link',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final link = _SharedDeviceLink();
+          final stale = _SharedLinkScale(
+            deviceId: 'shared-failure',
+            link: link,
+          );
+          final replacement = _SharedLinkScale(
+            deviceId: 'shared-failure',
+            link: link,
+            fail: true,
+          );
+          _unblockOnFailure([stale.proceed, replacement.proceed]);
+
+          final connecting = manager.connectScale(stale);
+          await stale.started.future;
+          await manager.disconnectScale();
+          final replacing = manager.connectScale(replacement);
+          await replacement.started.future;
+
+          stale.proceed.complete();
+          expect((await connecting).outcome, ConnectionOutcome.conflict);
+          expect(stale.disconnectCalls, 0);
+          expect(link.tornDown, isFalse);
+
+          replacement.proceed.complete();
+          expect((await replacing).success, isFalse);
+          expect(link.tornDown, isTrue);
+          expect(stale.disconnectCalls, 1);
+        },
+      );
+
+      test(
+        'stale attempt still retires its own serial link mid replacement',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final stale = _BlockingDe1(
+            deviceId: 'serial-machine',
+            sourceTransport: TransportType.serial,
+          );
+          final replacement = _BlockingDe1(
+            deviceId: 'serial-machine',
+            sourceTransport: TransportType.serial,
+          );
+          _unblockOnFailure([stale.proceed, replacement.proceed]);
+
+          final connecting = manager.connectMachine(stale);
+          await stale.started.future;
+          await manager.disconnectMachine();
+          final replacing = manager.connectMachine(replacement);
+          await replacement.started.future;
+
+          stale.proceed.complete();
+          expect((await connecting).outcome, ConnectionOutcome.conflict);
+          expect(stale.disconnectCalls, 1);
+
+          replacement.proceed.complete();
+          expect((await replacing).success, isTrue);
+          expect(realDe1Controller.connectedDe1OrNull, same(replacement));
+        },
+      );
+
+      test(
+        'stale attempt is retired when the current attempt is another device',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final stale = _BlockingDe1(
+            deviceId: 'stale-machine',
+            sourceTransport: TransportType.ble,
+          );
+          final other = _BlockingDe1(
+            deviceId: 'other-machine',
+            sourceTransport: TransportType.ble,
+          );
+          _unblockOnFailure([stale.proceed, other.proceed]);
+
+          final connecting = manager.connectMachine(stale);
+          await stale.started.future;
+          await manager.disconnectMachine();
+          final connectingOther = manager.connectMachine(other);
+          await other.started.future;
+
+          stale.proceed.complete();
+          expect((await connecting).outcome, ConnectionOutcome.conflict);
+          expect(stale.disconnectCalls, 1);
+
+          other.proceed.complete();
+          expect((await connectingOther).success, isTrue);
+          expect(realDe1Controller.connectedDe1OrNull, same(other));
+        },
+      );
+
+      test(
+        'failed stale retirement is quarantined without blocking admission',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final old = _BlockingDe1(
+            deviceId: 'stuck-link',
+            disconnectError: StateError('retire failed'),
+          );
+          final connecting = manager.connectMachine(old);
+          await old.started.future;
+          await manager.disconnectMachine();
+          old.proceed.complete();
+          await connecting;
+
+          expect(old.disconnectCalls, 1);
+          expect(
+            manager.currentStatus.error?.kind,
+            ConnectionErrorKind.machineConnectFailed,
+          );
+          expect(
+            (await manager.connectMachine(
+              _FakeDe1(deviceId: 'replacement'),
+            )).success,
+            isTrue,
+          );
+
+          await manager.disconnectMachine();
+          expect(old.disconnectCalls, 2);
+        },
+      );
+
+      test('adapter loss invalidates a pending BLE scale', () async {
+        await createManager(timeout: const Duration(seconds: 1));
+        final scale = _BlockingBleScale('adapter-scale');
+        final connecting = manager.connectScale(scale);
+        await scale.started.future;
+        mockScanner.mockAdapterState(AdapterState.poweredOff);
+        scale.proceed.complete();
+        expect((await connecting).outcome, ConnectionOutcome.conflict);
+        expect(scale.disconnectCalls, 1);
+        expect(
+          () => realScaleController.connectedScale(),
+          throwsA(isA<DeviceNotConnectedException>()),
+        );
+      });
+
+      test('stale scale cleanup preserves a new same-device claim', () async {
+        await createManager(timeout: const Duration(seconds: 1));
+        final old = _BlockingScale('same-scale');
+        final replacement = _BlockingScale('same-scale');
+        mockScanner.addDevice(old);
+        final cancelled = manager.scanAndConnect();
+        await old.started.future;
+        manager.cancelActiveScan();
+
+        final replacing = manager.connectScale(replacement);
+        await Future<void>.delayed(Duration.zero);
+        if (!replacement.started.isCompleted) {
+          old.proceed.complete();
+          await cancelled;
+          fail('replacement source did not start after cancellation');
+        }
+        old.proceed.complete();
+        await cancelled;
+        expect(
+          () => realScaleController.connectedScale(),
+          throwsA(isA<DeviceNotConnectedException>()),
+        );
+        expect(
+          (await manager.connectScale(
+            TestScale(deviceId: 'same-scale'),
+            role: ScaleConnectionRole.auxiliary,
+          )).outcome,
+          ConnectionOutcome.conflict,
+        );
+        replacement.proceed.complete();
+        expect((await replacing).success, isTrue);
+        expect(realScaleController.connectedScale(), same(replacement));
+      });
+
+      test(
+        'cancelled machine preference await cannot report success',
+        () async {
+          final service = _BlockingPreferencesService();
+          final settings = SettingsController(service);
+          await settings.loadSettings();
+          await createManager(
+            settings: settings,
+            timeout: const Duration(seconds: 1),
+          );
+          final connecting = manager.connectMachine(_FakeDe1());
+          await service.machineStarted.future;
+          await manager.disconnectMachine();
+          service.machineProceed.complete();
+          expect((await connecting).outcome, ConnectionOutcome.conflict);
+        },
+      );
+
+      test('cancelled scale preference await cannot report success', () async {
+        final service = _BlockingPreferencesService();
+        final settings = SettingsController(service);
+        await settings.loadSettings();
+        await createManager(
+          settings: settings,
+          timeout: const Duration(seconds: 1),
+        );
+        final connecting = manager.connectScale(TestScale());
+        await service.scaleStarted.future;
+        await manager.disconnectScale();
+        service.scaleProceed.complete();
+        expect((await connecting).outcome, ConnectionOutcome.conflict);
+      });
+
+      test(
+        'shutdown waits for pending source before finishing cleanup',
+        () async {
+          await createManager(timeout: const Duration(seconds: 1));
+          final machine = _BlockingDe1();
+          final connecting = manager.connectMachine(machine);
+          await machine.started.future;
+          var finished = false;
+          final shutdown = manager.shutdown().then((_) => finished = true);
+          await Future<void>.delayed(Duration.zero);
+          expect(finished, isFalse);
+          machine.proceed.complete();
+          await Future.wait([connecting, shutdown]);
+          expect(machine.disconnectCalls, 1);
+          expect(realDe1Controller.connectedDe1OrNull, isNull);
+          expect(finished, isTrue);
+        },
+      );
+
+      test(
+        'successful machine and scale connects still adopt normally',
+        () async {
+          await createManager();
+          final machine = _FakeDe1();
+          final scale = TestScale();
+          expect((await manager.connectMachine(machine)).success, isTrue);
+          expect((await manager.connectScale(scale)).success, isTrue);
+          expect(realDe1Controller.connectedDe1OrNull, same(machine));
+          expect(realScaleController.connectedScale(), same(scale));
+        },
+      );
+    });
 
     group('shutdown', () {
       test('stops active scan and discards queued and future work', () async {
@@ -3604,6 +4428,252 @@ void main() {
         );
       });
 
+      test('post-wake watch lease coalesces client scans and expires once', () {
+        fakeAsync((async) {
+          final manager = buildWatchManager();
+          manager.deferredScaleScanDelay = const Duration(seconds: 3);
+          settingsController.setPreferredScaleId(scaleId);
+          async.flushMicrotasks();
+          final machine = _FakeDe1();
+          mockDe1Controller.de1Subject.add(machine);
+          async.flushMicrotasks();
+          machine.emitState(MachineState.sleeping);
+          async.flushMicrotasks();
+          machine.emitState(MachineState.idle);
+          async.flushMicrotasks();
+          expect(mockScanner.watchActive, isTrue);
+          expect(mockScanner.scanCallCount, 0);
+
+          final stopsBefore = mockScanner.stopScanCallCount;
+          final watchStopsBefore = mockScanner.stopWatchCallCount;
+          manager.requestExternalScan(connect: true);
+          manager.requestExternalScan(connect: true);
+          manager.requestExternalScan(connect: true);
+          async.flushMicrotasks();
+          expect(mockScanner.stopWatchCallCount, watchStopsBefore);
+          expect(mockScanner.stopScanCallCount, stopsBefore);
+          expect(mockScanner.scanCallCount, 0);
+          async.elapse(const Duration(seconds: 3));
+          async.flushMicrotasks();
+          expect(mockScanner.scanCallCount, 1);
+          async.elapse(const Duration(seconds: 6));
+          async.flushMicrotasks();
+          expect(mockScanner.scanCallCount, 1);
+          manager.dispose();
+          async.flushMicrotasks();
+        });
+      });
+
+      test('client scans during lease expiry coalesce behind active work', () {
+        fakeAsync((async) {
+          final manager = buildWatchManager();
+          settingsController.setPreferredScaleId(scaleId);
+          async.flushMicrotasks();
+          final machine = _FakeDe1();
+          mockDe1Controller.de1Subject.add(machine);
+          async.flushMicrotasks();
+          machine.emitState(MachineState.sleeping);
+          machine.emitState(MachineState.idle);
+          async.flushMicrotasks();
+          mockScanner.scanCompleter = Completer<void>();
+          manager.connect(scaleOnly: true);
+          async.flushMicrotasks();
+          expect(mockScanner.scanCallCount, 1);
+          manager.requestExternalScan(connect: true);
+          async.elapse(const Duration(seconds: 3));
+          async.flushMicrotasks();
+          manager.requestExternalScan(connect: true);
+          expect(mockScanner.scanCallCount, 1);
+          mockScanner.completeScan();
+          async.flushMicrotasks();
+          expect(mockScanner.scanCallCount, 2);
+          async.elapse(const Duration(seconds: 1));
+          async.flushMicrotasks();
+          expect(mockScanner.scanCallCount, 2);
+          manager.dispose();
+          async.flushMicrotasks();
+        });
+      });
+
+      test('post-wake deferred scan is dropped on preferred reconnect', () {
+        fakeAsync((async) {
+          final manager = buildWatchManager();
+          settingsController.setPreferredScaleId(scaleId);
+          async.flushMicrotasks();
+          final machine = _FakeDe1();
+          mockDe1Controller.de1Subject.add(machine);
+          async.flushMicrotasks();
+          machine.emitState(MachineState.sleeping);
+          machine.emitState(MachineState.idle);
+          async.flushMicrotasks();
+          manager.requestExternalScan(connect: true);
+          mockScaleController.debugSetLastConnectedId(scaleId);
+          mockScaleController.mockEmitConnectionState(
+            ConnectionState.connected,
+          );
+          async.flushMicrotasks();
+          async.elapse(const Duration(seconds: 4));
+          async.flushMicrotasks();
+          expect(mockScanner.scanCallCount, 0);
+          manager.dispose();
+          async.flushMicrotasks();
+        });
+      });
+
+      test('scan-only client requests defer without stopping watch', () {
+        fakeAsync((async) {
+          final manager = buildWatchManager();
+          settingsController.setPreferredScaleId(scaleId);
+          async.flushMicrotasks();
+          final machine = _FakeDe1();
+          mockDe1Controller.de1Subject.add(machine);
+          async.flushMicrotasks();
+          machine.emitState(MachineState.sleeping);
+          machine.emitState(MachineState.idle);
+          async.flushMicrotasks();
+          var scanOnlyCalls = 0;
+          Future<void> scanOnly() async {
+            scanOnlyCalls++;
+          }
+
+          manager.requestExternalScan(connect: false, scanOnly: scanOnly);
+          manager.requestExternalScan(connect: false, scanOnly: scanOnly);
+          async.flushMicrotasks();
+          expect(scanOnlyCalls, 0);
+          expect(mockScanner.watchActive, isTrue);
+          async.elapse(const Duration(seconds: 3));
+          async.flushMicrotasks();
+          expect(scanOnlyCalls, 1);
+          expect(mockScanner.scanCallCount, 0);
+          manager.dispose();
+          async.flushMicrotasks();
+        });
+      });
+
+      test(
+        'native scanAndConnect supersedes a deferred discovery-only scan',
+        () {
+          fakeAsync((async) {
+            final manager = buildWatchManager();
+            settingsController.setPreferredScaleId(scaleId);
+            async.flushMicrotasks();
+            final machine = _FakeDe1();
+            mockDe1Controller.de1Subject.add(machine);
+            async.flushMicrotasks();
+            machine.emitState(MachineState.sleeping);
+            machine.emitState(MachineState.idle);
+            async.flushMicrotasks();
+            var scanOnlyCalls = 0;
+            var deferredCompleted = false;
+            final scanIntents = <ConnectionIntent>[];
+            final statusSub = manager.status.listen(
+              (status) => scanIntents.add(status.intent),
+            );
+            manager
+                .requestExternalScan(
+                  connect: false,
+                  scanOnly: () async {
+                    scanOnlyCalls++;
+                  },
+                )
+                .whenComplete(() => deferredCompleted = true);
+            async.flushMicrotasks();
+
+            manager.scanAndConnect();
+            async.flushMicrotasks();
+
+            expect(scanOnlyCalls, 0);
+            expect(deferredCompleted, isTrue);
+            expect(mockScanner.scanCallCount, 1);
+            expect(scanIntents, contains(ConnectionIntent.explicitDiscovery));
+
+            async.elapse(const Duration(seconds: 4));
+            async.flushMicrotasks();
+            statusSub.cancel();
+
+            expect(scanOnlyCalls, 0);
+            expect(mockScanner.scanCallCount, 1);
+            manager.dispose();
+            async.flushMicrotasks();
+          });
+        },
+      );
+
+      test(
+        'without background watch support, preferred scans are immediate',
+        () {
+          fakeAsync((async) {
+            mockScanner.supportsWatch = false;
+            final manager = buildWatchManager();
+            settingsController.setPreferredScaleId(scaleId);
+            async.flushMicrotasks();
+            final machine = _FakeDe1();
+            mockDe1Controller.de1Subject.add(machine);
+            async.flushMicrotasks();
+            machine.emitState(MachineState.sleeping);
+            machine.emitState(MachineState.idle);
+            async.flushMicrotasks();
+            manager.requestExternalScan(connect: true);
+            async.flushMicrotasks();
+            expect(mockScanner.scanCallCount, 1);
+            manager.dispose();
+            async.flushMicrotasks();
+          });
+        },
+      );
+
+      test(
+        'without a preferred scale or watch, client scans are immediate',
+        () {
+          fakeAsync((async) {
+            final manager = buildWatchManager();
+            final machine = _FakeDe1();
+            mockDe1Controller.de1Subject.add(machine);
+            async.flushMicrotasks();
+            machine.emitState(MachineState.sleeping);
+            machine.emitState(MachineState.idle);
+            async.flushMicrotasks();
+            manager.requestExternalScan(connect: true);
+            async.flushMicrotasks();
+            expect(mockScanner.scanCallCount, 1);
+            manager.dispose();
+            async.flushMicrotasks();
+          });
+        },
+      );
+
+      test('machine recovery is not deferred by the scale lease', () {
+        fakeAsync((async) {
+          final manager = buildWatchManager();
+          manager.machineReconnectBaseDelay = const Duration(seconds: 1);
+          settingsController.setPreferredScaleId(scaleId);
+          settingsController.setPreferredMachineId('machine');
+          async.flushMicrotasks();
+          final machine = _FakeDe1(deviceId: 'machine');
+          mockDe1Controller.de1Subject.add(machine);
+          async.flushMicrotasks();
+          machine.emitState(MachineState.sleeping);
+          machine.emitState(MachineState.idle);
+          async.flushMicrotasks();
+          manager.requestExternalScan(connect: true);
+          expect(mockScanner.scanCallCount, 0);
+          mockScanner.scanCompleter = Completer<void>();
+          mockDe1Controller.de1Subject.add(null);
+          async.flushMicrotasks();
+          expect(mockScanner.scanCallCount, 0);
+          async.elapse(const Duration(seconds: 1));
+          async.flushMicrotasks();
+          expect(mockScanner.scanCallCount, 1);
+          expect(manager.currentStatus.intent, ConnectionIntent.automatic);
+          async.elapse(const Duration(seconds: 3));
+          async.flushMicrotasks();
+          expect(mockScanner.scanCallCount, 1);
+          mockScanner.completeScan();
+          manager.dispose();
+          async.flushMicrotasks();
+        });
+      });
+
       test('power-mode sleep stops the watch and wake re-arms it '
           'without a burst', () async {
         await settingsController.setScalePowerMode(ScalePowerMode.disconnect);
@@ -4207,6 +5277,32 @@ void main() {
       scan1Completer.complete();
       await Future.wait([f1, f2, f3]);
       await Future<void>.delayed(Duration.zero);
+    });
+
+    test('machine disconnect keeps a queued explicit scan', () async {
+      final scanCompleter = Completer<void>();
+      mockScanner.queuedScanCompleters.add(scanCompleter);
+      mockScanner.addDevice(_FakeDe1(deviceId: 'm1'));
+      mockDe1Controller.de1Subject.add(_FakeDe1(deviceId: 'm1'));
+      await Future<void>.delayed(Duration.zero);
+
+      final scanFuture = connectionManager.scanAndConnect();
+      await Future<void>.delayed(Duration.zero);
+      expect(mockScanner.scanCallCount, 1);
+
+      final queuedFuture = connectionManager.scanAndConnect();
+      await Future<void>.delayed(Duration.zero);
+      expect(mockScanner.scanCallCount, 1);
+
+      mockDe1Controller.de1Subject.add(null);
+      await Future<void>.delayed(Duration.zero);
+
+      scanCompleter.complete();
+      await scanFuture;
+      await queuedFuture;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(mockScanner.scanCallCount, 2);
     });
 
     test('cancelActiveScan discards queued explicit replacement', () async {

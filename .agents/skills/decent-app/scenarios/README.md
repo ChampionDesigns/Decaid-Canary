@@ -4,6 +4,7 @@ Pick the scenario that matches the task and run it before calling related work d
 
 | Scenario | File |
 |---|---|
+| Backup import entry-count limit | `scenarios/backup-import-entry-limit.md` |
 | Account proxy native consent gate | `scenarios/account-proxy-consent.md` |
 | Account proxy CORS pinned to skin origin | `scenarios/account-proxy-cors.md` |
 | Account proxy write forwarding and scope gate | `scenarios/account-proxy-write.md` |
@@ -20,6 +21,7 @@ Pick the scenario that matches the task and run it before calling related work d
 | Device scan and connection policy | `scenarios/device-scan-connection-policy.md` |
 | Display brightness and low-battery toggle | `scenarios/display-brightness.md` |
 | ETag conditional GETs | `scenarios/etag-conditional-gets.md` |
+| Read-only Grinder observations | `scenarios/grinder-observations.md` |
 | Firmware endpoints | `scenarios/firmware.md` |
 | Hot-water stop at weight | `scenarios/hot-water-stop-at-weight.md` |
 | Onboarding connection phases | `scenarios/onboarding-connection-phases.md` |

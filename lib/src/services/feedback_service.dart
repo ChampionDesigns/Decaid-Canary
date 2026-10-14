@@ -41,6 +41,27 @@ class FeedbackService {
   Future<FeedbackSubmissionResult> submitFeedback(
     FeedbackRequest request,
   ) async {
+    final DecentAccountStatus accountStatus;
+    try {
+      accountStatus =
+          await _accountService?.verifyStoredCredentialsStatus() ??
+          DecentAccountStatus.unauthenticated;
+    } catch (e, st) {
+      _log.warning('Could not verify Decent account for feedback', e, st);
+      return FeedbackSubmissionResult.failed(
+        'Could not verify your Decent account. Check your connection and try again.',
+        reason: FeedbackFailureReason.accountRequired,
+      );
+    }
+    if (accountStatus != DecentAccountStatus.authenticated) {
+      return FeedbackSubmissionResult.failed(
+        accountStatus == DecentAccountStatus.indeterminate
+            ? 'Could not verify your Decent account. Check your connection and try again.'
+            : 'You must be logged in to your Decent account to submit feedback.',
+        reason: FeedbackFailureReason.accountRequired,
+      );
+    }
+
     if (!isConfigured) {
       return FeedbackSubmissionResult.failed(
         'Feedback service is not configured. No GitHub token provided at build time.',
@@ -355,18 +376,23 @@ class FeedbackService {
     if (!await accountService.hasLinkedAccount() || abort.isCompleted) {
       return;
     }
-    final contactId = await accountService.sendSupportMessage(
+    final receipt = await accountService.sendSupportMessage(
       subject: 'Decaid feedback #$issueNumber',
-      body: issueUrl,
+      body:
+          'Hi,\n\n'
+          'I recently submitted feedback from Decaid: $issueUrl\n\n'
+          'This message was sent automatically by Decaid for reference and '
+          'to keep the feedback linked to my support history.',
       abortTrigger: abort.future,
     );
-    if (abort.isCompleted) return;
-    await _updateGitHubIssueBody(issueNumber, contactId, abort);
+    final messageId = receipt.messageId;
+    if (abort.isCompleted || messageId == null) return;
+    await _appendSupportMessageId(issueNumber, messageId, abort);
   }
 
-  Future<void> _updateGitHubIssueBody(
+  Future<void> _appendSupportMessageId(
     int issueNumber,
-    String contactId,
+    String messageId,
     Completer<void> abort,
   ) async {
     final uri = Uri.parse('$_githubApiBase/repos/$_repo/issues/$issueNumber');
@@ -398,7 +424,8 @@ class FeedbackService {
         http.AbortableRequest('PATCH', uri, abortTrigger: abort.future)
           ..headers.addAll(_authHeaders)
           ..body = jsonEncode({
-            'body': '$currentBody$separator---\n**Contact:** `$contactId`\n',
+            'body':
+                '$currentBody$separator---\n**Support message:** `$messageId`\n',
           });
     final response = await http.Response.fromStream(await request.send());
     if (response.statusCode != 200) {

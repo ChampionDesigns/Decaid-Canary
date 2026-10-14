@@ -16,6 +16,7 @@ import 'package:reaprime/src/controllers/connection/scan_report_builder.dart';
 import 'package:reaprime/src/controllers/connection/status_publisher.dart';
 import 'package:reaprime/src/controllers/connection_error.dart';
 import 'package:reaprime/src/controllers/de1_controller.dart';
+import 'package:reaprime/src/controllers/grinder_controller.dart';
 import 'package:reaprime/src/controllers/remembered_devices_controller.dart';
 import 'package:reaprime/src/controllers/scale_controller.dart';
 import 'package:reaprime/src/controllers/auxiliary_scale_registry.dart';
@@ -28,12 +29,14 @@ import 'package:reaprime/src/models/adapter_state.dart';
 import 'package:reaprime/src/models/device/device.dart';
 import 'package:reaprime/src/models/device/device_attach_notifier.dart';
 import 'package:reaprime/src/models/device/device_scanner.dart';
+import 'package:reaprime/src/models/device/grinder_device.dart';
 import 'package:reaprime/src/models/device/transport/data_transport.dart';
 import 'package:reaprime/src/models/device/scale.dart';
 import 'package:reaprime/src/models/device/scan_filter.dart';
 import 'package:reaprime/src/models/device/simulated_device.dart';
 import 'package:reaprime/src/models/device/usb_attach_probe.dart';
 import 'package:reaprime/src/models/scan_report.dart';
+import 'package:reaprime/src/models/errors.dart';
 import 'package:reaprime/src/settings/scale_power_mode.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
 import 'package:rxdart/rxdart.dart';
@@ -65,6 +68,46 @@ class TransportCondition {
     required this.affectedDeviceTypes,
     required this.connectionError,
   });
+}
+
+class _MachineConnectAttempt {
+  _MachineConnectAttempt({
+    required this.machine,
+    required this.session,
+    required this.scanOwned,
+  });
+
+  final De1Interface machine;
+  final ConnectionSelectionSession? session;
+  final bool scanOwned;
+  bool invalidated = false;
+  bool sourcePending = true;
+  bool cleanupHandled = false;
+  bool linkRetired = false;
+  final List<_MachineConnectAttempt> deferredRetirements = [];
+
+  TransportType get transportType => machine.transportType;
+}
+
+class _ScaleConnectAttempt {
+  _ScaleConnectAttempt({
+    required this.scale,
+    required this.session,
+    required this.scanOwned,
+  });
+
+  final Scale scale;
+  final ConnectionSelectionSession? session;
+  final bool scanOwned;
+  bool invalidated = false;
+  bool sourcePending = true;
+  bool cleanupHandled = false;
+  bool linkRetired = false;
+  final List<_ScaleConnectAttempt> deferredRetirements = [];
+
+  String get deviceId => scale.deviceId;
+
+  TransportType get transportType => scale.transportType;
 }
 
 class ConnectionStatus {
@@ -119,6 +162,7 @@ class ConnectionManager {
   final DeviceScanner deviceScanner;
   final De1Controller de1Controller;
   final ScaleController scaleController;
+  final GrinderController grinderController;
   final AuxiliaryScaleRegistry auxiliaryScaleRegistry;
   final SettingsController settingsController;
 
@@ -140,13 +184,266 @@ class ConnectionManager {
   bool _isConnecting = false;
   bool _isConnectingMachine = false;
   bool _isConnectingScale = false;
-  final Set<String> _primaryScaleClaims = {};
+  _MachineConnectAttempt? _machineAttempt;
+  _ScaleConnectAttempt? _scaleAttempt;
+  final List<_MachineConnectAttempt> _quarantinedMachineAttempts = [];
+  final List<_ScaleConnectAttempt> _quarantinedScaleAttempts = [];
+
+  void _invalidateMachineAttempt([_MachineConnectAttempt? expected]) {
+    final current = _machineAttempt;
+    if (current == null ||
+        current.invalidated ||
+        (expected != null && !identical(current, expected))) {
+      return;
+    }
+    current.invalidated = true;
+    if (current.sourcePending) {
+      de1Controller.invalidatePendingConnectionAttempt();
+    }
+    _machineAttempt = null;
+    _isConnectingMachine = false;
+  }
+
+  void _invalidateScaleAttempt([_ScaleConnectAttempt? expected]) {
+    final current = _scaleAttempt;
+    if (current == null ||
+        current.invalidated ||
+        (expected != null && !identical(current, expected))) {
+      return;
+    }
+    current.invalidated = true;
+    if (current.sourcePending) {
+      scaleController.invalidatePendingConnectionAttempt();
+    }
+    _scaleAttempt = null;
+    _isConnectingScale = false;
+  }
+
+  void _releaseMachineAttempt(_MachineConnectAttempt attempt) {
+    if (!identical(_machineAttempt, attempt)) return;
+    _machineAttempt = null;
+    _isConnectingMachine = false;
+  }
+
+  void _releaseScaleAttempt(_ScaleConnectAttempt attempt) {
+    if (identical(_scaleAttempt, attempt)) {
+      _scaleAttempt = null;
+      _isConnectingScale = false;
+    }
+    if (identical(_primaryScaleClaims[attempt.deviceId], attempt)) {
+      _primaryScaleClaims.remove(attempt.deviceId);
+    }
+  }
+
+  Future<void> _retireInvalidatedMachine(_MachineConnectAttempt attempt) async {
+    if (!attempt.invalidated ||
+        attempt.sourcePending ||
+        attempt.cleanupHandled) {
+      return;
+    }
+    attempt.cleanupHandled = true;
+    if (!await _retireMachine(attempt) &&
+        !_quarantinedMachineAttempts.contains(attempt)) {
+      _quarantinedMachineAttempts.add(attempt);
+    }
+  }
+
+  Future<void> _retireInvalidatedScale(_ScaleConnectAttempt attempt) async {
+    if (!attempt.invalidated ||
+        attempt.sourcePending ||
+        attempt.cleanupHandled) {
+      return;
+    }
+    attempt.cleanupHandled = true;
+    if (!await _retireScale(attempt) &&
+        !_quarantinedScaleAttempts.contains(attempt)) {
+      _quarantinedScaleAttempts.add(attempt);
+    }
+  }
+
+  Future<void> _resolveDeferredMachine(_MachineConnectAttempt attempt) async {
+    if (attempt.sourcePending || attempt.deferredRetirements.isEmpty) return;
+    final deferredRetirements = List.of(attempt.deferredRetirements);
+    attempt.deferredRetirements.clear();
+    final adopted = await de1Controller.de1.first;
+    var resolvedLink =
+        attempt.linkRetired ||
+        (!attempt.invalidated && identical(adopted, attempt.machine));
+    for (final deferred in deferredRetirements) {
+      if (resolvedLink) continue;
+      if (await _retireMachine(deferred)) {
+        resolvedLink = deferred.linkRetired;
+      } else if (!_quarantinedMachineAttempts.contains(deferred)) {
+        _quarantinedMachineAttempts.add(deferred);
+      }
+    }
+  }
+
+  Future<void> _resolveDeferredScale(_ScaleConnectAttempt attempt) async {
+    if (attempt.sourcePending || attempt.deferredRetirements.isEmpty) return;
+    final deferredRetirements = List.of(attempt.deferredRetirements);
+    attempt.deferredRetirements.clear();
+    Scale? adopted;
+    try {
+      adopted = scaleController.connectedScale();
+    } catch (_) {}
+    var resolvedLink =
+        attempt.linkRetired ||
+        (!attempt.invalidated && identical(adopted, attempt.scale));
+    for (final deferred in deferredRetirements) {
+      if (resolvedLink) continue;
+      if (await _retireScale(deferred)) {
+        resolvedLink = deferred.linkRetired;
+      } else if (!_quarantinedScaleAttempts.contains(deferred)) {
+        _quarantinedScaleAttempts.add(deferred);
+      }
+    }
+  }
+
+  Future<void> _retryQuarantinedRetirements() async {
+    for (final attempt in List.of(_quarantinedMachineAttempts)) {
+      if (await _retireMachine(attempt)) {
+        _quarantinedMachineAttempts.remove(attempt);
+      }
+    }
+    for (final attempt in List.of(_quarantinedScaleAttempts)) {
+      if (await _retireScale(attempt)) {
+        _quarantinedScaleAttempts.remove(attempt);
+      }
+    }
+  }
+
+  Future<bool> _retireMachine(_MachineConnectAttempt attempt) async {
+    final machine = attempt.machine;
+    try {
+      final adopted = await de1Controller.de1.first;
+      final replacement = _machineAttempt;
+      final sameLinkReplacement =
+          replacement != null &&
+          !identical(replacement, attempt) &&
+          machine.transportType == TransportType.ble &&
+          replacement.transportType == machine.transportType &&
+          replacement.machine.deviceId == machine.deviceId;
+      final sameLinkAdopted =
+          adopted != null &&
+          !identical(adopted, machine) &&
+          adopted.deviceId == machine.deviceId &&
+          adopted.transportType == machine.transportType;
+      if (sameLinkReplacement || sameLinkAdopted) {
+        if (sameLinkReplacement && !sameLinkAdopted) {
+          replacement.deferredRetirements.add(attempt);
+        }
+        _log.info(
+          'Deferred retirement (same-link replacement): ${machine.deviceId}',
+        );
+        return true;
+      }
+      markExpectingDisconnect(machine.deviceId);
+      await machine.disconnect();
+      attempt.linkRetired = true;
+      de1Controller.retireConnectedDevice(machine);
+      return true;
+    } catch (error, stackTrace) {
+      _log.warning(
+        'Failed to retire stale machine ${machine.deviceId}',
+        error,
+        stackTrace,
+      );
+      _emit(
+        _buildConnectError(
+          kind: ConnectionErrorKind.machineConnectFailed,
+          deviceId: machine.deviceId,
+          deviceName: machine.name,
+          message: 'Failed to retire stale machine ${machine.name}.',
+          exception: error,
+        ),
+      );
+      return false;
+    }
+  }
+
+  Future<bool> _retireScale(_ScaleConnectAttempt attempt) async {
+    final scale = attempt.scale;
+    try {
+      final replacement = _scaleAttempt;
+      Scale? adopted;
+      try {
+        adopted = scaleController.connectedScale();
+      } catch (_) {}
+      final sameLinkReplacement =
+          replacement != null &&
+          !identical(replacement, attempt) &&
+          scale.transportType == TransportType.ble &&
+          replacement.transportType == scale.transportType &&
+          replacement.deviceId == scale.deviceId;
+      final sameLinkAdopted =
+          adopted != null &&
+          !identical(adopted, scale) &&
+          adopted.deviceId == scale.deviceId &&
+          adopted.transportType == scale.transportType;
+      if (sameLinkReplacement || sameLinkAdopted) {
+        if (sameLinkReplacement && !sameLinkAdopted) {
+          replacement.deferredRetirements.add(attempt);
+        }
+        _log.info(
+          'Deferred retirement (same-link replacement): ${scale.deviceId}',
+        );
+        return true;
+      }
+      await _disconnectPrimaryScale(scale);
+      attempt.linkRetired = true;
+      scaleController.retireConnectedScale(scale);
+      return true;
+    } catch (error, stackTrace) {
+      _log.warning(
+        'Failed to retire stale scale ${scale.deviceId}',
+        error,
+        stackTrace,
+      );
+      _emit(
+        _buildConnectError(
+          kind: ConnectionErrorKind.scaleConnectFailed,
+          deviceId: scale.deviceId,
+          deviceName: scale.name,
+          message: 'Failed to retire stale scale ${scale.name}.',
+          exception: error,
+        ),
+      );
+      return false;
+    }
+  }
+
+  Future<void> _connectMachineSource(_MachineConnectAttempt attempt) async {
+    try {
+      await de1Controller.connectToDe1(attempt.machine);
+    } finally {
+      attempt.sourcePending = false;
+      await _retireInvalidatedMachine(attempt);
+      if (attempt.invalidated) await _resolveDeferredMachine(attempt);
+    }
+  }
+
+  Future<void> _connectScaleSource(_ScaleConnectAttempt attempt) async {
+    try {
+      await scaleController.connectToScale(attempt.scale);
+    } finally {
+      attempt.sourcePending = false;
+      await _retireInvalidatedScale(attempt);
+      if (attempt.invalidated) {
+        _releaseScaleAttempt(attempt);
+        await _resolveDeferredScale(attempt);
+      }
+    }
+  }
+
+  final Map<String, _ScaleConnectAttempt> _primaryScaleClaims = {};
   bool _activeScaleOnlyScan = false;
   bool _shuttingDown = false;
   Future<void>? _shutdownFuture;
   int _activeConnectionWork = 0;
   Completer<void>? _connectionWorkDone;
   ConnectionSelectionSession? _selectionSession;
+  List<GrinderDevice> _pendingPreferredGrinders = const [];
 
   int _explicitScanGeneration = 0;
 
@@ -190,6 +487,8 @@ class ConnectionManager {
   Completer<void>? _queuedScaleOnly;
 
   Completer<void>? _queuedExplicitScan;
+  Timer? _postWakeScaleLease;
+  Future<void> Function()? _queuedScanOnly;
   bool _adapterRecoveryQueued = false;
   bool _adapterRecoveryNeeded = false;
   int _adapterRecoveryEpoch = 0;
@@ -276,12 +575,14 @@ class ConnectionManager {
     required this.deviceScanner,
     required this.de1Controller,
     required this.scaleController,
+    GrinderController? grinderController,
     AuxiliaryScaleRegistry? auxiliaryScaleRegistry,
     required this.settingsController,
     this.rememberedDevices,
     Duration deviceAttachSettleDelay = const Duration(milliseconds: 500),
     Duration? connectTimeout,
-  }) : auxiliaryScaleRegistry =
+  }) : grinderController = grinderController ?? GrinderController(),
+       auxiliaryScaleRegistry =
            auxiliaryScaleRegistry ?? AuxiliaryScaleRegistry(),
        _connectTimeout =
            connectTimeout ??
@@ -640,6 +941,12 @@ class ConnectionManager {
           });
         }
       } else {
+        if (_machineAttempt?.transportType == TransportType.ble) {
+          _invalidateMachineAttempt();
+        }
+        if (_scaleAttempt?.transportType == TransportType.ble) {
+          _invalidateScaleAttempt();
+        }
         _adapterRecoveryEpoch++;
         _adapterRecoveryNeeded = true;
         _adapterRecoveryTimer?.cancel();
@@ -803,6 +1110,10 @@ class ConnectionManager {
   void debugNotifyMachineDisconnected(String deviceId) =>
       _disconnectSupervisor.notifyMachineDisconnected(deviceId);
 
+  @visibleForTesting
+  void debugExpirePostWakeScaleLease() =>
+      _endPostWakeScaleLease(runDeferred: true);
+
   Future<void> connect({bool scaleOnly = false}) => _runConnect(
     scaleOnly: scaleOnly,
     policy: scaleOnly
@@ -810,10 +1121,102 @@ class ConnectionManager {
         : ConnectionAttemptPolicy.automatic,
   );
 
+  bool get connectionWorkActive => _isConnecting || _activeConnectionWork > 0;
+
+  String explicitScanDisposition({required bool connect}) {
+    if (_postWakeScaleLease != null) {
+      return _queuedExplicitScan == null ? 'queued' : 'coalesced';
+    }
+    if (connect && _queuedExplicitScan != null) return 'coalesced';
+    if (connect && _isConnecting) return 'superseding/stopping';
+    if (!connect && deviceScanner.isScanning) return 'coalesced';
+    return 'started';
+  }
+
+  Future<void> requestExternalScan({
+    required bool connect,
+    Future<void> Function()? scanOnly,
+  }) {
+    if (!connect && scanOnly == null) {
+      throw ArgumentError('scanOnly is required for discovery-only scans');
+    }
+    if (_postWakeScaleLease != null) {
+      final alreadyQueued = _queuedExplicitScan != null;
+      final queued = _queuedExplicitScan ??= Completer<void>();
+      if (!alreadyQueued) _queuedScanOnly = connect ? null : scanOnly;
+      if (connect) _queuedScanOnly = null;
+      _log.info(
+        'Client explicit scan ${alreadyQueued ? "coalesced" : "queued"} '
+        'behind post-wake preferred-scale watch',
+      );
+      return queued.future;
+    }
+    return connect ? scanAndConnect() : scanOnly!();
+  }
+
+  void _endPostWakeScaleLease({required bool runDeferred}) {
+    if (_postWakeScaleLease == null) return;
+    if (runDeferred &&
+        _queuedExplicitScan != null &&
+        _activeConnectionWork > 0) {
+      final lease = _postWakeScaleLease;
+      unawaited(
+        _connectionWorkDone!.future.then((_) {
+          if (identical(_postWakeScaleLease, lease)) {
+            _endPostWakeScaleLease(runDeferred: true);
+          }
+        }),
+      );
+      return;
+    }
+    _postWakeScaleLease?.cancel();
+    _postWakeScaleLease = null;
+    final queued = _queuedExplicitScan;
+    _queuedExplicitScan = null;
+    final scanOnly = _queuedScanOnly;
+    _queuedScanOnly = null;
+    if (queued == null) return;
+    if (!runDeferred ||
+        _scaleConnected ||
+        !_machineConnected ||
+        settingsController.preferredScaleId == null) {
+      _log.info(
+        'Dropping deferred client scan: '
+        '${_scaleConnected ? "scale connected" : "machine unavailable or recovery cancelled"}',
+      );
+      queued.complete();
+      return;
+    }
+    unawaited(() async {
+      try {
+        if (_shuttingDown || _scaleConnected || !_machineConnected) {
+          queued.complete();
+          return;
+        }
+        _log.info('Post-wake lease ended; running one deferred client scan');
+        if (scanOnly != null) {
+          await scanOnly();
+        } else {
+          await scanAndConnect();
+        }
+        queued.complete();
+      } catch (e, st) {
+        queued.completeError(e, st);
+      }
+    }());
+  }
+
   Future<void> scanAndConnect() async {
     if (_shuttingDown) return;
     if (_queuedExplicitScan != null) {
-      return _queuedExplicitScan!.future;
+      if (_queuedScanOnly == null) return _queuedExplicitScan!.future;
+      final superseded = _queuedExplicitScan!;
+      _queuedExplicitScan = null;
+      _queuedScanOnly = null;
+      _log.info(
+        'Explicit scan superseded the deferred discovery-only client scan',
+      );
+      superseded.complete();
     }
     if (_isConnecting) {
       _explicitScanGeneration++;
@@ -886,7 +1289,7 @@ class ConnectionManager {
     } finally {
       while (!_shuttingDown &&
           (_pendingAttachAttempt ||
-              _queuedExplicitScan != null ||
+              (_queuedExplicitScan != null && _postWakeScaleLease == null) ||
               _adapterRecoveryQueued ||
               _queuedScaleOnly != null)) {
         if (_pendingAttachAttempt) {
@@ -908,7 +1311,7 @@ class ConnectionManager {
           continue;
         }
 
-        if (_queuedExplicitScan != null) {
+        if (_queuedExplicitScan != null && _postWakeScaleLease == null) {
           final drain = _queuedExplicitScan!;
           _queuedExplicitScan = null;
           try {
@@ -1227,6 +1630,9 @@ class ConnectionManager {
       scanReport: scanReport,
     );
     _selectionSession = selectionSession;
+    _pendingPreferredGrinders = scaleOnly
+        ? const []
+        : List.unmodifiable(scanRun.grinders);
 
     if (scaleOnly) {
       _publishStatus(currentStatus.copyWith(foundScales: scales));
@@ -1409,6 +1815,9 @@ class ConnectionManager {
   }
 
   void _cancelScaleReacquisition({bool resetFailures = true}) {
+    if (_scaleConnected && _postWakeScaleLease != null) {
+      _endPostWakeScaleLease(runDeferred: false);
+    }
     unawaited(
       _cancelScaleReacquisitionAndWait(resetFailures: resetFailures).catchError(
         (e, st) =>
@@ -1479,6 +1888,7 @@ class ConnectionManager {
   }
 
   void _handleMachineDisconnected() {
+    _endPostWakeScaleLease(runDeferred: false);
     _cancelSelectionSession(emitReport: true);
     _stopMachineRecovery();
     _stopWatchingConnectedMachineState();
@@ -1559,6 +1969,9 @@ class ConnectionManager {
         _armStateWatchdog(machine.deviceId);
         final state = snapshot.state.state;
         if (_latestMachineState == state) return;
+        final waking =
+            _latestMachineState == MachineState.sleeping &&
+            state != MachineState.sleeping;
         _latestMachineState = state;
         if (state != MachineState.sleeping) _scaleSleepRequested = false;
         if (_scaleReconnectBlockedByPowerMode) {
@@ -1569,6 +1982,21 @@ class ConnectionManager {
           _pauseScaleReconnectForPowerMode();
         } else {
           _ensureScaleReacquisition();
+          if (waking &&
+              _shouldRetryPreferredScale() &&
+              supportsBackgroundScaleWatch &&
+              _scaleWatch.hasPendingRequest &&
+              !_isConnecting) {
+            _postWakeScaleLease?.cancel();
+            _log.info(
+              'Protecting post-wake preferred-scale watch for '
+              '${deferredScaleScanDelay.inSeconds}s',
+            );
+            _postWakeScaleLease = Timer(
+              deferredScaleScanDelay,
+              () => _endPostWakeScaleLease(runDeferred: true),
+            );
+          }
         }
       },
       onError: (Object e, StackTrace st) {
@@ -1728,24 +2156,27 @@ class ConnectionManager {
       _log.fine('Ignoring stale machine selection ${machine.deviceId}');
       return const ConnectionResult.conflict();
     }
-    return connectMachine(resolved);
+    return connectMachine(resolved, scanOwned: true);
   }
 
   Future<ConnectionResult> connectMachine(
     De1Interface machine, {
     bool automatic = false,
+    bool scanOwned = false,
   }) {
     if (_shuttingDown) {
       return Future.value(const ConnectionResult.conflict());
     }
     return _trackConnectionWork(
-      () => _connectMachine(machine, automatic: automatic),
+      () =>
+          _connectMachine(machine, automatic: automatic, scanOwned: scanOwned),
     );
   }
 
   Future<ConnectionResult> _connectMachine(
     De1Interface machine, {
     required bool automatic,
+    required bool scanOwned,
   }) async {
     // Only the passive automatic attempt may be superseded by USB attach
     // intent. Explicit direct connects (REST/WS) are never superseded, even
@@ -1766,9 +2197,18 @@ class ConnectionManager {
       return const ConnectionResult.alreadyConnected();
     }
     _isConnectingMachine = true;
+    final attempt = _MachineConnectAttempt(
+      machine: machine,
+      session: (automatic || scanOwned) ? _selectionSession : null,
+      scanOwned:
+          scanOwned ||
+          (automatic &&
+              currentStatus.intent == ConnectionIntent.explicitDiscovery),
+    );
+    _machineAttempt = attempt;
     final selectionSession =
         currentStatus.pendingAmbiguity == AmbiguityReason.machinePicker
-        ? _selectionSession
+        ? attempt.session
         : null;
     selectionSession?.scanReport.markAttempted(machine.deviceId);
     _log.fine(
@@ -1785,8 +2225,11 @@ class ConnectionManager {
 
     try {
       await _trackConnectionWork(
-        () => de1Controller.connectToDe1(machine),
+        () => _connectMachineSource(attempt),
       ).timeout(_connectTimeout);
+      if (!identical(_machineAttempt, attempt)) {
+        return const ConnectionResult.conflict();
+      }
       if (automatic && _automaticMachineAttemptSuperseded) {
         // This connect was in flight when USB intent latched; it may still
         // have completed its transport connect, but it must not persist its
@@ -1804,6 +2247,9 @@ class ConnectionManager {
         return const ConnectionResult.conflict();
       }
       await settingsController.setPreferredMachineId(machine.deviceId);
+      if (!identical(_machineAttempt, attempt)) {
+        return const ConnectionResult.conflict();
+      }
       selectionSession?.scanReport.recordResult(
         machine.deviceId,
         const ConnectionResult.succeeded(),
@@ -1815,6 +2261,9 @@ class ConnectionManager {
           selectionSession.preferredScaleId,
           selectionSession.scanReport,
         );
+        if (!identical(_machineAttempt, attempt)) {
+          return const ConnectionResult.conflict();
+        }
         _settleAfterScalePhase();
         _ensureScaleReacquisition();
         _completeSelectionSessionIfResolved(selectionSession);
@@ -1823,6 +2272,10 @@ class ConnectionManager {
       }
       return const ConnectionResult.succeeded();
     } catch (e) {
+      if (!identical(_machineAttempt, attempt)) {
+        return const ConnectionResult.conflict();
+      }
+      if (e is TimeoutException) _invalidateMachineAttempt(attempt);
       final result = e is TimeoutException
           ? ConnectionResult.timedOut(e.toString())
           : ConnectionResult.failed(e.toString());
@@ -1884,18 +2337,21 @@ class ConnectionManager {
       _emit(machineError);
       return result;
     } finally {
-      _isConnectingMachine = false;
+      await _retireInvalidatedMachine(attempt);
+      _releaseMachineAttempt(attempt);
+      await _resolveDeferredMachine(attempt);
     }
   }
 
   bool _isPrimaryScaleClaimed(String deviceId) =>
-      _primaryScaleClaims.contains(deviceId) ||
+      _primaryScaleClaims.containsKey(deviceId) ||
       (scaleController.currentConnectionState == ConnectionState.connected &&
           scaleController.lastConnectedDeviceId == deviceId);
 
   Future<ConnectionResult> connectScale(
     Scale scale, {
     ScaleConnectionRole role = ScaleConnectionRole.primary,
+    bool scanOwned = false,
   }) {
     if (_shuttingDown) {
       return Future.value(const ConnectionResult.conflict());
@@ -1903,8 +2359,59 @@ class ConnectionManager {
     return _trackConnectionWork(
       () => role == ScaleConnectionRole.auxiliary
           ? _connectAuxiliaryScale(scale)
-          : _connectScale(scale),
+          : _connectScale(scale, scanOwned: scanOwned),
     );
+  }
+
+  Future<ConnectionResult> connectGrinder(GrinderDevice grinder) {
+    if (_shuttingDown) {
+      return Future.value(const ConnectionResult.conflict());
+    }
+    return _trackConnectionWork(() async {
+      GrinderDevice? current;
+      try {
+        current = grinderController.connectedGrinder();
+      } on DeviceNotConnectedException {
+        current = null;
+      }
+      if (identical(current, grinder) &&
+          grinderController.currentConnectionState ==
+              ConnectionState.connected) {
+        return const ConnectionResult.alreadyConnected();
+      }
+      try {
+        await grinderController
+            .connectToGrinder(grinder)
+            .timeout(_connectTimeout);
+        if (!grinderController.isSelected(grinder)) {
+          return const ConnectionResult.failed(
+            'Grinder connection was superseded',
+          );
+        }
+        await settingsController.setPreferredGrinderDeviceId(grinder.deviceId);
+        return const ConnectionResult.succeeded();
+      } on TimeoutException catch (error) {
+        await grinderController.cancelConnection(grinder);
+        return ConnectionResult.timedOut(error.toString());
+      } catch (error) {
+        return ConnectionResult.failed(error.toString());
+      }
+    });
+  }
+
+  Future<void> _connectPreferredGrinder(List<GrinderDevice> grinders) async {
+    if (grinderController.isOccupied) return;
+    final preferredId = settingsController.preferredGrinderDeviceId;
+    if (preferredId == null) return;
+    final grinder = grinders.firstWhereOrNull(
+      (candidate) => candidate.deviceId == preferredId,
+    );
+    if (grinder == null) return;
+    try {
+      await connectGrinder(grinder);
+    } catch (error, stackTrace) {
+      _log.warning('Preferred grinder connection failed', error, stackTrace);
+    }
   }
 
   Future<ConnectionResult> _connectAuxiliaryScale(Scale scale) async {
@@ -1921,7 +2428,10 @@ class ConnectionManager {
     }
   }
 
-  Future<ConnectionResult> _connectScale(Scale scale) async {
+  Future<ConnectionResult> _connectScale(
+    Scale scale, {
+    required bool scanOwned,
+  }) async {
     if (_isConnectingScale) {
       _log.fine('connectScale: already connecting, skipping');
       return const ConnectionResult.conflict();
@@ -1940,8 +2450,16 @@ class ConnectionManager {
     if (auxiliaryScaleRegistry.isReserved(scale.deviceId)) {
       return const ConnectionResult.conflict();
     }
-    _primaryScaleClaims.add(scale.deviceId);
+    final attempt = _ScaleConnectAttempt(
+      scale: scale,
+      session: scanOwned ? _selectionSession : null,
+      scanOwned:
+          scanOwned &&
+          currentStatus.intent == ConnectionIntent.explicitDiscovery,
+    );
+    _primaryScaleClaims[scale.deviceId] = attempt;
     _isConnectingScale = true;
+    _scaleAttempt = attempt;
     _log.fine('connectScale: connecting to ${scale.name} (${scale.deviceId})');
 
     _publishStatus(
@@ -1954,8 +2472,11 @@ class ConnectionManager {
 
     try {
       await _trackConnectionWork(
-        () => scaleController.connectToScale(scale),
+        () => _connectScaleSource(attempt),
       ).timeout(_connectTimeout);
+      if (!identical(_scaleAttempt, attempt)) {
+        return const ConnectionResult.conflict();
+      }
       if (_scaleReconnectBlockedByPowerMode) {
         markExpectingDisconnect(scale.deviceId);
         _publishStatus(
@@ -1969,6 +2490,9 @@ class ConnectionManager {
         return const ConnectionResult.conflict();
       }
       await settingsController.setPreferredScaleId(scale.deviceId);
+      if (!identical(_scaleAttempt, attempt)) {
+        return const ConnectionResult.conflict();
+      }
       _publishStatus(
         currentStatus.copyWith(
           phase: _machineConnected
@@ -1978,6 +2502,10 @@ class ConnectionManager {
       );
       return const ConnectionResult.succeeded();
     } catch (e) {
+      if (!identical(_scaleAttempt, attempt)) {
+        return const ConnectionResult.conflict();
+      }
+      if (e is TimeoutException) _invalidateScaleAttempt(attempt);
       _publishStatus(
         currentStatus.copyWith(
           phase: _machineConnected
@@ -2006,8 +2534,9 @@ class ConnectionManager {
           ? ConnectionResult.timedOut(e.toString())
           : ConnectionResult.failed(e.toString());
     } finally {
-      _primaryScaleClaims.remove(scale.deviceId);
-      _isConnectingScale = false;
+      await _retireInvalidatedScale(attempt);
+      _releaseScaleAttempt(attempt);
+      await _resolveDeferredScale(attempt);
     }
   }
 
@@ -2030,7 +2559,7 @@ class ConnectionManager {
         ? currentStatus.error
         : null;
     session.scanReport.markAttempted(resolved.deviceId);
-    final result = await connectScale(resolved);
+    final result = await connectScale(resolved, scanOwned: true);
     session.scanReport.recordResult(resolved.deviceId, result);
     if (result.success) {
       _completeSelectionSessionIfResolved(session);
@@ -2110,7 +2639,7 @@ class ConnectionManager {
     ScanReportBuilder scanReport,
   ) async {
     scanReport.markAttempted(scale.deviceId);
-    final result = await connectScale(scale);
+    final result = await connectScale(scale, scanOwned: true);
     scanReport.recordResult(scale.deviceId, result);
     return result;
   }
@@ -2130,16 +2659,24 @@ class ConnectionManager {
       adapterStateAtEnd: deviceScanner.currentAdapterState,
     );
     if (report == null) return;
+    final grinders = _pendingPreferredGrinders;
+    _pendingPreferredGrinders = const [];
     _selectionSession = null;
     _scanReportSubject.add(report);
     _log.info(ScanReportBuilder.format(report));
+    if (reason == ScanTerminationReason.completed && grinders.isNotEmpty) {
+      unawaited(_connectPreferredGrinder(grinders));
+    }
   }
 
   void cancelActiveScan() {
+    if (_machineAttempt?.scanOwned ?? false) _invalidateMachineAttempt();
+    if (_scaleAttempt?.scanOwned ?? false) _invalidateScaleAttempt();
     _explicitScanGeneration++;
     deviceScanner.stopScan();
     final queued = _queuedExplicitScan;
     _queuedExplicitScan = null;
+    _queuedScanOnly = null;
     queued?.complete();
     final session = _selectionSession;
     if (session != null) {
@@ -2153,6 +2690,12 @@ class ConnectionManager {
   void cancelSelectionSession() {
     final session = _selectionSession;
     if (session == null) return;
+    if (identical(_machineAttempt?.session, session)) {
+      _invalidateMachineAttempt();
+    }
+    if (identical(_scaleAttempt?.session, session)) {
+      _invalidateScaleAttempt();
+    }
     _publishStatus(currentStatus.copyWith(pendingAmbiguity: () => null));
     _finishSelectionSession(session, ScanTerminationReason.cancelledByUser);
     _settleAfterScalePhase();
@@ -2167,10 +2710,13 @@ class ConnectionManager {
     } else {
       session.invalidate();
       _selectionSession = null;
+      _pendingPreferredGrinders = const [];
     }
   }
 
   Future<void> disconnectMachine() async {
+    _invalidateMachineAttempt();
+    await _retryQuarantinedRetirements();
     _handleMachineDisconnected();
     _disconnectSupervisor.markMachineOffline();
     _publishStatus(currentStatus.copyWith(phase: ConnectionPhase.idle));
@@ -2182,20 +2728,38 @@ class ConnectionManager {
   }
 
   Future<void> disconnectScale() async {
+    _invalidateScaleAttempt();
+    await _retryQuarantinedRetirements();
     _cancelSelectionSession(emitReport: true);
     _cancelScaleReacquisition();
     try {
       final scale = scaleController.connectedScale();
-      markExpectingDisconnect(scale.deviceId);
-      await scale.disconnect();
+      await _disconnectPrimaryScale(scale);
     } catch (_) {}
   }
+
+  Future<void> _disconnectPrimaryScale(Scale scale) async {
+    markExpectingDisconnect(scale.deviceId);
+    if (_shuttingDown &&
+        settingsController.scalePowerMode == ScalePowerMode.disabled &&
+        scale is TransportHandoffScale) {
+      await (scale as TransportHandoffScale).disconnectForHandoff();
+    } else {
+      await scale.disconnect();
+    }
+  }
+
+  Future<void> disconnectGrinder([GrinderDevice? grinder]) => grinder == null
+      ? grinderController.disconnect()
+      : grinderController.disconnectDevice(grinder);
 
   Future<void> shutdown() {
     final existing = _shutdownFuture;
     if (existing != null) return existing;
 
     _shuttingDown = true;
+    _invalidateMachineAttempt();
+    _invalidateScaleAttempt();
     final shutdown = _performShutdown();
     _shutdownFuture = shutdown;
     return shutdown;
@@ -2206,6 +2770,7 @@ class ConnectionManager {
     _cancelSelectionSession(emitReport: false);
     _stopMachineRecovery();
     _stopWatchingConnectedMachineState();
+    _endPostWakeScaleLease(runDeferred: false);
     _deferredScaleScan?.cancel();
     _deferredScaleScan = null;
     _adapterRecoveryEpoch++;
@@ -2262,6 +2827,11 @@ class ConnectionManager {
       _log.warning('Scale disconnect failed', error, stackTrace);
     }
     try {
+      await disconnectGrinder();
+    } catch (error, stackTrace) {
+      _log.warning('Grinder disconnect failed', error, stackTrace);
+    }
+    try {
       await auxiliaryScaleRegistry.dispose();
     } catch (error, stackTrace) {
       _log.warning('Auxiliary scale shutdown failed', error, stackTrace);
@@ -2272,6 +2842,7 @@ class ConnectionManager {
     await shutdown();
     await de1Controller.dispose();
     scaleController.dispose();
+    await grinderController.dispose();
     _disconnectSupervisor.dispose();
     _disconnectExpectations.dispose();
     _statusPublisher.dispose();

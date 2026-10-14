@@ -82,6 +82,40 @@ void main() {
   }
 
   group('ShotsHandler', () {
+    test(
+      'PUT emits exactly one update with the submitted patch and current metadata',
+      () async {
+        await persistAnnotatedShot();
+        final events = <Map<String, dynamic>>[];
+        persistence.onShotUpdated = (shot, patch) => events.add({
+          'id': shot.id,
+          'shot': shot.toJsonWithoutMeasurements(),
+          'patch': patch,
+        });
+        final patch = <String, dynamic>{
+          'shotNotes': 'new legacy notes',
+          'annotations': {'enjoyment': 8.5},
+        };
+        final response = await sendPut('annotated', patch);
+        expect(response.statusCode, 200);
+        final stored = await persistence.storageService.getShot('annotated');
+        expect(events, [
+          {
+            'id': 'annotated',
+            'shot': stored!.toJsonWithoutMeasurements(),
+            'patch': patch,
+          },
+        ]);
+        expect(events.single['shot'].containsKey('measurements'), isFalse);
+        expect(
+          events.single['shot']['annotations']['espressoNotes'],
+          'new legacy notes',
+        );
+        expect((await sendPut('missing', patch)).statusCode, 404);
+        expect(events, hasLength(1));
+      },
+    );
+
     test('GET /api/v1/shots filters by beanId across all batches', () async {
       final bean = Bean.create(roaster: 'Old roaster', name: 'Old name');
       final otherBean = Bean.create(roaster: 'Other', name: 'Coffee');
@@ -154,6 +188,31 @@ void main() {
             jsonDecode(await response.readAsString()) as Map<String, dynamic>;
         expect(body['total'], 0);
         expect(body['items'], isEmpty);
+      },
+    );
+
+    test(
+      'PUT clears the grinder burrs snapshot with an explicit null',
+      () async {
+        await persistence.persistShot(
+          makeShot(id: 'burrs', grinderModel: 'EG1', grinderBurrs: 'Core'),
+        );
+
+        final (putJson, getJson) = await putAndGet('burrs', {
+          'workflow': {
+            'context': {
+              'grinderModel': 'EG1 (Lab Sweet)',
+              'grinderBurrs': null,
+            },
+          },
+        });
+
+        for (final json in [putJson, getJson]) {
+          final context =
+              (json['workflow'] as Map)['context'] as Map<String, dynamic>;
+          expect(context['grinderModel'], 'EG1 (Lab Sweet)');
+          expect(context.containsKey('grinderBurrs'), isFalse);
+        }
       },
     );
 
@@ -581,6 +640,8 @@ ShotRecord makeShot({
   String? beanBatchId,
   String? coffeeName,
   String? coffeeRoaster,
+  String? grinderModel,
+  String? grinderBurrs,
   ShotAnnotations? annotations,
 }) {
   final workflow = WorkflowController().currentWorkflow.copyWith(
@@ -588,6 +649,8 @@ ShotRecord makeShot({
       beanBatchId: beanBatchId,
       coffeeName: coffeeName,
       coffeeRoaster: coffeeRoaster,
+      grinderModel: grinderModel,
+      grinderBurrs: grinderBurrs,
     ),
   );
   return ShotRecord(

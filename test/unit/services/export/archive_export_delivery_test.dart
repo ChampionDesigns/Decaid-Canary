@@ -32,7 +32,7 @@ void main() {
     expect(seen!.outputPath, isNot(startsWith('${tempDir.path}/')));
     expect(await destination.readAsString(), 'archive');
     expect(await File(seen!.outputPath).exists(), isFalse);
-    expect(tempDir.listSync().map((entry) => entry.path), [destination.path]);
+    expect(tempDir.listSync().map((entry) => entry.uri), [destination.uri]);
   });
 
   test('replaces a pre-existing destination', () async {

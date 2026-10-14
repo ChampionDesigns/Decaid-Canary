@@ -43,6 +43,14 @@ The single BLE transport is `UniversalBleTransport` in `lib/src/services/ble/uni
 
 Android does not guarantee any Dart, activity, application, or Flutter-engine callback for Settings Force stop, SIGKILL, or other abrupt process death. Those paths can skip cleanup entirely and must not be described as supported. Decaid still pins `universal_ble` 2.2.6, whose Android `onDetachedFromEngine()` does not close active central GATT clients, so native engine-detach cleanup is not shipped with this lifecycle change.
 
+During graceful shutdown, disabled scale power management uses the primary
+scale's existing `TransportHandoffScale.disconnectForHandoff()` when available,
+including retirement of an invalidated in-flight connection attempt and
+deferred or quarantined retirement cleanup.
+The normal Decent BLE `disconnect()` may send a power-off command, so it must
+not serve as a transport-only shutdown in keep-on mode. Manual disconnects,
+other power modes and auxiliary cleanup retain their existing behavior.
+
 ## Connection Flow
 
 `ConnectionManager` supports three distinct connection intents, selected via
@@ -68,6 +76,16 @@ produces ambiguity (multiple candidates for an unoccupied slot),
 a `ConnectionSelectionSession` holds the immutable scan snapshot.
 `selectMachine()` and `selectScale()` continue the session against the
 session-owned canonical candidates — no new scan fires.
+
+After a sleeping-to-awake transition, when the preferred scale is missing and
+background ScaleWatch owns reacquisition, `ConnectionManager` protects the
+watch for the existing three-second wake window. REST/WS explicit scans
+(including discovery-only requests) coalesce into one deferred request rather
+than pausing the watch. A successful scale reconnect or machine disconnect
+drops that request; otherwise it runs after the window and any active
+connection work. Machine recovery is never deferred by this scale lease. A
+full `scanAndConnect()` from a native in-app scan control supersedes a
+deferred discovery-only request, so lease deferral never downgrades it.
 
 ### `scaleOnly` / scale recovery
 
@@ -140,11 +158,8 @@ cancellation.
 
 ## Footgun #3: USB Charger Dedup
 
-**Symptom:** `BatteryController` writing `setUsbChargerMode` every 60s unconditionally (~2665 writes/2 days).
-
-**Root cause:** DE1 FW re-enables the charger on its own. The periodic write only matters while discharging.
-
-**Fix (PR #246):** `shouldWriteChargerMode()` in `charging_logic.dart`: write-on-change, re-assert "off" every 5min while discharging, skip otherwise. Reset last-applied on disconnect.
+This behavior depends on DE1 firmware. See
+[`device-notes/de1.md`](device-notes/de1.md#usb-charger-deduplication).
 
 ## Footgun #4: Watch Scan Silent Death (fork SafeScanner)
 
@@ -197,19 +212,17 @@ For modern HDS the same bytes 5-6 are a version: byte 5 is BCD (`majorTens << 4 
 
 On hit: emits `disconnected`, drains the queue with typed `deviceDisconnected`, and throws `DeviceNotConnectedException`.
 
-`characteristicNotFound` and `serviceNotFound` are ambiguous and are handled separately. A live peripheral
-returns them when the attribute simply is not in its GATT database, and a dead link returns them from a stale
-cache. Treating them as gone-device broke the Solo Barista (LSJ-001), which the matcher routes to `EurekaScale`
-but which has no 0x180F battery service: the optional battery read at the end of `onConnect()` failed with
-`characteristicNotFound`, the transport emitted `disconnected`, and the scale dropped one tick after connecting
-(log signature: `GATT read(...2a19...) failed - device gone`, then `scale connection update: disconnected`).
-These two codes now log, throw the domain `GattAttributeUnavailableException`, and hand off to
-`_probeAndDeclareIfDead()`, which asks the OS for the real link state and only then declares the link dead.
+`characteristicNotFound` and `serviceNotFound` are ambiguous: a live peripheral
+can omit an attribute, while a dead link can return the same error from a stale
+cache. These codes throw `GattAttributeUnavailableException` and hand off to
+`_probeAndDeclareIfDead()`, which asks the OS for the real link state.
 `GattAttributeUnavailableException` extends `DeviceNotConnectedException`, so the lowest-level scale write
 helpers that already catch `DeviceNotConnectedException` keep swallowing it: for a write, a stale-GATT
 `characteristicNotFound` may still mean a dead link, and the asynchronous probe cannot retroactively change
 the exception the caller already received.
 Device implementations should still gate optional reads on `discoverServices()` rather than relying on the probe.
+See [`device-notes/scales.md`](device-notes/scales.md#optional-gatt-attributes)
+for the scale behavior that motivated this distinction.
 
 The `isBenignFrameworkError()` filter in `crashlytics_error_filter.dart` suppresses these from `FlutterError.onError` — but scale-level catches at the write helper are defense-in-depth.
 
@@ -236,6 +249,14 @@ Decaid therefore pins `universal_ble` on the unreleased commit `9c50e12fcc33b061
 
 `test/universal_ble_transport_recovery_test.dart`, group `stale disconnect vs queued GATT work`, guards the Decaid side of that contract: a stale update must leave the in-flight and queued writes alive with the queue still `running`, confirming the stale update as connected must not dispatch the queued write while the in-flight write is still running, a genuine disconnect must still cancel exactly once and publish exactly one `disconnected`, and a genuine disconnect whose link probe is still pending must hold queued work instead of dispatching it.
 
+## Stale Retirement Is Deferred Only For A Shared BLE Link
+
+A stale connect attempt that a replacement connect superseded retires its own device instance once its source work settles. `ConnectionManager._retireMachine` / `_retireScale` defer that physical disconnect only when a same-link replacement exists: a different adopted instance, or a newer current attempt, with the same device ID and transport type. Deferral attaches retirement to the newer attempt, so the stale attempt does not disconnect a link the replacement is using. When the replacement settles, adoption discards the deferred retirement; failure or invalidation retires the link or transfers retirement to the next current replacement.
+
+The current-attempt clause is limited to `TransportType.ble`. `UniversalBleTransport.disconnect()` runs `UniversalBle.disconnect(deviceId)` inside `BleLifecycleGate` keyed on the normalized device ID, so a stale instance's disconnect tears down any newer instance's link for that device. Serial closes only its own port handle and WiFi only its own socket, so deferring on those transports would strand the stale handle whenever the same-ID replacement fails before adopting; a stale serial or WiFi instance is therefore still retired while a same-ID replacement is mid-connect. The guard compares raw device IDs while the gate keys on `normalizeBleDeviceId`, so only a case-differing pair for one physical device could miss what the gate treats as one link; both instances carry the same platform string in practice.
+
+`test/controllers/connection_manager_test.dart` guards both directions: a stale BLE attempt settling while a same-ID BLE replacement is still connecting must not issue the physical disconnect and the replacement must still succeed (fakes model one link per device ID), a failed same-link replacement must retire the deferred physical link, and a stale serial same-ID attempt must still retire its own link while the serial replacement succeeds.
+
 ## Plugin Connection Deadlines
 
 A host-bound BLE plugin device connects in two phases. `PluginProtocolDevice.prepareConnection` establishes the physical BLE session and `PluginBleBinding` owns admission, claim reservation and `session.connect()` there; only then does the plugin's own `connect` handler run, and only then does `invocationTimeout` bound protocol startup and readiness.
@@ -255,9 +276,8 @@ A plugin that creates a first-packet readiness promise must attach its own rejec
 
 ## Sleep From NeedsWater (Refill State)
 
-DE1 firmware build 1357+ honors a BLE sleep request while the machine is in refill/needsWater state when no refill kit is present. The app sends sleep from `needsWater` only for DE1 (not Bengle) on FW >= 1357 (`PresenceController._kSleepOnRefillMinFwBuild` / `_canSleepFromState`); idle/schedIdle are always eligible.
-
-**Why the build gate exists:** older firmware ignores the sleep request *while in refill* but keeps it latched, honoring it once the machine exits refill (e.g. right after the user refills the tank), so sending sleep from needsWater on old FW would put the machine straight back to sleep after a refill. With a refill kit present, the FW ignores the request (kit refill in progress) — the FW owns that guard, the app just sends the request.
+This behavior is firmware-specific. See
+[`device-notes/de1.md`](device-notes/de1.md#sleep-from-refill-state).
 
 ## Comms-Layer Patterns
 
@@ -414,27 +434,7 @@ correct by construction.
 
 ## DE1 MMR model mapping (`DecentMachineModel`)
 
-`v13Model` (MMR `0x0080000C`) is the machine model read on connect. For the
-DE1 family the raw value is 0 (unset) through 7, per de1app:
-
-| value | model     |
-|-------|-----------|
-| 0     | Unknown   |
-| 1     | DE1       |
-| 2     | DE1+      |
-| 3     | DE1PRO    |
-| 4     | DE1XL     |
-| 5     | DE1CAFE   |
-| 6     | DE1XXL    |
-| 7     | DE1XXXL   |
-| >=128 | Bengle    |
-
-The 5/6/7 rows were previously collapsed to DE1XXL/DE1XXXL/Unknown. The
-corrected mapping matches the firmware values used by de1app and is the
-canonical conversion for both raw MMR reads (`DecentMachineModel.fromInt`)
-and API SKU parsing (`parseSkuModel`), so firmware values and SKU tokens
-agree. Bengle values (>= 128) are outside the legacy DE1 identity-resolution
-flow.
+See [`device-notes/de1.md`](device-notes/de1.md#mmr-model-mapping).
 
 ## Focused Tests
 
@@ -445,66 +445,7 @@ flutter test test/controllers/connection/
 
 ## Profile Upload Safety
 
-### Firmware Latch: ProfileDownloadInProgress
-
-The DE1 firmware sets `ProfileDownloadInProgress` on header write and clears it
-on tail write + flash commit. If the upload dies mid-sequence (GATT timeout,
-connection drop), the latch stays set indefinitely. While latched:
-- The machine silently ignores all start requests.
-- The group-head LED pulses magenta (~2 Hz).
-- The only recovery is a complete profile upload.
-
-### Two Cache Layers
-
-| Cache | Location | Cleared on | Effect |
-|-------|----------|------------|--------|
-| Sync `_lastPushedProfile` | `WorkflowDeviceSync` | Disconnect, upload failure | Prevents redundant uploads within one connection |
-| Device `_currentProfile` | `UnifiedDe1` | Every `onConnect()`, every upload start | Prevents redundant uploads within one device session |
-
-Both must be cleared on connection edges. The sync cache is cleared by
-`_onDe1Change(null)` which runs on disconnect. The device cache is cleared
-in `UnifiedDe1.onConnect()` before the `_info` guard.
-
-### Startup Ordering
-
-The on-connect profile push is triggered by `De1Controller.initSettled`, which
-fires after machine readiness + startup defaults complete. This replaces the
-single-shot `_setDe1Defaults` path whose failures were swallowed.
-
-Generation tokens in both `De1Controller` (`_connectionGeneration`) and
-`WorkflowDeviceSync` (`_generation`) guard against stale init completions
-from a disconnected generation.
-
-### shotSettings Never Arrives (gh-634)
-
-`UnifiedDe1Transport._shotSettingsSubject` is an unseeded `BehaviorSubject`. It
-is seeded by the connect-time characteristic read; if that read fails, the
-subject stays empty for the whole connection and `shotSettings.first` never
-completes.
-
-Every steam and hot-water write reads the current `De1ShotSettings` first, so an
-empty subject used to hang the write forever. That hang propagated outward: the
-`De1Controller` device-write queue never advanced, and every later
-`PUT /api/v1/workflow` sat behind it until the 30 s queue wait expired with 503.
-Field symptom was "steam duration change does nothing" - the DE1 kept running on
-its firmware value while the app reported an error 30 s later.
-
-Guards now in place:
-- `De1Controller._readShotSettings` bounds every read with
-  `ConnectionTimings.initialShotSettingsTimeout` and maps a closed subject
-  (`StateError`) to `DeviceNotConnectedException`.
-- A connect-time read timeout no longer skips startup defaults permanently.
-  `_deferStartupDefaults` re-arms on the first frame that does arrive, so a
-  transient MMR timeout at connect no longer leaves the machine unconfigured
-  until app restart. The deferred defaults run through `runDeviceWrite`, so
-  they cannot overlap a normal workflow write that started while init was
-  still waiting on shot settings.
-
-No generic stall timeout guards the device-write queue. `Future.timeout()` does
-not cancel the underlying future, so releasing the queue on timeout would let a
-stalled write resume later and overwrite a newer one. Bound the actual
-unbounded read instead; a real anti-wedge mechanism needs explicit
-cancellation or fencing.
+See [`device-notes/de1.md`](device-notes/de1.md#profile-upload-safety).
 
 ## Plugin BLE Binding (#809 Checkpoint)
 

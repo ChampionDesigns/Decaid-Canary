@@ -11,6 +11,7 @@ import 'package:reaprime/src/util/rot13.dart';
 import 'package:reaprime/src/controllers/persistence_controller.dart';
 import 'package:reaprime/src/controllers/de1_controller.dart';
 import 'package:reaprime/src/feedback_feature/feedback_view.dart';
+import 'package:reaprime/src/feedback_feature/feedback_button.dart';
 import 'package:reaprime/src/import/de1app_importer.dart';
 import 'package:reaprime/src/import/saf_folder_copier.dart';
 import 'package:reaprime/src/import/de1app_scanner.dart';
@@ -23,6 +24,7 @@ import 'package:reaprime/src/services/storage/bean_storage_service.dart';
 import 'package:reaprime/src/services/storage/grinder_storage_service.dart';
 import 'package:reaprime/src/services/storage/profile_storage_service.dart';
 import 'package:reaprime/src/settings/backup_import_response.dart';
+import 'package:reaprime/src/settings/backup_import_presentation.dart';
 import 'package:reaprime/src/services/webserver/data_export/backup_transfer_service.dart';
 import 'package:reaprime/src/services/export/archive_export.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
@@ -30,6 +32,7 @@ import 'package:reaprime/src/controllers/workflow_controller.dart';
 import 'package:reaprime/src/util/shot_exporter.dart';
 import 'package:reaprime/src/util/shot_importer.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:reaprime/src/ui/share_origin.dart';
 
 final Logger _log = Logger("DataManagement");
 
@@ -44,6 +47,7 @@ class DataManagementPage extends StatefulWidget {
     this.beanStorageService,
     this.grinderStorageService,
     this.workflowController,
+    this.importBackup,
   });
 
   static const routeName = '/data';
@@ -56,6 +60,11 @@ class DataManagementPage extends StatefulWidget {
   final BeanStorageService? beanStorageService;
   final GrinderStorageService? grinderStorageService;
   final WorkflowController? workflowController;
+  final Future<BackupImportResponse> Function(
+    String? filePath,
+    String strategy,
+  )?
+  importBackup;
 
   @override
   State<DataManagementPage> createState() => _DataManagementPageState();
@@ -125,9 +134,12 @@ class _DataManagementPageState extends State<DataManagementPage> {
             spacing: 12,
             runSpacing: 12,
             children: [
-              ShadButton.outline(
-                onPressed: _exportFullBackup,
-                child: const Text('Export Full Backup'),
+              Builder(
+                builder: (context) => ShadButton.outline(
+                  onPressed: () =>
+                      _exportFullBackup(() => shareOriginFor(context)),
+                  child: const Text('Export Full Backup'),
+                ),
               ),
               ShadButton.outline(
                 onPressed: _exportLogs,
@@ -244,7 +256,8 @@ class _DataManagementPageState extends State<DataManagementPage> {
             ),
           ),
           const SizedBox(height: 12),
-          ShadButton.outline(
+          FeedbackButton(
+            accountService: widget.decentAccountService,
             onPressed: () => showFeedbackDialog(
               context,
               githubToken: rot13(
@@ -256,7 +269,6 @@ class _DataManagementPageState extends State<DataManagementPage> {
               serialNumbers: () => widget.de1Controller.seenSerials,
               accountService: widget.decentAccountService,
             ),
-            child: const Text("Send Feedback"),
           ),
         ],
       ),
@@ -268,7 +280,7 @@ class _DataManagementPageState extends State<DataManagementPage> {
       widget.beanStorageService != null &&
       widget.grinderStorageService != null;
 
-  Future<void> _exportFullBackup() async {
+  Future<void> _exportFullBackup(Rect Function() sharePositionOrigin) async {
     if (!mounted) return;
 
     final timestamp = DateTime.now()
@@ -281,6 +293,7 @@ class _DataManagementPageState extends State<DataManagementPage> {
     try {
       final outcome = await deliverArchive(
         fileName: fileName,
+        sharePositionOrigin: sharePositionOrigin,
         dialogTitle: 'Choose where to save backup',
         writeArchive: (dest) async {
           _showProgressDialog(context, 'Preparing full backup...');
@@ -502,13 +515,15 @@ class _DataManagementPageState extends State<DataManagementPage> {
         );
       }
 
-      final importResponse = await transfer.uploadZip(
-        'http://localhost:8080/api/v1/data/import',
-        strategy,
-        filePath: filePath,
-        readStream: readStream,
-        contentLength: length,
-      );
+      final importResponse = await (widget.importBackup != null
+          ? widget.importBackup!(filePath, strategy)
+          : transfer.uploadZip(
+              'http://localhost:8080/api/v1/data/import',
+              strategy,
+              filePath: filePath,
+              readStream: readStream,
+              contentLength: length,
+            ));
 
       if (!mounted) return;
 
@@ -517,17 +532,13 @@ class _DataManagementPageState extends State<DataManagementPage> {
       if (!mounted) return;
 
       await _showImportResultDialog(importResponse);
-
-      if (importResponse.shouldNotifyShotsChanged) {
-        widget.persistenceController.notifyShotsChanged();
-      }
     } on BackupImportException catch (e) {
       _log.severe("Failed to import backup", e);
       if (mounted) {
         Navigator.of(context).pop();
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(e.message)));
+        ).showSnackBar(backupImportErrorSnackBar(e));
       }
     } catch (e) {
       _log.severe("Failed to import backup", e);
@@ -565,9 +576,7 @@ class _DataManagementPageState extends State<DataManagementPage> {
     _showProgressDialog(context, 'Importing shots...');
 
     try {
-      final importer = ShotImporter(
-        storage: widget.persistenceController.storageService,
-      );
+      final importer = ShotImporter(controller: widget.persistenceController);
       final file = File(filePath);
       final content = await file.readAsString();
       final decoded = jsonDecode(content);
@@ -582,8 +591,6 @@ class _DataManagementPageState extends State<DataManagementPage> {
 
       if (!mounted) return;
       Navigator.of(context).pop();
-
-      widget.persistenceController.notifyShotsChanged();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -778,7 +785,7 @@ class _DataManagementPageState extends State<DataManagementPage> {
 
       try {
         final importer = De1appImporter(
-          storageService: widget.persistenceController.storageService,
+          controller: widget.persistenceController,
           profileStorageService: widget.profileStorageService!,
           beanStorageService: widget.beanStorageService!,
           grinderStorageService: widget.grinderStorageService!,
@@ -821,8 +828,6 @@ class _DataManagementPageState extends State<DataManagementPage> {
           ),
         ),
       );
-
-      widget.persistenceController.notifyShotsChanged();
     } finally {
       if (Platform.isAndroid) {
         await SafFolderCopier().cleanup();

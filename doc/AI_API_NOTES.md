@@ -34,8 +34,14 @@ reserved characters, Unicode, plus signs, and `%252F` decode-once behavior;
 invalid UTF-8 is rejected with HTTP 400 at the Shelf boundary.
 
 `Request.url.queryParameters` is already decoded and must not use the path
-helper. Host-assigned UUID resource IDs, plugin/KV/skin/file/command paths,
-and account-proxy normalization retain their existing route contracts.
+helper. Plugin HTTP and WebSocket endpoint routes also decode plugin and
+endpoint IDs once before lookup or subscription matching; generated device
+surface hrefs encode both components once. Surface endpoint validation rejects
+unpaired UTF-16 surrogates because URI encoding replaces them with U+FFFD;
+valid surrogate pairs, encoded control characters, and whitespace round-trip.
+Host-assigned UUID resource IDs,
+plugin management/KV/skin/file/command paths, and account-proxy normalization
+retain their existing route contracts.
 
 ### Patch Nullability
 
@@ -174,11 +180,12 @@ A hostname that resolves to a device address does pass the port-3000 entry redir
 
 ## Decent Binary Protocol
 
-**Source:** Original DE1 app at `github.com/decentespresso/de1app` is the authoritative source for DE1 protocol behavior, BLE characteristics, and machine state logic.
+The protocol is DE1-specific. See
+[`device-notes/de1.md`](device-notes/de1.md#protocol-source-of-truth).
 
-**Profiles:** Use Profile JSON v2 format. See `doc/Profiles.md` for the full profile API and content-based hashing.
-
-**MMR (Memory-Mapped Register) reads:** Used for DE1 debug log buffer, firmware settings, and advanced state. Not for general profile or workflow operations.
+MMR (Memory-Mapped Register) reads serve DE1 debug logs, firmware settings, and
+advanced machine state. Use the profile and workflow APIs for general profile
+or workflow operations, not raw MMR access.
 
 ## Workflow Dual Representation
 
@@ -368,6 +375,14 @@ of records and one JSON record, never with backup size. Rationale and traps:
   (`util/temp_archive_files.dart`), deleted in `finally` or on stream
   cancel/done. Native export defers cleanup (grace timer) because the OS
   share sheet reads the file asynchronously.
+- **Native share anchors**: full backup, recovery package, and import Share
+  Report resolve their initiating widget's bounds immediately before the mobile
+  share call, not before asynchronous file preparation. Desktop save dialogs do
+  not resolve geometry. An unmounted or offscreen action fails without a fallback
+  anchor: archive delivery cleans up and propagates to the existing UI error
+  handler; Share Report uses its existing error handler. Mounted views show the
+  error; disposed views suppress UI updates. Native iPad presentation still
+  requires hardware verification, including resize during preparation.
 - **Legacy compatibility**: entry names, JSON shapes (including
   `store.json`'s `namespaces` wrapper and beans' embedded `batches`),
   `metadata.json` semantics, conflict strategies, selected-section behavior,

@@ -38,11 +38,33 @@ without recovery until the machine wakes. No plugin reconnect loop is needed.
 
 ## Overview
 
+The bundled Settings plugin checks `GET /api/v1/account/decent` before offering
+its feedback form. Signed-out or unavailable account status shows a sign-in
+message instead. `POST /api/v1/feedback` re-verifies the host account before
+sending feedback and returns `400` when authentication cannot be verified.
+
 > **Note on naming:** Plugin JS APIs use `Rea`-prefixed names (`fetchReaSettings`, `updateReaSetting`, `convertReaToVisualizerFormat`) for backwards compatibility with existing plugins. These were not renamed during the app rename from ReaPrime to Decaid.
 
 Decaid plugins are JavaScript modules that extend the functionality of Decaid.
 Plugins run in a sandboxed JavaScript environment and can react to machine events,
 store data, make HTTP requests, and emit events through the Decaid API.
+
+## External device plugins
+
+Concrete device integrations are maintained separately from the Decaid runtime
+and target the current `main` API baseline:
+
+- [Skale plugin](https://github.com/MaxRink/decaid-skale-plugin): opt-in Scale
+  integration. Skale machine actions remain held for the #845/#853 human review
+  decision; the repository does not make those actions part of the host contract.
+- [E64 WebSocket plugin](https://github.com/MaxRink/decaid-e64ws-plugin): opt-in
+  read-only `type: "grinder"` integration over the host network transport. It
+  must not bypass TLS trust or expose motor, calibration, or configuration-write
+  commands.
+
+These repositories are consumer plugins, not bundled runtime features. Validate
+their manifest and API compatibility against the Decaid `main` revision before
+installing or reviewing a change.
 
 ## Plugin Structure
 
@@ -119,7 +141,7 @@ A Decaid plugin consists of two required files:
   - `network.websocket`: Open outbound WebSocket connections (`ws://` and `wss://`) through `host.transport`
   - `network.tcp`: Open outbound raw TCP connections through `host.transport`
   - `network.tls`: Open outbound TLS connections (platform trust store) through `host.transport`
-- **drivers**: Device classes the plugin may register. Each declaration has a plugin-local `id` and a `type`. The only currently supported type is `sensor`. A manifest may declare at most 8 drivers. Driver declarations authorize registration; they do not grant transport access. For example, a WebSocket-backed sensor also needs `network.websocket`.
+- **drivers**: Device classes the plugin may register. Each declaration has a plugin-local `id` and a `type`: `sensor`, `scale`, or `grinder`. A manifest may declare at most 8 drivers. Driver declarations authorize registration; they do not grant transport access. For example, a WebSocket-backed device also needs `network.websocket`. A driver may declare up to 8 `surfaces`, each with a unique safe `id`, `role` (`settings` or `diagnostics`), and a safe non-reserved `endpoint` naming a declared same-plugin HTTP endpoint. At most one surface has role `settings`. Surfaces require the `api` permission; optional `label` is display text. Plugins cannot supply URLs, authority, credentials, or routes through surfaces. Surface endpoints must not contain unpaired UTF-16 surrogates, which cannot round-trip through URI encoding; valid surrogate pairs remain supported.
 - **settings**: User-configurable options with `type` (`string`, `number`, `boolean`, `enum`), an optional `label` giving the setting a human-friendly name, an optional `description` explaining what the setting does, an optional `default`, and an optional `secure` flag for credentials such as passwords. Enum `values` are a JSON array of strings. Secure values use platform credential storage, are supplied in memory to `onLoad(settings)`, and are never returned by the REST API.
 
   `GET /api/v1/plugins` returns this schema verbatim under `settings`, so a skin can render a settings form — labels, help text and defaults included — without reading the plugin's repository. `GET /api/v1/plugins/:id/settings` returns the stored values only.
@@ -214,11 +236,22 @@ if (response.status === 200) {
 const upload = await host.decentProxy("support/api/shot_upload", {
   method: "POST",
   body: JSON.stringify(shot),
-  contentType: "application/json"
+  contentType: "application/json",
+  gzip: true
 });
 ```
 
 The returned object has `{ status, headers, body }`. Consent denial or non-decision rejects with `error.code === "account_consent_denied"`. `GET` (read) needs `proxy.decent_api`; `POST` (write) needs `proxy.decent_api.write` and a path on the write allowlist. Credentials are attached in Dart and never exposed to plugin JS.
+
+The optional `gzip` boolean lets a plugin request host-side compression for its
+POST body. It defaults to false; omitting it or passing false forwards the body
+unchanged, even for shot-upload JSON. Invalid types reject the request before
+upstream traffic. With `gzip: true`, Decaid compresses bodies of at least 1,024
+UTF-8 bytes only when gzip reduces their size, setting `Content-Encoding: gzip`
+and preserving `Content-Type`. The proxy does not infer compression from an
+endpoint or media type. Permissions, the write allowlist, and native account
+consent still apply. A failed compressed POST has no automatic plain-body
+fallback. This transport option is not a user-facing upload setting.
 
 ## Events System
 
@@ -283,8 +316,8 @@ Machine broadcasts require `events.machine`. Shot lifecycle broadcasts require
   ```
 
 - **`storageWrite`**: Confirmation of storage write
-- **`shotStored`**: A shot finished persisting
-- **`shotUpdated`**: A stored shot was edited via `PUT /api/v1/shots/<id>` (e.g. metadata changes — notes, enjoyment, bean/grinder). Broadcast to every plugin so they can react to edits (the Visualizer plugin uses it to forward-sync edited metadata).
+- **`shotStored`**: A new shot finished persisting, including successful backup, Settings JSON, and De1App/onboarding backup imports. Payload: `{id: "<shot id>"}`.
+- **`shotUpdated`**: A stored shot was edited (e.g. notes in History, `PUT /api/v1/shots/<id>`, or a changed backup overwrite). The payload always contains `id`, `shot` (current metadata without measurements), and `patch` (fields changed by this mutation). PUT preserves the submitted request patch; native edits provide an equivalent field patch; backup overwrites provide changed replacement metadata, with removed fields set to `null`. Measurement-only overwrites can have an empty metadata patch. Unchanged, skipped, and failed imports emit no Shot event. Events are per Shot, not batched. The Visualizer plugin uses the patch to forward-sync only edited fields without overwriting unrelated remote edits.
 
   ```javascript
   {
@@ -292,7 +325,7 @@ Machine broadcasts require `events.machine`. Shot lifecycle broadcasts require
     payload: {
       id: "shot-12345",       // local shot id
       shot: { /* full shot without measurements */ },
-      patch: { /* the partial update body that was PUT */ }
+      patch: { annotations: { espressoNotes: 'edited notes' } }
     }
   }
   ```
@@ -300,6 +333,8 @@ Machine broadcasts require `events.machine`. Shot lifecycle broadcasts require
 #### Visualizer Forward Sync
 
 The bundled Visualizer plugin merges recipe and shot-review tags, reads the current Visualizer tags before replacing them, and forwards later local edits in order. Visualizer tag writes require a Visualizer Premium account. The upload endpoint returns `202` with `visualizer_id` after the Visualizer upload succeeds while the tag PATCH continues in memory. Follow-up failures, including Visualizer's premium-account rejection, are reported through `shotForwardSyncError` and `forwardSyncStatus`; tag ownership is restored after an app or plugin restart. Pending work is not restored though.
+
+Upload folds the `grinderBurrs` snapshot recorded on the shot into the uploaded `grinder_model` (Visualizer has no separate field for them). Back-sync suppresses only a value that matches the string it uploaded, compared on normalized text, so a genuine remote edit still applies; an applied edit takes ownership of the field, clearing the shot's burrs snapshot so a re-upload does not decorate the edited text again — see `doc/AI_PLUGINS_NOTES.md` for why and how.
 
 ### Events from Plugin → Flutter
 
@@ -359,11 +394,10 @@ const upload = await fetch("https://api.example.com/upload", {
 
 ## BLE Declaration Work in Progress (#809)
 
-Manifest parsing accepts the separate `transport.ble` permission, `scale`
-driver type, Scale capabilities, and one `ble.match` declaration per plugin.
-This branch does not yet implement runtime BLE binding. Public non-BLE Scale
-registration is available as described below; end-to-end API and timing
-acceptance remain in progress.
+Manifest parsing accepts the separate `transport.ble` permission, `scale` and
+`grinder` driver types, their type-specific capabilities, and one `ble.match`
+declaration per plugin. BLE binding and public non-BLE registration use the same
+typed adapter for each driver type.
 Accepting a declaration does not grant GATT access. See
 `doc/plans/issue-809-design.md` for the remaining implementation and tests.
 
@@ -380,6 +414,26 @@ time between equally complete records, and never merges records. A proven false
 predicate makes the matcher a non-match. A definite match cannot win against an
 indeterminate competing driver. Two definite matches conflict. Discovery and connection
 admission still need to use these arbitration primitives.
+
+### Runtime-v2 session info
+
+Plugin-created and BLE-backed device connection contexts share
+`context.publishInfo(info)`. The device type defines the accepted fields.
+Publications use the existing plugin-generation, registration/binding and
+connection-session fencing and shared 64 KiB JSON payload bound. Oversized info
+returns `resource_limit`; retired contexts return `stale_session`.
+The shared device-request bridge rejects non-finite JavaScript numbers (`NaN`,
+`Infinity`, `-Infinity`), all boxed numbers (`new Number(...)`, including finite
+values), and primitive or boxed BigInt values (`1n`, `Object(1n)`) at any JSON depth
+with `invalid_argument` before serialization. This
+applies to info, snapshots and other device request payloads; explicit `null`
+remains supported.
+Session info clears when the connection retires, including replacement startup,
+disconnect, failed startup, reported connection/protocol failure, replacement or
+unregister, plugin unload/reload and dispose. Info does not satisfy readiness.
+Invalid info may propagate from a BLE notification callback without retiring an
+otherwise healthy connection; snapshot and protocol failures retain their
+existing failure semantics.
 
 ### Non-BLE Scale Registration
 
@@ -442,6 +496,143 @@ Readiness requires both successful `connect` completion and a valid weight.
 Up to 256 initialization samples are retained for controller activation, then
 delivered once. Initialization is bounded; invalid samples cannot mark ready.
 Publication-ingress timestamps are provisional pending the required timing gate.
+
+#### Scale session info
+
+Both plugin-created and BLE-backed Scales use the
+[shared runtime-v2 session info lifecycle](#runtime-v2-session-info):
+
+```javascript
+await context.publishInfo({firmwareVersion: "R029", batteryLevel: 87});
+```
+
+Only `firmwareVersion` and `batteryLevel` are accepted. Firmware is an opaque
+string (including an empty string) or `null`. Battery is an integer from 0 to
+100 inclusive or `null`; a non-null battery requires the existing `battery`
+capability. Omitted fields preserve accepted values; explicit `null` clears
+that field. Empty objects, unknown keys, malformed values, capability mismatches
+and out-of-range values, including `NaN`, `Infinity`, `-Infinity`, all boxed
+numbers, and primitive or boxed BigInt values, return `invalid_argument` without
+changing accepted info.
+
+Accepted info is available to native `DeviceInformationCapable` consumers and
+`GET /api/v1/scale/info`; cleared fields are omitted from the response. Info is
+separate from weight snapshots and does not replace the valid-weight readiness
+requirement. No info enters device inventory, persistence or a new WebSocket.
+Existing v1 Scale plugins that never call `publishInfo` remain compatible.
+
+### Grinder Registration
+
+Declare a Grinder driver with only the controls it supports:
+
+```json
+{"drivers":[{"id":"grinder","type":"grinder","capabilities":["startStop","grindSetting","rpmControl"]}]}
+```
+
+A read-only Grinder may declare observations without any command capabilities:
+
+```json
+{"drivers":[{"id":"grinder","type":"grinder","observations":["setting","rpm"]}]}
+```
+
+`observations` is a unique array of standard names (`setting`, `rpm`), valid only
+for Grinder drivers. Unsupported names and invalid declarations are rejected.
+Observations never enable handlers, command capabilities or writable controls.
+No observation metadata is exposed as a control; unknown vendor values stay in
+plugin diagnostics unless mapped to a standard observation.
+
+Optional driver `controls` describe only declared `grindSetting` and `rpmControl`
+capabilities. `grindSetting` supports `{ "kind": "opaque" }`, finite numeric
+`min`/`max` and optional positive `step`, or a nonempty unique string `values`
+array with `kind: "enumerated"`. `rpmControl` supports numeric descriptors
+with nonnegative integer `min`/`max` and optional positive integer `step`.
+Bounds are inclusive; `step` guides adjustment only. For example, numeric
+grind 1–80 / step 1 and RPM 60–120 need no vendor-specific host logic.
+Unknown descriptor fields and unsupported capabilities fail manifest acceptance.
+
+Registered Scale, Sensor and Grinder adapters share a fixed
+`PluginDeviceSurfaceAuthority`: explicit plugin ownership, validated declared
+surfaces and one host URL resolver. Ownership is never inferred from `deviceId`.
+Grinder session availability filters this authority without changing declarations.
+
+### Native per-device settings
+
+Device management consumes the driver's declared surface with `role: "settings"`
+through `PluginDeviceSurfaceAuthority`. This applies to Scale, Sensor, Grinder,
+and other plugin-backed devices, without requiring a connection or filtering by
+session availability. Devices with no settings-role surface have no settings action.
+The host validates surfaces against declared same-plugin HTTP endpoints and the
+`api` permission when parsing the manifest.
+
+```json
+{
+  "permissions": ["api", "pluginStorage"],
+  "drivers": [{
+    "id": "grinder",
+    "type": "grinder",
+    "surfaces": [{"id": "settings", "role": "settings", "endpoint": "device-settings"}]
+  }],
+  "api": [{"id": "device-settings", "type": "http", "data": {}}]
+}
+```
+
+The native action opens the authority-built `href` against `http://localhost:8080`
+in the platform in-app browser, preserving its `ui=1`, `deviceId`, and optional
+display-only `deviceName` query. Native device management supplies the name to the
+shared authority, which encodes all query values once; the UI does not rebuild
+the query. The name is not identity, and ownership is not inferred from device IDs.
+Other authority callers that omit the name retain their existing hrefs. Only
+the current device instance may launch; retired, replaced, and unloaded instances
+are fenced. The plugin owns identity validation and per-device persistence through
+its namespaced KV store (`pluginStorage` permission), separate from plugin-global
+settings and native auto-connect preferences. No native mirror store is created.
+
+Both `host.devices.register` and BLE `host.devices.bindDriver` create the same
+runtime `PluginGrinder`. Every connection receives a fresh session context and
+must publish a valid initial snapshot before it is ready. Snapshots require
+`state` (`idle`, `grinding`, `error`, or `unknown`); optional string `setting`
+requires `grindSetting`, and optional nonnegative integer `rpm` requires
+`rpmControl`; these existing v1 fields retain their compatibility semantics and
+are not redefined as observations. Optional string `observedSetting` requires a
+`setting` observation declaration; optional nonnegative integer `observedRpm`
+requires an `rpm` observation declaration, independently of command support.
+For example, `context.publish({state: "idle", observedSetting: "espresso/A",
+observedRpm: 900})` reports read-only values. Explicit nulls and invalid types
+are rejected. Each snapshot is self-contained: omitted observed fields mean
+currently unavailable, never zero or reuse of a previous value. Drivers decide
+freshness during an active session; Decaid rejects disconnected, retired,
+superseded and stale-session callbacks before they can become current state.
+No `stale` operational state is added. Unknown fields, plugin timestamps, and stale-session publications
+are rejected. Decaid supplies the timestamp. `context.publish(...)` accepts
+only typed snapshots; controls and surfaces are never snapshot fields. The same
+connection context provides `context.publishInfo({controls, surfaces})` for
+session-only info, with the same generation, registration, session fencing and
+64 KiB payload bound. Info publication does not satisfy initial snapshot readiness.
+A supplied
+control descriptor replaces that entire session override; `null` clears that
+control back to its fixed declaration, and `controls: null` clears all overrides.
+Omitted keys preserve existing overrides. `surfaces: ["settings"]` selects a
+subset of manifest-declared IDs; `[]` hides all, `null` restores all, and
+omission preserves selection. Invalid metadata is rejected with
+`invalid_argument` without changing accepted state or disconnecting the device.
+BLE notification callbacks may propagate an invalid `publishInfo` rejection
+without retiring a healthy connection. Snapshot/protocol failures retain their
+existing failure semantics regardless of earlier info publication.
+Session metadata clears on reconnect, disconnect, unload, replacement and
+dispose. The host validates effective settings/RPM before sending the original
+command unchanged. No metadata enters snapshots, inventory, persisted Grinder
+records or a new WebSocket.
+
+Network and BLE grinders use a default 10-second invocation budget for protocol
+initialization and commands. Initialization includes the connect handler and
+first valid snapshot. Grinder timing does not change scale invocation budgets.
+
+Handlers are always `connect` and `disconnect`. `startStop` additionally
+requires `start` and `stop`; `grindSetting` requires `setGrindSetting(setting)`;
+`rpmControl` requires `setRpm(rpm)`. BLE grinders also require `bleEvent`.
+Unsupported controls fail with `unsupported_operation` before a plugin handler
+is invoked. Runtime control uses the singular `/api/v1/grinder/*` API and the
+generic device connect/disconnect routes.
 
 ## Network Transports (`host.transport`)
 
@@ -746,9 +937,8 @@ Definitions, snapshots, command parameters and command results are limited to
 is not remembered across app restarts. On plugin unload, Decaid runs each
 device's `disconnect()` handler, removes every device, and rejects in-flight
 commands owned by the retiring generation, even if `onUnload()` fails. Late
-publications and command results from older generations
-are ignored. BLE-backed drivers use the separate binding contract below;
-probing and grinder registration are not supported.
+publications and command results from older generations are ignored. BLE-backed
+drivers use the separate binding contract below.
 
 ### BLE Driver Binding (`host.devices.bindDriver`)
 
@@ -816,6 +1006,22 @@ up to 4 active physical bindings per plugin generation. Definitions and Sensor p
 retain the 64 KiB JSON limit. Bridge failures carry `code`, including
 `stale_session`, `permission_denied`, `resource_limit`, `attribute_unavailable`,
 `link_lost`, and `timeout`; other native BLE codes are preserved.
+
+Each `create` call must return independent state for one physical device,
+including timers, subscriptions, pending reads, and command state. Asynchronous
+callbacks retain that connection's context; they must not switch to a replacement
+session's context when an old operation completes. Retiring one binding cancels
+only its own timers and subscriptions. Plugin unload retires all bindings owned
+by that generation without affecting other plugins.
+
+Test zero, one, and four active BLE bindings under the production quota, then
+rejection of a fifth without disturbing the four live bindings. A fixture that
+expects the second binding to fail must explicitly use
+`PluginBleRegistry(activeBindingLimit: 1)`. Also verify independent physical
+identities and state, disconnect/reconnect, stale callbacks and command results,
+permission revocation, sibling-binding isolation, and whole-plugin unload.
+Deterministic fake GATT tests establish host and protocol behavior; report real
+hardware validation separately.
 
 BLE Scale bindings reuse the Scale adapter and declared capability checks. The
 opt-in Felicita Arc and Bookoo examples exercise BLE Scale bindings with fake GATT.
@@ -1074,6 +1280,11 @@ When receiving `stateUpdate` events, the payload contains:
 }
 ```
 
+On classic DE1 machines, `mixTemperature` is not a reliable measurement of
+dispensed hot-water outlet temperature while `state.state` is `hotWater`.
+`targetMixTemperature` remains the requested target, not a measured outlet
+temperature.
+
 ## Troubleshooting
 
 ### Common Issues
@@ -1151,6 +1362,17 @@ Provenance for a tracked install is stored in a Decaid-owned
 `.rea_source.json` inside the plugin directory. It is not part of your plugin
 package, it is rewritten on every install, and it disappears when the plugin is
 removed.
+
+The Plugins page cogwheel menu provides **Refresh plugins**, **Check for
+updates**, and **Install plugin**. Installation opens the source choices:
+**GitHub Release**, **GitHub Branch**, **ZIP file**, and **Folder snapshot**.
+While an update check runs, the cogwheel shows progress and **Check for
+updates** is disabled until the check finishes, including after a failure.
+Concurrent native, periodic, and REST checks share one in-flight operation.
+Leaving and reopening the page preserves its busy state and refreshes the
+current plugin list when that operation finishes.
+Each plugin's three-dot menu contains **Load** or **Unload**, **Settings**,
+**Reload**, and **Remove**.
 
 ### Packaging a release
 

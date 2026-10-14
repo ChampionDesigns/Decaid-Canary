@@ -472,6 +472,7 @@ void main() {
           final body =
               jsonDecode(await response.readAsString()) as Map<String, dynamic>;
           expect(body['error'], 'Invalid backup archive');
+          expect(body.containsKey('reason'), isFalse);
         },
       );
 
@@ -617,6 +618,7 @@ void main() {
         expect(response.statusCode, 400);
         final body = jsonDecode(await response.readAsString());
         expect(body['message'], contains('too many entries'));
+        expect(body['reason'], 'too_many_entries');
       });
 
       test(

@@ -17,6 +17,9 @@ import 'package:reaprime/src/services/webview_compatibility_checker.dart';
 import 'package:reaprime/src/services/webview_log_service.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
 import 'package:reaprime/src/skin_feature/simulated_webview_device.dart';
+import 'package:reaprime/src/skin_feature/skin_camera_permission.dart';
+import 'package:reaprime/src/skin_feature/skin_camera_platform.dart';
+import 'package:reaprime/src/skin_feature/skin_camera_webview_access.dart';
 import 'package:reaprime/src/webui_support/webui_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -97,6 +100,7 @@ class SkinView extends StatefulWidget {
     required this.displayController,
     this.webView,
     required this.port,
+    this.cameraTarget,
   });
 
   final SettingsController settingsController;
@@ -106,6 +110,7 @@ class SkinView extends StatefulWidget {
   @visibleForTesting
   final Widget? webView;
   final int port;
+  final SkinCameraTarget? Function()? cameraTarget;
 
   static const routeName = '/skin';
 
@@ -131,6 +136,13 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
   InAppWebViewController? _webViewController;
   final _skinExitCoordinator = SkinExitCoordinator();
   Uri? _mainFrameUri;
+  late final _camera = SkinCameraWebViewAccess(
+    context: () => mounted ? context : null,
+    currentTarget: () {
+      final target = widget.cameraTarget?.call();
+      return target?.port == widget.port ? target : null;
+    },
+  );
 
   bool _didShowExit = false;
 
@@ -150,6 +162,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
   @override
   void dispose() {
     _log.fine("disposing");
+    if (supportsSkinCamera) _camera.dispose();
     unawaited(widget.displayController.setBrightness(100));
     _blankPageTimer?.cancel();
     _blankPageTimer = null;
@@ -607,12 +620,21 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
       initialUrlRequest: URLRequest(url: WebUri(_skinUrl)),
       initialSettings: _createSettings(),
       initialUserScripts: _initialUserScripts(simulatedDevice),
+      onPermissionRequest: supportsSkinCamera
+          ? _camera.onPermissionRequest
+          : null,
+      onPermissionRequestCanceled: Platform.isAndroid
+          ? _camera.onPermissionRequestCanceled
+          : null,
+      onShowFileChooser: Platform.isAndroid ? _camera.onShowFileChooser : null,
       onWebViewCreated: (controller) {
+        if (supportsSkinCamera) _camera.invalidate();
         _log.info('InAppWebView created');
         _webViewController = controller;
         unawaited(_resumeWebViewTimers(controller, 'onWebViewCreated'));
       },
       onLoadStart: (controller, url) {
+        if (supportsSkinCamera) _camera.invalidate();
         _log.info('Page started loading: $url');
         _mainFrameUri = url;
         BootTiming.mark('webview');
@@ -693,7 +715,11 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
           'WebView Console [$skinId] [${consoleMessage.messageLevel}]: ${consoleMessage.message}',
         );
       },
+      onWebContentProcessDidTerminate: Platform.isIOS || Platform.isMacOS
+          ? (controller) => _camera.invalidate()
+          : null,
       onRenderProcessGone: (controller, detail) {
+        if (supportsSkinCamera) _camera.invalidate();
         _log.warning(
           'WebView renderer process gone — '
           'didCrash: ${detail.didCrash}, '

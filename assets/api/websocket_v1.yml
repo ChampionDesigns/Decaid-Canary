@@ -83,6 +83,19 @@ channels:
         $ref: '#/components/messages/ScaleSnapshot'
       scaleStatusMessage:
         $ref: '#/components/messages/ScaleStatus'
+  GrinderSnapshot:
+    description: >
+      Validated snapshots from the selected runtime GrinderDevice. New subscribers
+      immediately receive its current snapshot when available. Disconnect and
+      replacement clear the retained snapshot before any new subscription. The
+      socket stays open and silent while no grinder is connected, and resumes after a
+      disconnect, reconnect, or same-ID device replacement. Every frame is a
+      GrinderSnapshot; connection status and vendor-specific frames are never
+      emitted on this channel.
+    address: ws/v1/grinder/snapshot
+    messages:
+      grinderSnapshotMessage:
+        $ref: '#/components/messages/GrinderSnapshot'
   ScaleSnapshotById:
     description: >
       Real-time snapshot stream for one connected primary or auxiliary scale.
@@ -151,7 +164,10 @@ channels:
       sensorSnapshotMessage:
         $ref: '#/components/messages/SensorSnapshot'
   Plugins:
-    description: Outgoing messages from Decent plugins.
+    description: >
+      Outgoing messages from Decent plugins. Plugin and endpoint IDs are opaque
+      URI path components: clients percent-encode each once, and the route
+      decodes each once before lookup and subscription matching.
     address: ws/v1/plugins/{id}/{endpoint}
     parameters:
       id:
@@ -181,6 +197,11 @@ channels:
       and ConnectionManager status updates (phase, found devices, ambiguity).
       Accepts commands to scan, connect, and disconnect devices.
       Connect commands receive a DeviceConnectResult when the attempt finishes.
+      A scan command issued during the protected post-wake preferred-scale
+      recovery window is deferred and coalesced instead of preempting the
+      background preferred-scale watch. The pending scan is dropped when the
+      preferred scale reconnects first, the machine disconnects, the preferred
+      scale is cleared, or Decaid shuts down.
     address: ws/v1/devices
     messages:
       devicesState:
@@ -251,6 +272,10 @@ operations:
     action: receive
     channel:
       $ref: '#/channels/ScaleSnapshotById'
+  grinderSnapshot:
+    action: receive
+    channel:
+      $ref: '#/channels/GrinderSnapshot'
   machineRawResponse:
     action: receive
     channel:
@@ -340,6 +365,11 @@ components:
       title: Scale connection status
       payload:
         $ref: '#/components/schemas/ScaleStatus'
+    GrinderSnapshot:
+      name: GrinderSnapshot
+      title: Grinder Snapshot
+      payload:
+        $ref: '#/components/schemas/GrinderSnapshot'
     MachineSnapshot:
       name: MachineSnapshot
       title: Machine Snapshot
@@ -585,6 +615,33 @@ components:
         status:
           type: string
           enum: [connected, disconnected]
+    GrinderSnapshot:
+      type: object
+      description: Snapshot emitted by ws/v1/grinder/snapshot.
+      required: [timestamp, state]
+      additionalProperties: false
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Host-owned publication timestamp.
+        state:
+          type: string
+          enum: [idle, grinding, error, unknown]
+        setting:
+          type: string
+          description: Present only when grindSetting is declared and published.
+        rpm:
+          type: integer
+          minimum: 0
+          description: Present only when rpmControl is declared and published.
+        observedSetting:
+          type: string
+          description: Explicit setting observation, independent of grindSetting command support. Omitted when unavailable in this snapshot; never reuse a previous value.
+        observedRpm:
+          type: integer
+          minimum: 0
+          description: Explicit RPM observation, independent of rpmControl command support. Omitted when unavailable in this snapshot; never reuse a previous value.
     ShotStateEvent:
       type: object
       description: >
@@ -696,10 +753,12 @@ components:
         targetPressure:
           type: number
         mixTemperature:
+          description: On classic DE1 machines, this is not a reliable measurement of dispensed hot-water outlet temperature while state is hotWater.
           type: number
         groupTemperature:
           type: number
         targetMixTemperature:
+          description: Requested mix temperature target; during hotWater on classic DE1 this is the requested hot-water temperature, not a measured outlet temperature.
           type: number
         targetGroupTemperature:
           type: number
@@ -916,6 +975,7 @@ components:
             - machine
             - scale
             - sensor
+            - grinder
           example: machine
         available:
           type: boolean
@@ -988,11 +1048,23 @@ components:
           description: Optional local role for scale connect commands.
         connect:
           type: boolean
-          description: Whether to scan first and automatically fill missing machine and scale slots without replacing connected devices (scan command only).
+          description: >
+            Whether to scan first and automatically fill missing machine and
+            scale slots without replacing connected devices (scan command
+            only). A scan sent during the protected post-wake preferred-scale
+            recovery window is deferred and coalesced with any other pending
+            explicit scan rather than preempting the background preferred-scale
+            watch; it is dropped when the preferred scale reconnects first, the
+            machine disconnects, the preferred scale is cleared, or Decaid
+            shuts down.
           default: true
         quick:
           type: boolean
-          description: Fire-and-forget scan without waiting for results (scan command only).
+          description: >
+            Fire-and-forget scan without waiting for results (scan command
+            only). A quick scan never reports scan failures to the client,
+            whether it starts immediately or runs after the post-wake recovery
+            window.
           default: false
 
     DisplayState:
