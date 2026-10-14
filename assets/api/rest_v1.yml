@@ -126,8 +126,11 @@ paths:
             after successful scan teardown, without restarting full discovery.
             Pending machine/selection work, occupied slots, auxiliary claims,
             and sleeping-scale restrictions disable the shortcut. Otherwise the
-            normal full explicit scan applies. Failed or uncertain teardown never
-            starts an early connection. Independent of quick; does not affect
+            normal full explicit scan applies. Failed or uncertain BLE teardown
+            never starts an early connection. If an early-stop request fails but
+            the scan later completes normally with BLE ownership released, normal
+            post-scan connection policy applies. Unrelated discovery failures do
+            not block a confirmed BLE handoff. Independent of quick; does not affect
             automatic startup. Opt-in is retained when connect requests coalesce.
           in: query
           schema:

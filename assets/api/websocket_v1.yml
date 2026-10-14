@@ -1069,7 +1069,10 @@ components:
             restriction. A preferred scale sighting requests scan termination;
             connection begins only after successful teardown, without restarting
             exhaustive discovery. Ineligible requests retain full explicit scans.
-            Failed or uncertain teardown never starts an early connection.
+            Failed or uncertain BLE teardown never starts an early connection.
+            If an early-stop request fails but the scan later completes normally
+            with BLE ownership released, normal post-scan connection policy applies.
+            Unrelated discovery failures do not block a confirmed BLE handoff.
             Independent of quick and automatic startup. Opt-in is retained when
             connect requests coalesce.
         quick:

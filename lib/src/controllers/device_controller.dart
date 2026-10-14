@@ -9,6 +9,7 @@ import 'package:reaprime/src/models/device/device_scanner.dart';
 import 'package:reaprime/src/models/device/device_watch.dart';
 import 'package:reaprime/src/models/device/remembered_device.dart';
 import 'package:reaprime/src/models/device/scan_filter.dart';
+import 'package:reaprime/src/models/device/transport/data_transport.dart';
 import 'package:reaprime/src/models/device/usb_attach_probe.dart';
 import 'package:reaprime/src/models/device/watch_filter.dart';
 import 'package:reaprime/src/models/device/watch_state.dart';
@@ -209,6 +210,9 @@ class DeviceController
             failures.add(
               ServiceScanFailure(
                 serviceName: service.runtimeType.toString(),
+                transportType: service is BleDiscoveryService
+                    ? TransportType.ble
+                    : TransportType.unknown,
                 error: e,
                 stackTrace: st,
               ),

@@ -136,9 +136,10 @@ class ScanOrchestrator {
     reportBuilder.recordScanDuration(scanResult.duration);
 
     final teardownConfirmed =
-        !stopFailed &&
         !_scanner.isScanning &&
-        scanResult.failedServices.isEmpty;
+        !scanResult.failedServices.any(
+          (failure) => failure.transportType == TransportType.ble,
+        );
     if (stopRequested || requireConfirmedTeardown) {
       onScanTeardown?.call(teardownConfirmed);
     }
@@ -146,7 +147,9 @@ class ScanOrchestrator {
       _emitScanStartError(StateError('Scan teardown was not confirmed'));
       return null;
     }
-    if (stopRequested && canStopOnPreferredScale?.call() != true) {
+    final preferredScaleStopRequested = stopRequested && !stopFailed;
+    if (preferredScaleStopRequested &&
+        canStopOnPreferredScale?.call() != true) {
       _statusPublisher.publish(
         _statusPublisher.current.copyWith(
           phase: _isMachineConnected()
@@ -179,7 +182,7 @@ class ScanOrchestrator {
       scales: scales,
       grinders: grinders,
       reportBuilder: reportBuilder,
-      preferredScaleStopRequested: stopRequested,
+      preferredScaleStopRequested: preferredScaleStopRequested,
     );
   }
 

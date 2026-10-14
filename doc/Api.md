@@ -172,8 +172,11 @@ auxiliary claims and sleeping-scale restrictions disable the shortcut. If
 ineligible or the preferred scale is absent, normal full explicit discovery and
 post-scan policy (including partial-service-failure handling) apply unless an
 earlier shortcut teardown fault is still latched. Once the shortcut requests
-stop, failed or uncertain teardown prevents connection and blocks scale
-reacquisition until a later scan confirms teardown.
+stop, failed or uncertain BLE teardown prevents connection and blocks scale
+reacquisition until a later scan confirms teardown. An early-stop request that
+throws still falls back to normal post-scan policy once the scan completes
+normally and BLE ownership is released. Unrelated discovery failures do not
+block a confirmed BLE handoff.
 Coalesced connect requests retain an opt-in from any caller.
 Automatic startup and Bengle integrated-scale precedence are unchanged.
 

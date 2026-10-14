@@ -102,8 +102,14 @@ never connects in the sighting callback. It awaits `scanForDevices()` completion
 the BLE burst future settles after native stop and subscription/ownership
 teardown. ScaleWatch is disarmed before acquisition, so successful teardown does
 not resume a competing watch. DeviceController retains service failures in
-ScanResult; once the shortcut requests stop, failures or a still-active scanner
-abort that path without GATT. An unconfirmed shortcut teardown also blocks scale reacquisition, including
+ScanResult and tags BLE failures using the `BleDiscoveryService` ownership type,
+not service-name strings. Once the shortcut requests stop, BLE service failures
+or a still-active scanner abort that path without GATT; unrelated discovery
+failures retain normal partial-failure semantics. If the early stop request
+throws but the scan later finishes normally with BLE ownership released, the
+existing full explicit-scan/post-scan policy runs and recovery is not latched.
+Only a successful early stop retains the partial-scan eligibility recheck.
+An unconfirmed shortcut teardown also blocks scale reacquisition, including
 ScaleWatch's cached-device shortcut and automatic early scale sightings, until a
 subsequent scan confirms teardown. This prevents the request's cleanup from
 bypassing the safety gate; a confirmed retry restores normal reacquisition.

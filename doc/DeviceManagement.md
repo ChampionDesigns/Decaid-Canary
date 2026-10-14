@@ -482,8 +482,13 @@ Sleeping-scale restrictions still apply. When that scale appears, discovery is
 stopped and its scan future must confirm successful teardown before the normal
 scale phase starts GATT. No exhaustive rescan is required. Eligibility is
 rechecked on sighting and after teardown; losing ownership after the stop aborts
-the shortcut. After shortcut activation, failed services or uncertain teardown
-also abort without GATT.
+the shortcut. After shortcut activation, BLE service failures or uncertain BLE
+teardown also abort without GATT. Unrelated discovery-service failures retain
+normal partial-failure semantics and do not block a confirmed BLE handoff.
+If requesting early stop throws but the scan subsequently completes normally
+with BLE ownership released, the legacy post-scan policy connects the scale;
+that failed early-stop attempt does not latch recovery or retain partial-scan
+guards.
 After unconfirmed teardown, scale reacquisition stays blocked until a later scan
 confirms teardown, including ScaleWatch cached-device connections. A confirmed
 retry restores normal recovery.

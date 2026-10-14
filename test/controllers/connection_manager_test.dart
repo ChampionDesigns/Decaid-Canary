@@ -1826,34 +1826,96 @@ void main() {
           },
         );
 
-        for (final failure in ['stop throws', 'service failure']) {
-          test('$failure never starts GATT', () async {
+        test(
+          'failed early stop connects via legacy policy after natural completion',
+          () async {
             mockScanner.supportsWatch = true;
             await prepare();
-            if (failure == 'stop throws') {
-              mockScanner.failStopScanWith = StateError('stop denied');
-            } else {
-              mockScanner.scanFailures = [
-                ServiceScanFailure(
-                  serviceName: 'BLE',
-                  error: StateError('native stop denied'),
-                  stackTrace: StackTrace.current,
-                ),
-              ];
-            }
+            mockScanner.failStopScanWith = StateError('stop denied');
+            final scale = TestScale(deviceId: 'preferred-scale');
             final scan = connectionManager.requestExternalScan(
               connect: true,
               connectPreferredScaleEarly: true,
             );
             await Future<void>.delayed(Duration.zero);
-            mockScanner.addDevice(TestScale(deviceId: 'preferred-scale'));
+            mockScanner.addDevice(scale);
             await Future<void>.delayed(Duration.zero);
             expect(mockScanner.stopScanCallCount, 1);
+            expect(mockScanner.isScanning, isTrue);
+            expect(mockScaleController.connectCalls, isEmpty);
+
+            mockDe1Controller.de1Subject.add(
+              _FakeDe1(deviceId: 'replacement-machine'),
+            );
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScaleController.connectCalls, isEmpty);
             mockScanner.completeScan();
             await scan;
+            expect(mockScaleController.connectCalls, [same(scale)]);
+            expect(mockScanner.scanCallCount, 1);
+            expect(connectionManager.lastScanReport, isNotNull);
+            mockScaleController.mockEmitConnectionState(
+              ConnectionState.disconnected,
+            );
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScaleController.connectCalls, hasLength(2));
+          },
+        );
+
+        test(
+          'unrelated service failure after shortcut still connects after BLE teardown',
+          () async {
+            await prepare();
+            mockScanner.scanFailures = [
+              ServiceScanFailure(
+                serviceName: 'unrelated service',
+                error: StateError('unrelated scan failed'),
+                stackTrace: StackTrace.current,
+              ),
+            ];
+            final scale = TestScale(deviceId: 'preferred-scale');
+            final scan = connectionManager.requestExternalScan(
+              connect: true,
+              connectPreferredScaleEarly: true,
+            );
+            await Future<void>.delayed(Duration.zero);
+            mockScanner.addDevice(scale);
+            await Future<void>.delayed(Duration.zero);
+            expect(mockScanner.stopScanCallCount, 1);
+            expect(mockScanner.isScanning, isTrue);
             expect(mockScaleController.connectCalls, isEmpty);
-          });
-        }
+
+            mockScanner.completeScan();
+            await scan;
+            expect(mockScaleController.connectCalls, [same(scale)]);
+            expect(mockScanner.scanCallCount, 1);
+          },
+        );
+
+        test('BLE service failure never starts GATT', () async {
+          mockScanner.supportsWatch = true;
+          await prepare();
+          mockScanner.scanFailures = [
+            ServiceScanFailure(
+              serviceName: 'BLE',
+              transportType: TransportType.ble,
+              error: StateError('native stop denied'),
+              stackTrace: StackTrace.current,
+            ),
+          ];
+          final scan = connectionManager.requestExternalScan(
+            connect: true,
+            connectPreferredScaleEarly: true,
+          );
+          await Future<void>.delayed(Duration.zero);
+          mockScanner.addDevice(TestScale(deviceId: 'preferred-scale'));
+          await Future<void>.delayed(Duration.zero);
+          expect(mockScanner.stopScanCallCount, 1);
+          expect(mockScaleController.connectCalls, isEmpty);
+          mockScanner.completeScan();
+          await scan;
+          expect(mockScaleController.connectCalls, isEmpty);
+        });
 
         test(
           'queued and coalesced explicit scans preserve the opt-in',
@@ -1913,6 +1975,7 @@ void main() {
             mockScanner.scanFailures = [
               ServiceScanFailure(
                 serviceName: 'BLE',
+                transportType: TransportType.ble,
                 error: StateError('native stop denied'),
                 stackTrace: StackTrace.current,
               ),
