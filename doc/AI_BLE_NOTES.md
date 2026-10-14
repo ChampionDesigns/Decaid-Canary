@@ -53,7 +53,7 @@ other power modes and auxiliary cleanup retain their existing behavior.
 
 ## Connection Flow
 
-`ConnectionManager` supports three distinct connection intents, selected via
+`ConnectionManager` supports four distinct connection policies, selected via
 `ConnectionAttemptPolicy`:
 
 ### automatic `connect()`
@@ -86,6 +86,46 @@ drops that request; otherwise it runs after the window and any active
 connection work. Machine recovery is never deferred by this scale lease. A
 full `scanAndConnect()` from a native in-app scan control supersedes a
 deferred discovery-only request, so lease deferral never downgrades it.
+
+### opt-in explicit preferred primary scale reconnect
+
+REST/WS `connectPreferredScaleEarly=true` with `connect=true` selects
+`ConnectionAttemptPolicy.explicitPreferredScaleReconnect`; omitted/false retains
+`explicitScan`. `quick` remains only a waiting control. Eligibility requires an
+already-connected non-Bengle machine, resolved ownership with no pending
+machine/selection work, an empty primary scale slot and a configured preferred
+scale not reserved as auxiliary. Sleeping-scale restrictions apply. Automatic
+startup, machine-first ordering and integrated-scale precedence do not change.
+
+ScanOrchestrator latches one matching sighting and requests `stopScan()`, but
+never connects in the sighting callback. It awaits `scanForDevices()` completion:
+the BLE burst future settles after native stop and subscription/ownership
+teardown. ScaleWatch is disarmed before acquisition, so successful teardown does
+not resume a competing watch. DeviceController retains service failures in
+ScanResult and tags BLE failures using the `BleDiscoveryService` ownership type,
+not service-name strings. Once the shortcut requests stop, BLE service failures
+or a still-active scanner abort that path without GATT; unrelated discovery
+failures retain normal partial-failure semantics. If the early stop request
+throws but the scan later finishes normally with BLE ownership released, the
+existing full explicit-scan/post-scan policy runs and recovery is not latched.
+Only a successful early stop retains the partial-scan eligibility recheck.
+An unconfirmed shortcut teardown also blocks scale reacquisition, including
+ScaleWatch's cached-device shortcut and automatic early scale sightings, until a
+subsequent scan confirms teardown. This prevents the request's cleanup from
+bypassing the safety gate; a confirmed retry restores normal reacquisition.
+Eligibility, machine identity and request generation are rechecked before
+connection. If ownership changes after stop, abort rather than connect from a
+partial scan. Otherwise the existing scale phase connects without restarting
+exhaustive discovery. Ineligible requests or no matching sighting keep full
+explicit discovery and post-scan policy, including existing partial-service-failure
+handling. Strict rejection applies only after shortcut activation or while a
+previous shortcut teardown fault is latched. Queued/coalesced connect requests
+preserve the opt-in.
+
+Real-device beta validation remains required across Android stacks (especially
+older devices) and BlueZ: capture Retry latency, native scan/GATT non-overlap,
+GATT 133/timeouts and healthy subsequent scanner/ScaleWatch ownership. This
+opt-in must not become the default without separate evidence and approval.
 
 ### `scaleOnly` / scale recovery
 

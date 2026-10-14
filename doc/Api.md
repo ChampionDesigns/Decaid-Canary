@@ -149,7 +149,7 @@ Pre-stream responses are `400` for malformed input, `404` for an unknown artifac
 | POST | `/api/v1/devices/wifi` | Add a WiFi scale by IP/hostname (`{host}`) | |
 | DELETE | `/api/v1/devices/wifi` | Remove a manual WiFi endpoint (`{host}` body or `?host=`) | |
 
-`/api/v1/devices/scan` keeps the existing query shape and defaults:
+`/api/v1/devices/scan` preserves the existing defaults:
 `connect=true` when omitted and `quick=false` when omitted. With connection
 enabled, the request scans first, preserves occupied slots, then fills missing
 machine and scale slots and connects the preferred runtime grinder when present;
@@ -159,6 +159,26 @@ REST and devices-WebSocket scans (including `connect=false`) may be coalesced
 and deferred during preferred-scale post-wake recovery, or dropped without a
 scan if the preferred scale reconnects first, the machine disconnects, the
 preferred scale is cleared, or Decaid shuts down.
+
+REST scans accept `connectPreferredScaleEarly=true`; the devices WebSocket
+accepts `{"command":"scan","connect":true,"connectPreferredScaleEarly":true}`.
+The option defaults to false and is ignored with `connect=false`. It is
+independent of `quick`: it changes connection policy, not request waiting.
+With a connected non-Bengle machine, resolved machine ownership, an empty
+primary scale slot and a configured preferred scale, a matching sighting stops
+the scan. GATT starts only after successful teardown; the request need not
+finish exhaustive discovery. Pending machine/selection work, occupied slots,
+auxiliary claims and sleeping-scale restrictions disable the shortcut. If
+ineligible or the preferred scale is absent, normal full explicit discovery and
+post-scan policy (including partial-service-failure handling) apply unless an
+earlier shortcut teardown fault is still latched. Once the shortcut requests
+stop, failed or uncertain BLE teardown prevents connection and blocks scale
+reacquisition until a later scan confirms teardown. An early-stop request that
+throws still falls back to normal post-scan policy once the scan completes
+normally and BLE ownership is released. Unrelated discovery failures do not
+block a confirmed BLE handoff.
+Coalesced connect requests retain an opt-in from any caller.
+Automatic startup and Bengle integrated-scale precedence are unchanged.
 
 `PUT /api/v1/devices/connect` waits for the attempt and returns `deviceId`,
 `operation`, `outcome`, the resulting device `state`, and a structured

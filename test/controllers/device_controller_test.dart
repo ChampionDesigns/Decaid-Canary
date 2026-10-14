@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/controllers/device_controller.dart';
+import 'package:reaprime/src/models/adapter_state.dart';
+import 'package:reaprime/src/services/ble/ble_discovery_service.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/device.dart';
 import 'package:reaprime/src/models/device/device_attach_notifier.dart';
@@ -38,6 +40,23 @@ class _FailingDiscoveryService implements DeviceDiscoveryService {
 
   @override
   Future<Device?> tryQuickConnect(RememberedDevice remembered) async => null;
+}
+
+class _FailingBleDiscoveryService extends BleDiscoveryService {
+  @override
+  Stream<List<Device>> get devices => Stream.value(const []);
+
+  @override
+  Stream<AdapterState> get adapterStateStream =>
+      Stream.value(AdapterState.poweredOn);
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<void> scanForDevices({ScanFilter? filter}) async {
+    throw StateError('BLE teardown failed');
+  }
 }
 
 class _QuietDiscoveryService implements DeviceDiscoveryService {
@@ -232,6 +251,31 @@ void main() {
         );
         expect(result.terminationReason, ScanTerminationReason.completed);
       });
+
+      test(
+        'scan failures identify BLE ownership by service capability',
+        () async {
+          final controller = DeviceController([
+            _FailingBleDiscoveryService(),
+            _FailingDiscoveryService(StateError('serial scan failed')),
+          ]);
+          await controller.initialize();
+          addTearDown(controller.dispose);
+
+          final result = await controller.scanForDevices();
+
+          expect(result.failedServices, hasLength(2));
+          expect(
+            result.failedServices.map((failure) => failure.transportType),
+            unorderedEquals([TransportType.ble, TransportType.unknown]),
+          );
+          final bleFailure = result.failedServices.singleWhere(
+            (failure) => failure.transportType == TransportType.ble,
+          );
+          expect(bleFailure.error.toString(), contains('BLE teardown failed'));
+          expect(controller.isScanning, isFalse);
+        },
+      );
 
       test('all services failing yields a ScanResult with empty matched + '
           'populated failedServices (no top-level throw)', () async {
