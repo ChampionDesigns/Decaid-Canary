@@ -46,6 +46,7 @@ import 'package:reaprime/src/plugins/plugin_device_service.dart';
 import 'package:reaprime/src/plugins/plugin_loader_service.dart';
 import 'package:reaprime/src/plugins/plugin_source_service.dart';
 import 'package:reaprime/src/services/android_updater.dart';
+import 'package:reaprime/src/services/github_rate_limit.dart';
 import 'package:reaprime/src/services/wifi/wifi_scale_discovery_service.dart';
 import 'package:reaprime/src/services/database/database.dart' hide Workflow;
 import 'package:reaprime/src/models/data/shot_record.dart' as domain;
@@ -503,7 +504,11 @@ void main(List<String> args) async {
     loadSkinPortAssignments: loadPersistedSkinPortAssignments,
     saveSkinPortAssignments: persistSkinPortAssignments,
   );
-  final WebUIStorage webUIStorage = WebUIStorage(settingsController);
+  final githubRateLimit = GithubRateLimit();
+  final WebUIStorage webUIStorage = WebUIStorage(
+    settingsController,
+    rateLimit: githubRateLimit,
+  );
 
   DecentAccountService? decentAccountService;
   DecentProxyService? decentProxyService;
@@ -601,6 +606,12 @@ void main(List<String> args) async {
   pluginService.pluginManager.attachWorkflowController(workflowController);
   persistenceController.onShotStored = (shotId) =>
       pluginService.pluginManager.broadcastEvent('shotStored', {'id': shotId});
+  persistenceController.onShotUpdated = (record, patch) =>
+      pluginService.pluginManager.broadcastEvent('shotUpdated', {
+        'id': record.id,
+        'shot': record.toJsonWithoutMeasurements(),
+        'patch': patch,
+      });
 
   BatteryController? batteryController;
   if (Platform.isAndroid || Platform.isIOS) {
@@ -622,6 +633,7 @@ void main(List<String> args) async {
     settingsService: SharedPreferencesSettingsService(),
     webUIStorage: webUIStorage,
     pluginSourceService: pluginSourceService,
+    rateLimit: githubRateLimit,
   );
 
   final macosUpdater = Platform.isMacOS && !BuildInfo.appStore

@@ -10,6 +10,7 @@ import 'package:reaprime/src/util/remote_update_exception.dart';
 import 'package:reaprime/src/util/user_facing_exception.dart';
 import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as p;
+import 'package:reaprime/src/services/github_rate_limit.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
 import 'package:reaprime/src/services/storage/app_directories.dart';
 import 'package:reaprime/src/util/safe_path.dart';
@@ -152,8 +153,40 @@ class WebUIStorage {
   final ValueNotifier<Future<void>?> _updateCheck = ValueNotifier(null);
   Future<void>? _remoteDownload;
 
-  WebUIStorage(this._settingsController, {Directory? webUIDir})
-    : _webUIDirOverride = webUIDir;
+  final GithubRateLimit _rateLimit;
+
+  WebUIStorage(
+    this._settingsController, {
+    Directory? webUIDir,
+    GithubRateLimit? rateLimit,
+  }) : _webUIDirOverride = webUIDir,
+       _rateLimit = rateLimit ?? GithubRateLimit();
+
+  Future<http.Response> _getGitHubRelease(String apiUrl) async {
+    final resetAt = _rateLimit.resetAt;
+    if (resetAt != null) {
+      _log.fine(
+        'GitHub rate limit active; skin updates resume at '
+        '${resetAt.toIso8601String()}',
+      );
+      throw remoteHttpError(429);
+    }
+    final response = await http.get(
+      Uri.parse(apiUrl),
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'Decent-WebUI',
+      },
+    );
+    if (response.statusCode != 200) {
+      final rateLimited = _rateLimit.recordIfLimited(response);
+      throw RemoteServiceException(
+        response.statusCode,
+        remoteHttpError(rateLimited ? 429 : response.statusCode).userMessage,
+      );
+    }
+    return response;
+  }
 
   ValueListenable<Future<void>?> get updateCheck => _updateCheck;
 
@@ -384,17 +417,7 @@ class WebUIStorage {
           ? 'https://api.github.com/repos/$repo/releases'
           : 'https://api.github.com/repos/$repo/releases/latest';
 
-      final releaseResponse = await http.get(
-        Uri.parse(apiUrl),
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Decent-WebUI',
-        },
-      );
-
-      if (releaseResponse.statusCode != 200) {
-        throw remoteHttpError(releaseResponse.statusCode);
-      }
+      final releaseResponse = await _getGitHubRelease(apiUrl);
 
       final dynamic releaseData = includePrerelease
           ? (jsonDecode(releaseResponse.body) as List).first
@@ -622,17 +645,7 @@ class WebUIStorage {
 
       _log.fine('Fetching GitHub release info from: $apiUrl');
 
-      final releaseResponse = await http.get(
-        Uri.parse(apiUrl),
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Decent-WebUI',
-        },
-      );
-
-      if (releaseResponse.statusCode != 200) {
-        throw remoteHttpError(releaseResponse.statusCode);
-      }
+      final releaseResponse = await _getGitHubRelease(apiUrl);
 
       final dynamic releaseData = includePrerelease
           ? (jsonDecode(releaseResponse.body) as List).first

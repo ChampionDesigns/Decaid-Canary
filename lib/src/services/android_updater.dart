@@ -6,6 +6,7 @@ import 'package:logging/logging.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pub_semver/pub_semver.dart';
 import 'package:reaprime/src/services/apk_installer.dart';
+import 'package:reaprime/src/services/github_rate_limit.dart';
 import 'package:reaprime/src/util/remote_error.dart';
 
 class UpdateInfo {
@@ -46,8 +47,19 @@ class UpdateInfo {
 class UpdateCheckException extends RemoteServiceException {
   final String message;
 
-  UpdateCheckException(this.message, {int statusCode = 0})
-    : super(statusCode, remoteHttpError(statusCode).userMessage);
+  final bool rateLimited;
+
+  final DateTime? resetAt;
+
+  UpdateCheckException(
+    this.message, {
+    int statusCode = 0,
+    this.rateLimited = false,
+    this.resetAt,
+  }) : super(
+         statusCode,
+         remoteHttpError(rateLimited ? 429 : statusCode).userMessage,
+       );
 
   @override
   String toString() => message;
@@ -61,13 +73,17 @@ class AndroidUpdater {
   final String _repo;
   final http.Client _httpClient;
   final ApkInstaller _apkInstaller;
+  final GithubRateLimit _rateLimit;
 
   AndroidUpdater({
     required String owner,
     required String repo,
     http.Client? httpClient,
     ApkInstaller? apkInstaller,
+    DateTime Function()? now,
+    GithubRateLimit? rateLimit,
   }) : _owner = owner,
+       _rateLimit = rateLimit ?? GithubRateLimit(now: now),
        _repo = repo,
        _httpClient = httpClient ?? http.Client(),
        _apkInstaller = apkInstaller ?? ApkInstaller();
@@ -79,6 +95,15 @@ class AndroidUpdater {
     String currentVersion, {
     UpdateChannel channel = UpdateChannel.stable,
   }) async {
+    final cooldownEnd = _rateLimit.resetAt;
+    if (cooldownEnd != null) {
+      throw UpdateCheckException(
+        'GitHub rate limit active; update checks resume at '
+        '${cooldownEnd.toIso8601String()}',
+        rateLimited: true,
+        resetAt: cooldownEnd,
+      );
+    }
     try {
       _log.info(
         'Checking for updates on $channel channel (current: $currentVersion)',
@@ -93,6 +118,7 @@ class AndroidUpdater {
       );
 
       if (response.statusCode != 200) {
+        _rateLimit.recordIfLimited(response);
         var message = 'Failed to fetch releases: HTTP ${response.statusCode}';
         if (response.statusCode == 403 || response.statusCode == 429) {
           final remaining = response.headers['x-ratelimit-remaining'];
@@ -133,7 +159,14 @@ class AndroidUpdater {
                 'GitHub rejected releases request (HTTP ${response.statusCode}): $body$suffix';
           }
         }
-        throw UpdateCheckException(message, statusCode: response.statusCode);
+        throw UpdateCheckException(
+          message,
+          statusCode: response.statusCode,
+          rateLimited:
+              (response.statusCode == 403 || response.statusCode == 429) &&
+              response.headers['x-ratelimit-remaining'] == '0',
+          resetAt: _rateLimit.resetAt,
+        );
       }
 
       final releases = json.decode(response.body) as List<dynamic>;

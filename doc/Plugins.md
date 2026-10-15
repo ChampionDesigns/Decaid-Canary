@@ -49,6 +49,23 @@ Decaid plugins are JavaScript modules that extend the functionality of Decaid.
 Plugins run in a sandboxed JavaScript environment and can react to machine events,
 store data, make HTTP requests, and emit events through the Decaid API.
 
+## External device plugins
+
+Concrete device integrations are maintained separately from the Decaid runtime
+and target the current `main` API baseline:
+
+- [Skale plugin](https://github.com/MaxRink/decaid-skale-plugin): opt-in Scale
+  integration. Skale machine actions remain held for the #845/#853 human review
+  decision; the repository does not make those actions part of the host contract.
+- [E64 WebSocket plugin](https://github.com/MaxRink/decaid-e64ws-plugin): opt-in
+  read-only `type: "grinder"` integration over the host network transport. It
+  must not bypass TLS trust or expose motor, calibration, or configuration-write
+  commands.
+
+These repositories are consumer plugins, not bundled runtime features. Validate
+their manifest and API compatibility against the Decaid `main` revision before
+installing or reviewing a change.
+
 ## Plugin Structure
 
 A Decaid plugin consists of two required files:
@@ -219,11 +236,22 @@ if (response.status === 200) {
 const upload = await host.decentProxy("support/api/shot_upload", {
   method: "POST",
   body: JSON.stringify(shot),
-  contentType: "application/json"
+  contentType: "application/json",
+  gzip: true
 });
 ```
 
 The returned object has `{ status, headers, body }`. Consent denial or non-decision rejects with `error.code === "account_consent_denied"`. `GET` (read) needs `proxy.decent_api`; `POST` (write) needs `proxy.decent_api.write` and a path on the write allowlist. Credentials are attached in Dart and never exposed to plugin JS.
+
+The optional `gzip` boolean lets a plugin request host-side compression for its
+POST body. It defaults to false; omitting it or passing false forwards the body
+unchanged, even for shot-upload JSON. Invalid types reject the request before
+upstream traffic. With `gzip: true`, Decaid compresses bodies of at least 1,024
+UTF-8 bytes only when gzip reduces their size, setting `Content-Encoding: gzip`
+and preserving `Content-Type`. The proxy does not infer compression from an
+endpoint or media type. Permissions, the write allowlist, and native account
+consent still apply. A failed compressed POST has no automatic plain-body
+fallback. This transport option is not a user-facing upload setting.
 
 ## Events System
 
@@ -288,8 +316,8 @@ Machine broadcasts require `events.machine`. Shot lifecycle broadcasts require
   ```
 
 - **`storageWrite`**: Confirmation of storage write
-- **`shotStored`**: A shot finished persisting
-- **`shotUpdated`**: A stored shot was edited via `PUT /api/v1/shots/<id>` (e.g. metadata changes — notes, enjoyment, bean/grinder). Broadcast to every plugin so they can react to edits (the Visualizer plugin uses it to forward-sync edited metadata).
+- **`shotStored`**: A new shot finished persisting, including successful backup, Settings JSON, and De1App/onboarding backup imports. Payload: `{id: "<shot id>"}`.
+- **`shotUpdated`**: A stored shot was edited (e.g. notes in History, `PUT /api/v1/shots/<id>`, or a changed backup overwrite). The payload always contains `id`, `shot` (current metadata without measurements), and `patch` (fields changed by this mutation). PUT preserves the submitted request patch; native edits provide an equivalent field patch; backup overwrites provide changed replacement metadata, with removed fields set to `null`. Measurement-only overwrites can have an empty metadata patch. Unchanged, skipped, and failed imports emit no Shot event. Events are per Shot, not batched. The Visualizer plugin uses the patch to forward-sync only edited fields without overwriting unrelated remote edits.
 
   ```javascript
   {
@@ -297,7 +325,7 @@ Machine broadcasts require `events.machine`. Shot lifecycle broadcasts require
     payload: {
       id: "shot-12345",       // local shot id
       shot: { /* full shot without measurements */ },
-      patch: { /* the partial update body that was PUT */ }
+      patch: { annotations: { espressoNotes: 'edited notes' } }
     }
   }
   ```
@@ -501,6 +529,18 @@ Declare a Grinder driver with only the controls it supports:
 {"drivers":[{"id":"grinder","type":"grinder","capabilities":["startStop","grindSetting","rpmControl"]}]}
 ```
 
+A read-only Grinder may declare observations without any command capabilities:
+
+```json
+{"drivers":[{"id":"grinder","type":"grinder","observations":["setting","rpm"]}]}
+```
+
+`observations` is a unique array of standard names (`setting`, `rpm`), valid only
+for Grinder drivers. Unsupported names and invalid declarations are rejected.
+Observations never enable handlers, command capabilities or writable controls.
+No observation metadata is exposed as a control; unknown vendor values stay in
+plugin diagnostics unless mapped to a standard observation.
+
 Optional driver `controls` describe only declared `grindSetting` and `rpmControl`
 capabilities. `grindSetting` supports `{ "kind": "opaque" }`, finite numeric
 `min`/`max` and optional positive `step`, or a nonempty unique string `values`
@@ -552,7 +592,17 @@ runtime `PluginGrinder`. Every connection receives a fresh session context and
 must publish a valid initial snapshot before it is ready. Snapshots require
 `state` (`idle`, `grinding`, `error`, or `unknown`); optional string `setting`
 requires `grindSetting`, and optional nonnegative integer `rpm` requires
-`rpmControl`. Unknown fields, plugin timestamps, and stale-session publications
+`rpmControl`; these existing v1 fields retain their compatibility semantics and
+are not redefined as observations. Optional string `observedSetting` requires a
+`setting` observation declaration; optional nonnegative integer `observedRpm`
+requires an `rpm` observation declaration, independently of command support.
+For example, `context.publish({state: "idle", observedSetting: "espresso/A",
+observedRpm: 900})` reports read-only values. Explicit nulls and invalid types
+are rejected. Each snapshot is self-contained: omitted observed fields mean
+currently unavailable, never zero or reuse of a previous value. Drivers decide
+freshness during an active session; Decaid rejects disconnected, retired,
+superseded and stale-session callbacks before they can become current state.
+No `stale` operational state is added. Unknown fields, plugin timestamps, and stale-session publications
 are rejected. Decaid supplies the timestamp. `context.publish(...)` accepts
 only typed snapshots; controls and surfaces are never snapshot fields. The same
 connection context provides `context.publishInfo({controls, surfaces})` for
@@ -957,6 +1007,22 @@ retain the 64 KiB JSON limit. Bridge failures carry `code`, including
 `stale_session`, `permission_denied`, `resource_limit`, `attribute_unavailable`,
 `link_lost`, and `timeout`; other native BLE codes are preserved.
 
+Each `create` call must return independent state for one physical device,
+including timers, subscriptions, pending reads, and command state. Asynchronous
+callbacks retain that connection's context; they must not switch to a replacement
+session's context when an old operation completes. Retiring one binding cancels
+only its own timers and subscriptions. Plugin unload retires all bindings owned
+by that generation without affecting other plugins.
+
+Test zero, one, and four active BLE bindings under the production quota, then
+rejection of a fifth without disturbing the four live bindings. A fixture that
+expects the second binding to fail must explicitly use
+`PluginBleRegistry(activeBindingLimit: 1)`. Also verify independent physical
+identities and state, disconnect/reconnect, stale callbacks and command results,
+permission revocation, sibling-binding isolation, and whole-plugin unload.
+Deterministic fake GATT tests establish host and protocol behavior; report real
+hardware validation separately.
+
 BLE Scale bindings reuse the Scale adapter and declared capability checks. The
 opt-in Felicita Arc and Bookoo examples exercise BLE Scale bindings with fake GATT.
 Felicita hardware verification covers live notifications, weight, tare, timer
@@ -1357,19 +1423,12 @@ skin updates, and on demand from the Plugins settings screen or
 - one plugin's failure never stops the others; the failure is recorded in
   `lastError`.
 
-Online failures use plain-language messages in the native screen, management API,
-and newly recorded `lastError` values. Native **Retry** keeps the installation
-options. Retrying an approval download opens the current permission review again;
-it never approves a changed candidate without confirmation. Connection messages
-do not claim that Wi-Fi is off or replace authentication and package-validation
-errors. Technical exceptions remain in application logs.
-Malformed manifests report an invalid package without parser diagnostics or source
-snippets. Downgrade errors retain the instruction to remove the installed version
-before installing an older one; the management API still returns HTTP 409.
-
-After all items are processed, a failed or partially completed manual update check
-returns HTTP 500 with a human-readable `error`. Successful updates are retained.
-Background checks remain quiet and installed plugins remain available offline.
+Native/API errors and new `lastError` values use plain-language guidance; parser
+details stay in logs. **Retry** retains options and reopens current permission
+review for approval downloads. Changed candidates require fresh confirmation.
+Downgrades explain removal of the installed version and retain HTTP 409.
+Failed or partial batches return HTTP 500 after processing all items, retaining
+successes. Background failures stay quiet; installed plugins remain usable offline.
 
 ### Bundled plugins
 

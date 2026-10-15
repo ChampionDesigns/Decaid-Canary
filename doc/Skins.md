@@ -137,6 +137,16 @@ live stream instead.
 
 Windows and Linux camera support remain unchanged.
 
+### Text Scaling
+
+Decaid pins the embedded WebView's text zoom to 100%, so the device's system
+font-size setting does not rescale a skin. Android would otherwise apply that
+setting to text but not to layout, growing a skin's type while the boxes
+holding it stayed the same size — text then overflows its container, and only
+inside the app, since a browser on the same device is unaffected. A skin owns
+its own scaling and should size its text itself.
+
+
 ### Skin Origins and Browser Storage
 
 Each installed skin is served from its own **stable origin** — a port derived
@@ -3536,20 +3546,12 @@ The default skin preference:
 
 ## Version Management & Updates
 
-Online installation and manual update failures use plain-language connection,
-timeout, or secure-connection messages. The native screen offers **Retry** with
-the original repository, branch, and asset options. Retrying does not require
-entering them again. Local ZIP installation and installed skins remain usable
-without internet access.
-
-Overlapping remote skin downloads share one in-flight batch, including Settings
-Retry and manual update checks. A completed or failed batch permits a new attempt.
-
-Update checks continue after an individual failure and retain successful updates.
-Failed or partially completed checks show a warning; the update REST endpoint
-returns HTTP 500 with a human-readable `error`, rather than reporting success.
-Startup and periodic checks stay quiet when remote sources are unavailable.
-Technical exceptions remain in the application log, not in these messages.
+Online failures use plain-language guidance; technical details stay in logs.
+**Retry** retains repository, branch, and asset options. Concurrent remote downloads
+share one batch, including Settings Retry. Batches attempt all items and retain
+successes; complete or partial failures show warnings and return HTTP 500.
+Startup/periodic failures stay quiet. Installed skins and local ZIP installation
+remain usable offline.
 
 Decaid tracks skin metadata in `.rea_metadata.json`:
 

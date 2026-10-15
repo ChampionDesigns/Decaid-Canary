@@ -149,7 +149,7 @@ Pre-stream responses are `400` for malformed input, `404` for an unknown artifac
 | POST | `/api/v1/devices/wifi` | Add a WiFi scale by IP/hostname (`{host}`) | |
 | DELETE | `/api/v1/devices/wifi` | Remove a manual WiFi endpoint (`{host}` body or `?host=`) | |
 
-`/api/v1/devices/scan` keeps the existing query shape and defaults:
+`/api/v1/devices/scan` preserves the existing defaults:
 `connect=true` when omitted and `quick=false` when omitted. With connection
 enabled, the request scans first, preserves occupied slots, then fills missing
 machine and scale slots and connects the preferred runtime grinder when present;
@@ -159,6 +159,26 @@ REST and devices-WebSocket scans (including `connect=false`) may be coalesced
 and deferred during preferred-scale post-wake recovery, or dropped without a
 scan if the preferred scale reconnects first, the machine disconnects, the
 preferred scale is cleared, or Decaid shuts down.
+
+REST scans accept `connectPreferredScaleEarly=true`; the devices WebSocket
+accepts `{"command":"scan","connect":true,"connectPreferredScaleEarly":true}`.
+The option defaults to false and is ignored with `connect=false`. It is
+independent of `quick`: it changes connection policy, not request waiting.
+With a connected non-Bengle machine, resolved machine ownership, an empty
+primary scale slot and a configured preferred scale, a matching sighting stops
+the scan. GATT starts only after successful teardown; the request need not
+finish exhaustive discovery. Pending machine/selection work, occupied slots,
+auxiliary claims and sleeping-scale restrictions disable the shortcut. If
+ineligible or the preferred scale is absent, normal full explicit discovery and
+post-scan policy (including partial-service-failure handling) apply unless an
+earlier shortcut teardown fault is still latched. Once the shortcut requests
+stop, failed or uncertain BLE teardown prevents connection and blocks scale
+reacquisition until a later scan confirms teardown. An early-stop request that
+throws still falls back to normal post-scan policy once the scan completes
+normally and BLE ownership is released. Unrelated discovery failures do not
+block a confirmed BLE handoff.
+Coalesced connect requests retain an opt-in from any caller.
+Automatic startup and Bengle integrated-scale precedence are unchanged.
 
 `PUT /api/v1/devices/connect` waits for the attempt and returns `deviceId`,
 `operation`, `outcome`, the resulting device `state`, and a structured
@@ -349,7 +369,7 @@ The singular `/api/v1/grinder/*` surface controls the one selected runtime
 
 | Method | Path | Description | Handler |
 |--------|------|-------------|---------|
-| GET | `/api/v1/grinder/info` | Runtime `deviceId`, unchanged capabilities, optional effective controls and available plugin surfaces | `grinder_handler.dart` |
+| GET | `/api/v1/grinder/info` | Runtime `deviceId`, unchanged command capabilities, optional observations, effective controls and available plugin surfaces | `grinder_handler.dart` |
 | GET | `/api/v1/grinder/state` | Latest validated grinder snapshot | |
 | PUT | `/api/v1/grinder/state/grinding` | Start grinding | |
 | PUT | `/api/v1/grinder/state/idle` | Stop grinding | |
@@ -365,10 +385,20 @@ settings require a finite parsed value within inclusive bounds; enumerated
 settings match exactly; opaque settings accept any string. `step` is a display
 hint, never a rounding rule. Without descriptors, v1 commands remain valid.
 
+`observations`, when present in info, lists independently declared `setting`
+and/or `rpm` observations; it is omitted when none are declared. These declarations
+do not enable commands or create writable controls. Snapshot `observedSetting`
+(string) and `observedRpm` (nonnegative integer) report only declared observations.
+They are omitted when unavailable for that snapshot, never defaulted or carried
+forward. Drivers decide freshness in an active session; the host fences stale,
+disconnected, retired and superseded sessions. Existing `setting` / `rpm` retain
+v1 semantics and require their existing command capabilities in plugin publications.
+Observations are runtime-only and are not saved to shot history or equipment records.
+
 `controls` is omitted when no descriptors exist. `surfaces` is omitted when
 none are declared, or `[]` when declared surfaces are temporarily hidden.
 Plugins update session info through `context.publishInfo({controls, surfaces})`,
-not snapshot `context.publish({state, setting, rpm})`. Info and snapshot publication
+not snapshot `context.publish({state, setting, rpm, observedSetting, observedRpm})`. Info and snapshot publication
 share connection authority and cleanup; invalid info preserves accepted values.
 Each surface has a host-owned role and a host-built same-plugin `href` with the
 runtime `deviceId` query-encoded once; do not treat that identity as a persisted
@@ -666,20 +696,15 @@ The **proxy** lets clients *use* the account without ever seeing the credentials
 | GET | `/api/v1/webview/logs` | WebView console log forwarding, newest first (`?order=asc` for original chronological order) | `webview_logs_handler.dart` |
 | POST | `/api/v1/derek/answers/stream` | Relay to the Derek RAG assistant: forwards the JSON body verbatim to `derek.decentespresso.com/api/answers/stream` and pipes the SSE response back unbuffered. No auth (public data). Exists so browser skins avoid Derek's failing CORS preflight. | `derek_handler.dart` |
 
-Internet-dependent operations return plain-language failure messages instead of
-transport exceptions. This applies to skin/plugin installation and updates,
-app-update state, feedback submission, and host-side connection failures in the
-Decent account and Derek proxies. Existing JSON field names and upstream response
-passthrough are unchanged. Malformed downloaded data is reported without parser
-diagnostics or source snippets. Plugin validation and downgrade failures retain
-HTTP 400 and 409, respectively. A connection failure suggests checking internet access
-without claiming Wi-Fi is off. Timeouts and secure-connection failures have
-separate guidance; technical diagnostics remain in application logs.
+Online skin/plugin actions, app updates, feedback, and host-side account/Derek
+connection failures return plain-language guidance. Transport/parser details stay
+in logs. Timeouts and secure-connection failures have distinct messages; connection
+errors never assert Wi-Fi is off. JSON fields and upstream passthrough are unchanged.
+Plugin validation and downgrade failures retain HTTP 400 and 409, respectively.
 
-Skin and plugin update batches finish their remaining items and keep successful
-updates. If any checks fail, their management endpoints return HTTP 500 with an
-`error` describing complete or partial failure. Background checks stay quiet.
-Manual retry is a client action; these endpoints do not retry automatically.
+Skin/plugin batches attempt all items and retain successes. Any failure returns
+HTTP 500 with an `error` describing complete or partial failure. Background checks
+stay quiet; retries are manual.
 
 Feedback verifies the stored Decent credentials before uploading attachments,
 creating an issue, or contacting Support. Missing, rejected, or unverifiable
