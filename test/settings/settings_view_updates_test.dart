@@ -31,6 +31,13 @@ class _RecordingUpdater extends AndroidUpdater {
   void dispose() {}
 }
 
+class _OfflineContentStorage extends WebUIStorage {
+  _OfflineContentStorage(super.settingsController);
+
+  @override
+  Future<void> downloadRemoteSkins() async {}
+}
+
 const _channel = MethodChannel('net.tadel.reaprime/macos_updater');
 
 Future<(UpdateCheckService, _RecordingUpdater)> _pumpSettingsView(
@@ -63,7 +70,7 @@ Future<(UpdateCheckService, _RecordingUpdater)> _pumpSettingsView(
     de1Controller: De1Controller(controller: DeviceController(const [])),
     settingsController: settingsController,
   );
-  final webUIStorage = WebUIStorage(settingsController);
+  final webUIStorage = _OfflineContentStorage(settingsController);
   final updater = _RecordingUpdater();
   final updateCheckService = UpdateCheckService(
     settingsService: MockSettingsService(),
@@ -258,7 +265,10 @@ void main() {
         await tester.pump(const Duration(milliseconds: 300));
 
         expect(calls.where((c) => c.method == 'checkForUpdates'), hasLength(1));
-        expect(find.textContaining('Update check failed'), findsOneWidget);
+        expect(
+          find.textContaining("Couldn't check for app updates"),
+          findsOneWidget,
+        );
 
         await tester.pump(const Duration(seconds: 4));
         await tester.pump(const Duration(milliseconds: 300));

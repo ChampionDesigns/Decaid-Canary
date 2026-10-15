@@ -14,6 +14,7 @@ import 'package:reaprime/src/settings/presence_settings_page.dart';
 import 'package:reaprime/src/settings/charging_mode.dart';
 import 'package:reaprime/src/settings/update_dialog.dart';
 import 'package:reaprime/src/webui_support/webui_storage.dart';
+import 'package:reaprime/src/widgets/remote_error_snack_bar.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -419,6 +420,8 @@ class SettingsView extends StatelessWidget {
   }
 
   Future<void> _checkForUpdates(BuildContext context) async {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
     final updater = macosUpdater;
     if (updater != null && updater.isSupported) {
       if (updater.isAvailable) {
@@ -427,9 +430,13 @@ class SettingsView extends StatelessWidget {
         } catch (e, st) {
           Logger('Settings View').warning('Sparkle manual check failed', e, st);
           if (!context.mounted) return;
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Update check failed: $e')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            remoteErrorSnackBar(
+              e,
+              action: 'check for app updates',
+              onRetry: () => _checkForUpdates(context),
+            ),
+          );
         }
         return;
       }
@@ -530,12 +537,34 @@ class SettingsView extends StatelessWidget {
         );
       }
 
-      await webUIStorage?.downloadRemoteSkins();
+      await _downloadRemoteSkins(context);
     } catch (e, stackTrace) {
       log.severe('Error checking for updates', e, stackTrace);
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to check for updates: $e')),
+        remoteErrorSnackBar(
+          e,
+          action: 'check for app updates',
+          onRetry: () => _checkForUpdates(context),
+        ),
+      );
+    }
+  }
+
+  Future<void> _downloadRemoteSkins(BuildContext context) async {
+    if (!context.mounted) return;
+    try {
+      await webUIStorage?.downloadRemoteSkins();
+    } catch (e, st) {
+      Logger('Settings View').warning('Remote skin download failed', e, st);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        remoteErrorSnackBar(
+          e,
+          action: 'download the skins',
+          onRetry: () => _downloadRemoteSkins(context),
+        ),
       );
     }
   }

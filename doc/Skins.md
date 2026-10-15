@@ -3536,6 +3536,21 @@ The default skin preference:
 
 ## Version Management & Updates
 
+Online installation and manual update failures use plain-language connection,
+timeout, or secure-connection messages. The native screen offers **Retry** with
+the original repository, branch, and asset options. Retrying does not require
+entering them again. Local ZIP installation and installed skins remain usable
+without internet access.
+
+Overlapping remote skin downloads share one in-flight batch, including Settings
+Retry and manual update checks. A completed or failed batch permits a new attempt.
+
+Update checks continue after an individual failure and retain successful updates.
+Failed or partially completed checks show a warning; the update REST endpoint
+returns HTTP 500 with a human-readable `error`, rather than reporting success.
+Startup and periodic checks stay quiet when remote sources are unavailable.
+Technical exceptions remain in the application log, not in these messages.
+
 Decaid tracks skin metadata in `.rea_metadata.json`:
 
 ```json

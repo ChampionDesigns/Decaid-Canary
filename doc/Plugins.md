@@ -1357,6 +1357,20 @@ skin updates, and on demand from the Plugins settings screen or
 - one plugin's failure never stops the others; the failure is recorded in
   `lastError`.
 
+Online failures use plain-language messages in the native screen, management API,
+and newly recorded `lastError` values. Native **Retry** keeps the installation
+options. Retrying an approval download opens the current permission review again;
+it never approves a changed candidate without confirmation. Connection messages
+do not claim that Wi-Fi is off or replace authentication and package-validation
+errors. Technical exceptions remain in application logs.
+Malformed manifests report an invalid package without parser diagnostics or source
+snippets. Downgrade errors retain the instruction to remove the installed version
+before installing an older one; the management API still returns HTTP 409.
+
+After all items are processed, a failed or partially completed manual update check
+returns HTTP 500 with a human-readable `error`. Successful updates are retained.
+Background checks remain quiet and installed plugins remain available offline.
+
 ### Bundled plugins
 
 A bundled plugin is copied out of the app at startup and stays the app-owned

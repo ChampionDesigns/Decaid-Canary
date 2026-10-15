@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -48,12 +49,30 @@ class _FakeLoader extends Fake implements PluginLoaderService {
 class _FakeSourceService extends PluginSourceService {
   _FakeSourceService(super.loader, {this.source, this.updateCompletion});
 
-  final PluginSource? source;
+  PluginSource? source;
   final Future<void>? updateCompletion;
   @override
   final ValueNotifier<Future<void>?> updateCheck = ValueNotifier(null);
   int updateCalls = 0;
   int approvals = 0;
+  Object? approvalError;
+  int installCalls = 0;
+  Object? installError;
+  String? installedRepo;
+  String? installedAsset;
+
+  @override
+  Future<PluginManifest> installFromGitHubRelease(
+    String repo, {
+    String? assetName,
+    bool includePrerelease = false,
+  }) async {
+    installCalls++;
+    if (installError != null) throw installError!;
+    installedRepo = repo;
+    installedAsset = assetName;
+    return manifest();
+  }
 
   @override
   PluginSource? sourceFor(String pluginId) => source;
@@ -70,6 +89,7 @@ class _FakeSourceService extends PluginSourceService {
   @override
   Future<PluginManifest> approvePendingUpdate(String pluginId) async {
     approvals++;
+    if (approvalError != null) throw approvalError!;
     return PluginManifest(
       id: pluginId,
       name: 'Test plugin',
@@ -115,6 +135,37 @@ void main() {
     );
     await tester.pump();
   }
+
+  testWidgets('offline plugin installation retries with the original options', (
+    tester,
+  ) async {
+    final service = _FakeSourceService(_FakeLoader(const []))
+      ..installError = const SocketException('private host lookup');
+    await pumpView(tester, sourceService: service);
+    await tester.tap(find.byTooltip('Plugin actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Install plugin'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('GitHub Release'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).at(0), 'acme/plugin');
+    await tester.enterText(find.byType(TextField).at(1), 'plugin.zip');
+    await tester.tap(find.text('Install'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        "Couldn't install the plugin. Check your internet connection and try again.",
+      ),
+      findsOneWidget,
+    );
+    service.installError = null;
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(service.installCalls, 2);
+    expect(service.installedRepo, 'acme/plugin');
+    expect(service.installedAsset, 'plugin.zip');
+    expect(find.text('Plugin installed: Sourced plugin'), findsOneWidget);
+  });
 
   testWidgets('the install menu offers every source', (tester) async {
     final sourceService = _FakeSourceService(_FakeLoader(const []));
@@ -420,5 +471,77 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(sourceService.approvals, 1);
+  });
+
+  testWidgets(
+    'Retry reviews the latest permission request before approving again',
+    (tester) async {
+      final service = _FakeSourceService(
+        _FakeLoader(const []),
+        source: PluginSource(
+          kind: PluginSourceKind.githubRelease,
+          repo: 'acme/plugin',
+          installedAt: DateTime(2026),
+          pendingUpdate: PluginPendingUpdate(
+            version: '1.1.0',
+            addedPermissions: const ['network'],
+            detectedAt: DateTime(2026),
+          ),
+        ),
+      )..approvalError = const SocketException('offline');
+      await pumpView(tester, sourceService: service, plugins: [manifest()]);
+      await tester.tap(find.text('Review'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Approve and update'));
+      await tester.pumpAndSettle();
+      expect(service.approvals, 1);
+      service.source = service.source!.copyWith(
+        pendingUpdate: PluginPendingUpdate(
+          version: '1.2.0',
+          addedPermissions: const ['transport.tcp'],
+          detectedAt: DateTime(2026),
+        ),
+      );
+      await tester.tap(find.text('Retry'));
+      await tester.pumpAndSettle();
+      expect(service.approvals, 1);
+      expect(find.text('Update Sourced plugin to 1.2.0?'), findsOneWidget);
+      expect(find.textContaining('transport.tcp'), findsWidgets);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(service.approvals, 1);
+    },
+  );
+
+  testWidgets('a pending update changed during review is not approved', (
+    tester,
+  ) async {
+    final service = _FakeSourceService(
+      _FakeLoader(const []),
+      source: PluginSource(
+        kind: PluginSourceKind.githubRelease,
+        repo: 'acme/plugin',
+        installedAt: DateTime(2026),
+        pendingUpdate: PluginPendingUpdate(
+          version: '1.1.0',
+          addedPermissions: const ['network'],
+          detectedAt: DateTime(2026),
+        ),
+      ),
+    );
+    await pumpView(tester, sourceService: service, plugins: [manifest()]);
+    await tester.tap(find.text('Review'));
+    await tester.pumpAndSettle();
+    service.source = service.source!.copyWith(
+      pendingUpdate: PluginPendingUpdate(
+        version: '1.2.0',
+        addedPermissions: const ['transport.tcp'],
+        detectedAt: DateTime(2026),
+      ),
+    );
+    await tester.tap(find.text('Approve and update'));
+    await tester.pumpAndSettle();
+    expect(service.approvals, 0);
+    expect(find.textContaining('Review its permissions again'), findsOneWidget);
   });
 }

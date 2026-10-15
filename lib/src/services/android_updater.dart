@@ -6,6 +6,7 @@ import 'package:logging/logging.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pub_semver/pub_semver.dart';
 import 'package:reaprime/src/services/apk_installer.dart';
+import 'package:reaprime/src/util/remote_error.dart';
 
 class UpdateInfo {
   final String version;
@@ -42,10 +43,11 @@ class UpdateInfo {
   }
 }
 
-class UpdateCheckException implements Exception {
+class UpdateCheckException extends RemoteServiceException {
   final String message;
 
-  UpdateCheckException(this.message);
+  UpdateCheckException(this.message, {int statusCode = 0})
+    : super(statusCode, remoteHttpError(statusCode).userMessage);
 
   @override
   String toString() => message;
@@ -131,7 +133,7 @@ class AndroidUpdater {
                 'GitHub rejected releases request (HTTP ${response.statusCode}): $body$suffix';
           }
         }
-        throw UpdateCheckException(message);
+        throw UpdateCheckException(message, statusCode: response.statusCode);
       }
 
       final releases = json.decode(response.body) as List<dynamic>;
@@ -183,7 +185,7 @@ class AndroidUpdater {
       final response = await _httpClient.send(request);
 
       if (response.statusCode != 200) {
-        throw Exception('Failed to download update: ${response.statusCode}');
+        throw remoteHttpError(response.statusCode);
       }
 
       final total = response.contentLength;
