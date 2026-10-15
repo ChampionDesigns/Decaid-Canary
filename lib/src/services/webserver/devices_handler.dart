@@ -262,6 +262,12 @@ class DevicesHandler {
       );
       final scan = _connectionManager.requestExternalScan(
         connect: connect,
+        connectPreferredScaleEarly:
+            req
+                .requestedUri
+                .queryParametersAll['connectPreferredScaleEarly']
+                ?.firstOrNull ==
+            'true',
         scanOnly: () async {
           _controller.scanForDevices();
           await _controller.scanningStream.firstWhere((s) => s);
@@ -524,6 +530,8 @@ class DevicesHandler {
         );
         final scan = _connectionManager.requestExternalScan(
           connect: connect,
+          connectPreferredScaleEarly:
+              data['connectPreferredScaleEarly'] as bool? ?? false,
           scanOnly: () async {
             await _controller.scanForDevices();
           },

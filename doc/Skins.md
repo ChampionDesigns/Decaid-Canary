@@ -169,6 +169,16 @@ native overlays and background/resume separately before retaining a mode.
 Windows unit tests and a Samsung test cannot establish an improvement on the
 reported Teclast P85Pro with WebView 91.
 
+### Text Scaling
+
+Decaid pins the embedded WebView's text zoom to 100%, so the device's system
+font-size setting does not rescale a skin. Android would otherwise apply that
+setting to text but not to layout, growing a skin's type while the boxes
+holding it stayed the same size — text then overflows its container, and only
+inside the app, since a browser on the same device is unaffected. A skin owns
+its own scaling and should size its text itself.
+
+
 ### Skin Origins and Browser Storage
 
 Each installed skin is served from its own **stable origin** — a port derived
@@ -3191,13 +3201,13 @@ This creates an `out/` directory with static HTML/CSS/JS files.
 **Option B: Install from ZIP** (works on all platforms):
 
 1. Package your build output as a `.zip`
-2. In Decaid, open **Launcher → Skins**, tap the **+** (Install skin) button and choose **ZIP file**
+2. In Decaid, open **Launcher → Skins**, open the cogwheel menu, then **Install skin → ZIP file**
 3. Pick the file; the skin is extracted, installed, and loaded immediately
 
 **Option B2: Install from GitHub** (public repositories only):
 
 1. Push your skin to a GitHub repository — either as a tagged release with a `.zip` asset, or on a branch
-2. In Decaid, open **Launcher → Skins**, tap the **+** (Install skin) button and choose **GitHub Release** or **GitHub Branch**
+2. In Decaid, open **Launcher → Skins**, open the cogwheel menu, then **Install skin → GitHub Release** or **GitHub Branch**
 3. Enter `owner/repo` (and optionally the asset name, or the branch, defaulting to `main`)
 4. The skin is installed and appears in the skin list; **Check for updates** re-fetches from the same source
 
@@ -3597,7 +3607,13 @@ Decaid tracks skin metadata in `.rea_metadata.json`:
 - User-installed skins are checked for updates via `updateAllSkins()`, which
   runs on the app's periodic update check, from `POST /api/v1/webui/skins/update`,
   from the web settings plugin's "Check for Skin Updates", and from the native
-  skin selector's "Check for updates" button.
+  skin page's cogwheel menu under **Check for updates**.
+- During an update check on the native skin page, the cogwheel shows progress
+  and **Check for updates** is disabled until the check finishes, including
+  after a failure. The menu can still be opened to access installation.
+- Concurrent native, periodic, and REST checks share one in-flight operation.
+  Leaving and reopening the page preserves its busy state and refreshes the
+  current skin list when that operation finishes.
 - Raw-URL and GitHub-release skins are compared against their recorded source
   on every check: URL skins via HTTP `ETag` / `Last-Modified` headers,
   release skins by re-resolving the latest release (honoring the recorded

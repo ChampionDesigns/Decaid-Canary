@@ -49,6 +49,7 @@ InAppWebViewSettings createSkinWebViewSettings({
   supportZoom: false,
   builtInZoomControls: false,
   enableViewportScale: true,
+  textZoom: 100,
   verticalScrollBarEnabled: false,
   horizontalScrollBarEnabled: false,
   userAgent: 'Decent',

@@ -110,6 +110,7 @@ void main() {
           .platform
           .params;
       expect(params.initialSettings!.useHybridComposition, !texture);
+      expect(params.initialSettings!.textZoom, 100);
       expect(params.initialSettings!.allowFileAccessFromFileURLs, isFalse);
       expect(params.initialSettings!.allowUniversalAccessFromFileURLs, isFalse);
       expect(params.onPermissionRequest, isNotNull);
