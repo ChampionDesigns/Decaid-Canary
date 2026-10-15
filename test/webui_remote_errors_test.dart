@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive_io.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -16,6 +18,8 @@ void main() {
 
   late Directory directory;
   late WebUIStorage storage;
+  const manifestAsset = 'assets/bundled_skins/manifest.json';
+  const sourcesAsset = 'skin_sources.json';
 
   setUp(() {
     directory = Directory.systemTemp.createTempSync('decaid_remote_skins');
@@ -23,6 +27,39 @@ void main() {
       SettingsController(MockSettingsService()),
       webUIDir: directory,
     );
+    final archive = Archive()
+      ..addFile(
+        ArchiveFile.string('index.html', '<title>Offline fixture</title>'),
+      )
+      ..addFile(
+        ArchiveFile.string(
+          'skin-manifest.json',
+          jsonEncode({'id': 'offline-fixture', 'name': 'Offline fixture'}),
+        ),
+      );
+    final assets = {
+      manifestAsset: Uint8List.fromList(
+        utf8.encode(jsonEncode(['offline-fixture'])),
+      ),
+      'assets/bundled_skins/offline-fixture.zip': Uint8List.fromList(
+        ZipEncoder().encode(archive),
+      ),
+      sourcesAsset: Uint8List.fromList(
+        utf8.encode(
+          jsonEncode([
+            {'type': 'github_release', 'repo': 'fixture/first'},
+            {'type': 'github_release', 'repo': 'fixture/second'},
+          ]),
+        ),
+      ),
+    };
+    rootBundle.evict(manifestAsset);
+    rootBundle.evict(sourcesAsset);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMessageHandler('flutter/assets', (message) async {
+          final bytes = assets[const StringCodec().decodeMessage(message)];
+          return bytes == null ? null : ByteData.sublistView(bytes);
+        });
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
           const MethodChannel('plugins.flutter.io/path_provider'),
@@ -31,6 +68,10 @@ void main() {
   });
 
   tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMessageHandler('flutter/assets', null);
+    rootBundle.evict(manifestAsset);
+    rootBundle.evict(sourcesAsset);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
           const MethodChannel('plugins.flutter.io/path_provider'),
@@ -44,8 +85,12 @@ void main() {
       () => storage.initialize(),
       () => MockClient((_) async => throw const SocketException('offline')),
     );
-    expect(storage.installedSkins, isNotEmpty);
-    expect(storage.defaultSkin, isNotNull);
+    expect(storage.installedSkins.map((skin) => skin.id), ['offline-fixture']);
+    expect(storage.defaultSkin?.id, 'offline-fixture');
+    expect(
+      await File('${directory.path}/offline-fixture/index.html').readAsString(),
+      '<title>Offline fixture</title>',
+    );
   });
 
   test('remote downloads share failures and allow a later retry', () async {
