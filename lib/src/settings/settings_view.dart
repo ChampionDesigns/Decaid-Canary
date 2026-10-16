@@ -9,6 +9,7 @@ import 'package:reaprime/src/services/macos_updater.dart';
 import 'package:reaprime/src/services/update_check_service.dart';
 import 'package:reaprime/src/settings/battery_charging_settings_page.dart';
 import 'package:reaprime/src/settings/common.dart';
+import 'package:reaprime/src/settings/device_management_page.dart';
 import 'package:reaprime/src/settings/presence_settings_page.dart';
 import 'package:reaprime/src/settings/charging_mode.dart';
 import 'package:reaprime/src/settings/update_dialog.dart';
@@ -49,6 +50,15 @@ class SettingsView extends StatelessWidget {
           return ListView(
             children: [
               const SettingsSectionHeader('General'),
+              SettingsTile(
+                icon: Icons.devices_outlined,
+                label: 'Devices',
+                trailing: const Icon(Icons.chevron_right, size: 20),
+                onTap: () => Navigator.of(
+                  context,
+                ).pushNamed(DeviceManagementPage.routeName),
+              ),
+              const SettingsDivider(),
               SettingsTile(
                 icon: Icons.palette_outlined,
                 label: 'Appearance',
@@ -524,8 +534,29 @@ class SettingsView extends StatelessWidget {
     } catch (e, stackTrace) {
       log.severe('Error checking for updates', e, stackTrace);
       if (!context.mounted) return;
+      final rateLimited = e is UpdateCheckException && e.rateLimited;
+      final resetAt = e is UpdateCheckException ? e.resetAt?.toLocal() : null;
+      final resumeNote = resetAt == null
+          ? 'Try again later'
+          : 'Update checks resume at ${TimeOfDay.fromDateTime(resetAt).format(context)}';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to check for updates: $e')),
+        SnackBar(
+          content: Text(
+            rateLimited
+                ? 'GitHub rate limit reached. $resumeNote, or download the update from the releases page.'
+                : 'Failed to check for updates: $e',
+          ),
+          duration: Duration(seconds: rateLimited ? 10 : 4),
+          action: rateLimited
+              ? SnackBarAction(
+                  label: 'Open releases',
+                  onPressed: () => launchUrl(
+                    Uri.parse(updateCheckService!.getReleasesUrl()),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                )
+              : null,
+        ),
       );
     }
   }

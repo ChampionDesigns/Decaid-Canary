@@ -38,6 +38,8 @@ class _FakeBlePlatform extends UniversalBlePlatform {
   int stopScanCalls = 0;
   Object? failNextStartScanWith;
   Object? failNextStopScanWith;
+  Completer<void>? holdNextStopScan;
+  Completer<void>? holdSystemDevices;
 
   @override
   Future<AvailabilityState> getBluetoothAvailabilityState() async =>
@@ -73,6 +75,7 @@ class _FakeBlePlatform extends UniversalBlePlatform {
   @override
   Future<void> stopScan() async {
     stopScanCalls++;
+    await holdNextStopScan?.future;
     final error = failNextStopScanWith;
     failNextStopScanWith = null;
     if (error != null) throw error;
@@ -171,6 +174,7 @@ class _FakeBlePlatform extends UniversalBlePlatform {
 
   @override
   Future<List<BleDevice>> getSystemDevices(List<String>? withServices) async {
+    await holdSystemDevices?.future;
     return List<BleDevice>.unmodifiable(systemDevices);
   }
 }
@@ -190,7 +194,9 @@ class _TrackingFakeBleTransport extends FakeBleTransport {
   Stream<domain.ConnectionState> get connectionState =>
       connectionStateOverride ?? super.connectionState;
 
-  int disconnectCalls = 0;
+  // disconnectCalls is inherited from FakeBleTransport, which now counts it.
+  // Re-declaring it here would SHADOW the parent's field, so the parent's
+  // disconnectCalls++ would update a different variable than the test reads.
   int disposeCalls = 0;
   bool _disposed = false;
 
@@ -427,6 +433,59 @@ void main() {
 
       expect(transports, 1);
     });
+  });
+
+  group('burst teardown', () {
+    for (final fail in [false, true]) {
+      test(
+        'early stop during system lookup preserves teardown (fail=$fail)',
+        () async {
+          platform.holdSystemDevices = Completer<void>();
+          platform.holdNextStopScan = Completer<void>();
+          addTearDown(() {
+            if (!platform.holdSystemDevices!.isCompleted) {
+              platform.holdSystemDevices!.complete();
+            }
+            if (!platform.holdNextStopScan!.isCompleted) {
+              platform.holdNextStopScan!.complete();
+            }
+          });
+          if (fail) {
+            platform.failNextStopScanWith = StateError('native stop failed');
+          }
+          var completed = false;
+          Object? observedError;
+          final burst = service.scanForDevices();
+          final observed = burst.then(
+            (_) {
+              completed = true;
+            },
+            onError: (Object error) {
+              completed = true;
+              observedError = error;
+              if (!fail) throw error;
+            },
+          );
+          await pump();
+          service.stopScan();
+          await pump();
+          platform.holdSystemDevices!.complete();
+          await pump();
+          expect(completed, isFalse);
+          expect(platform.nativeScanning, isTrue);
+          platform.holdNextStopScan!.complete();
+          await observed.timeout(const Duration(seconds: 1));
+          expect(observedError, fail ? isA<StateError>() : isNull);
+          expect(platform.stopScanCalls, 1);
+          expect(platform.nativeScanning, fail);
+          expect(service.scanOwner, BleScanOwner.none);
+          expect(
+            service.scanPhase,
+            fail ? BleScanPhase.faulted : BleScanPhase.idle,
+          );
+        },
+      );
+    }
   });
 
   group('watch ownership contract', () {

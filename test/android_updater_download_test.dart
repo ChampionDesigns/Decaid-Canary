@@ -102,6 +102,309 @@ void main() {
       expect(update?.version, '0.7.15-beta.1');
     });
 
+    test('returns null for an empty release list', () async {
+      final updater = updaterFor([]);
+
+      expect(await updater.checkForUpdate('0.7.14'), isNull);
+    });
+
+    test('returns null when no release is newer', () async {
+      final updater = updaterFor([release('0.7.14', prerelease: false)]);
+
+      expect(await updater.checkForUpdate('0.7.14'), isNull);
+    });
+
+    test(
+      'sends GitHub API headers and keeps successful release parsing',
+      () async {
+        late http.Request capturedRequest;
+        final updater = AndroidUpdater(
+          owner: 'tadelv',
+          repo: 'reaprime',
+          httpClient: MockClient((request) async {
+            capturedRequest = request;
+            return http.Response(
+              jsonEncode([release('0.7.15', prerelease: false)]),
+              200,
+            );
+          }),
+        );
+
+        final update = await updater.checkForUpdate('0.7.14');
+
+        expect(
+          capturedRequest.headers['accept'],
+          'application/vnd.github.v3+json',
+        );
+        expect(capturedRequest.headers['user-agent'], 'Decaid');
+        expect(update?.version, '0.7.15');
+        expect(update?.downloadUrl, 'https://example.com/0.7.15.apk');
+      },
+    );
+
+    test(
+      'explains a rate-limited 403 with bounded reset diagnostics',
+      () async {
+        final updater = AndroidUpdater(
+          owner: 'tadelv',
+          repo: 'reaprime',
+          httpClient: MockClient(
+            (_) async => http.Response(
+              List.filled(5000, 'x').join(),
+              403,
+              headers: {
+                'x-ratelimit-remaining': '0',
+                'x-ratelimit-reset': '2000000000',
+              },
+            ),
+          ),
+        );
+
+        await expectLater(
+          updater.checkForUpdate('0.7.14'),
+          throwsA(
+            isA<UpdateCheckException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('rate limit'),
+                contains('2033-05-18'),
+                predicate<String>((message) => message.length < 500),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'explains a rate-limited 429 with bounded reset diagnostics',
+      () async {
+        final updater = AndroidUpdater(
+          owner: 'tadelv',
+          repo: 'reaprime',
+          httpClient: MockClient(
+            (_) async => http.Response(
+              'API rate limit exceeded ${List.filled(5000, 'x').join()}',
+              429,
+              headers: {
+                'x-ratelimit-remaining': '0',
+                'x-ratelimit-reset': '2000000000',
+              },
+            ),
+          ),
+        );
+
+        await expectLater(
+          updater.checkForUpdate('0.7.14'),
+          throwsA(
+            isA<UpdateCheckException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('HTTP 429'),
+                    contains('rate limit remaining: 0'),
+                    contains('2033-05-18'),
+                    predicate<String>((message) => message.length < 500),
+                  ),
+                )
+                .having((e) => e.rateLimited, 'rateLimited', isTrue),
+          ),
+        );
+      },
+    );
+
+    group('rate-limit cooldown', () {
+      final resetAt = DateTime.utc(2030, 1, 1, 12);
+      late DateTime clock;
+      late int requests;
+      late AndroidUpdater updater;
+
+      setUp(() {
+        clock = DateTime.utc(2030, 1, 1, 11);
+        requests = 0;
+        updater = AndroidUpdater(
+          owner: 'tadelv',
+          repo: 'reaprime',
+          now: () => clock,
+          httpClient: MockClient((_) async {
+            requests++;
+            if (requests == 1) {
+              return http.Response(
+                'API rate limit exceeded',
+                403,
+                headers: {
+                  'x-ratelimit-remaining': '0',
+                  'x-ratelimit-reset':
+                      '${resetAt.millisecondsSinceEpoch ~/ 1000}',
+                },
+              );
+            }
+            return http.Response('[]', 200);
+          }),
+        );
+      });
+
+      test('skips the network until the reset time', () async {
+        await expectLater(
+          updater.checkForUpdate('0.7.14'),
+          throwsA(isA<UpdateCheckException>()),
+        );
+        expect(requests, 1);
+
+        await expectLater(
+          updater.checkForUpdate('0.7.14'),
+          throwsA(
+            isA<UpdateCheckException>()
+                .having((e) => e.rateLimited, 'rateLimited', isTrue)
+                .having((e) => e.resetAt, 'resetAt', resetAt),
+          ),
+        );
+        expect(requests, 1);
+      });
+
+      test('resumes requests once the reset time has passed', () async {
+        await expectLater(
+          updater.checkForUpdate('0.7.14'),
+          throwsA(isA<UpdateCheckException>()),
+        );
+
+        clock = resetAt;
+        expect(await updater.checkForUpdate('0.7.14'), isNull);
+        expect(requests, 2);
+      });
+
+      test('does not start a cooldown without a reset header', () async {
+        var calls = 0;
+        final noReset = AndroidUpdater(
+          owner: 'tadelv',
+          repo: 'reaprime',
+          now: () => clock,
+          httpClient: MockClient((_) async {
+            calls++;
+            return calls == 1
+                ? http.Response(
+                    'rate limited',
+                    403,
+                    headers: {'x-ratelimit-remaining': '0'},
+                  )
+                : http.Response('[]', 200);
+          }),
+        );
+
+        await expectLater(
+          noReset.checkForUpdate('0.7.14'),
+          throwsA(isA<UpdateCheckException>()),
+        );
+        expect(await noReset.checkForUpdate('0.7.14'), isNull);
+        expect(calls, 2);
+      });
+    });
+
+    test(
+      'keeps 403 response details when quota headers conflict with the body',
+      () async {
+        final body =
+            'Request forbidden by administrative rules: User-Agent required\n'
+            '${List.filled(5000, 'x').join()}';
+        final updater = AndroidUpdater(
+          owner: 'tadelv',
+          repo: 'reaprime',
+          httpClient: MockClient(
+            (_) async => http.Response(
+              body,
+              403,
+              headers: {'x-ratelimit-remaining': '0'},
+            ),
+          ),
+        );
+
+        await expectLater(
+          updater.checkForUpdate('0.7.14'),
+          throwsA(
+            isA<UpdateCheckException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('User-Agent required'),
+                contains('remaining: 0'),
+                contains('reset time unavailable'),
+                isNot(contains('rate limit exceeded')),
+                isNot(contains('\n')),
+                predicate<String>((message) => message.length < 500),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'distinguishes a non-rate-limit 403 with bounded response details',
+      () async {
+        final body =
+            'Request forbidden by administrative rules: User-Agent required '
+            '${List.filled(5000, 'x').join()}';
+        final updater = AndroidUpdater(
+          owner: 'tadelv',
+          repo: 'reaprime',
+          httpClient: MockClient((_) async => http.Response(body, 403)),
+        );
+
+        await expectLater(
+          updater.checkForUpdate('0.7.14'),
+          throwsA(
+            isA<UpdateCheckException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('403'),
+                contains('User-Agent required'),
+                predicate<String>((message) => message.length < 500),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    test('keeps other non-200 status errors unchanged', () async {
+      final updater = AndroidUpdater(
+        owner: 'tadelv',
+        repo: 'reaprime',
+        httpClient: MockClient(
+          (_) async => http.Response('not found body', 404),
+        ),
+      );
+
+      await expectLater(
+        updater.checkForUpdate('0.7.14'),
+        throwsA(
+          isA<UpdateCheckException>().having(
+            (e) => e.message,
+            'message',
+            'Failed to fetch releases: HTTP 404',
+          ),
+        ),
+      );
+    });
+
+    test('propagates a transport failure', () async {
+      final updater = AndroidUpdater(
+        owner: 'tadelv',
+        repo: 'reaprime',
+        httpClient: MockClient(
+          (_) async => throw const SocketException('network is unreachable'),
+        ),
+      );
+
+      await expectLater(
+        updater.checkForUpdate('0.7.14'),
+        throwsA(isA<SocketException>()),
+      );
+    });
+
     test('all invalid releases do not affect a later valid check', () async {
       var callCount = 0;
       final updater = AndroidUpdater(

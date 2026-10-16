@@ -9,6 +9,13 @@ Decaid exposes REST and WebSocket APIs on port 8080. Full OpenAPI specs are in [
 
 For skin development, see [`doc/Skins.md`](Skins.md). For plugin development, see [`doc/Plugins.md`](Plugins.md).
 
+External sensor IDs in REST and WebSocket paths are opaque URI path
+components. Clients percent-encode them once; the host decodes them once at
+the sensor route boundary. This preserves literal reserved characters,
+Unicode, plus signs, and percent-bearing IDs. Invalid UTF-8 receives `400` at
+the HTTP boundary. Host-assigned UUID resource IDs keep their existing route
+contracts.
+
 The #809 work-in-progress manifest schema includes `transport.ble`, Scale
 capabilities, and BLE matchers. Public non-BLE Scale registration is implemented;
 runtime BLE binding and full API acceptance remain incomplete. See
@@ -104,13 +111,17 @@ For browser clients on a different origin, `ETag` is exposed via `Access-Control
 | GET | `/api/v1/machine/scaleCalibration` | Read decoded scale-calibration state (step, cell, sub-state, seconds remaining, status) — Bengle only, 404 elsewhere | |
 | PUT | `/api/v1/machine/scaleCalibration` | Start `zero`/`latch`/`abort` calibration step (`weightGrams` 1–10000 required for `latch`); 202 accepted / 409 rejected (busy or shot in progress) — Bengle only | |
 
+For classic DE1 machines, snapshot `mixTemperature` is not a reliable
+measurement of dispensed hot-water outlet temperature while the machine is in
+`hotWater` state. `targetMixTemperature` remains the requested target.
+
 #### Firmware updates
 
 The catalog endpoint is available offline and without a connected machine. It returns bundled artifact metadata, compatibility and version eligibility, the recommended artifact, tri-state `updateAvailable`, and the shared machine operation state. The bundled Phase 1 artifact is official DE1 firmware build 1352 for `DE1Pro`, `DE1XL`, `DE1XXL`, and `DE1XXXL`.
 
 Managed apply accepts `{"artifactId":"de1-1352","force":false}` with a 64 KiB body limit and a 10-second body-read timeout. The complete image is checked against its manifest, SHA-256 digest, canonical DE1 header, and connected model before erase. `force` permits reinstall or downgrade, including when the installed build is unknown, but never bypasses integrity or model checks. The raw endpoint retains its developer/recovery role and accepts `application/octet-stream`, capped at 16 MiB with a 60-second body-read timeout.
 
-Raw and managed updates return `application/x-ndjson`. Events are ordered `erasing`, zero or more `uploading`, then `done`; failures after streaming starts terminate with `error`. Upload progress is emitted in approximately one-percent increments. The stream remains open during final machine verification, and `done` is sent only after the DE1 reports `FF FF FD`. Client disconnect and `DELETE` cancel a pending update before it starts or forward cancellation to an active update.
+Raw and managed updates return `application/x-ndjson`. Events are ordered `erasing`, zero or more `uploading`, then `done`; failures after streaming starts terminate with `error`. Upload progress is emitted in approximately one-percent increments. The stream remains open during final machine verification, and `done` is sent only after the DE1 reports `FF FF FD`. The app waits for that value on the machine's notification and on a bounded poll of the firmware-map register, whichever answers first, so an update still completes on firmware that never sends the terminal notification. The erase and verify waits stay bounded, so a stuck update fails rather than hangs. Client disconnect and `DELETE` cancel a pending update before it starts or forward cancellation to an active update.
 
 Pre-stream responses are `400` for malformed input, `404` for an unknown artifact, `408` when a request body stalls, `409` for an active update, `413` when a raw upload exceeds 16 MiB or a managed request exceeds 64 KiB, `422` for validation or policy rejection, and `503` when apply requires a machine or the machine write queue is full. Idempotent cancellation returns `202` with `{"operation":{"state":"idle"}}` when no update remains active.
 
@@ -118,10 +129,14 @@ Pre-stream responses are `400` for malformed input, `404` for an unknown artifac
 
 | Method | Path | Description | Handler |
 |--------|------|-------------|---------|
+| GET | `/api/v1/scale/info` | Information for the currently connected scale | `scale_handler.dart` |
 | PUT | `/api/v1/scale/tare` | Tare the connected scale | `scale_handler.dart` |
+| PUT | `/api/v1/scales/{id}/tare` | Tare a connected primary or auxiliary scale by opaque device ID | `scale_handler.dart` |
 | PUT | `/api/v1/scale/timer/start` | Start scale timer | |
 | PUT | `/api/v1/scale/timer/stop` | Stop scale timer | |
 | PUT | `/api/v1/scale/timer/reset` | Reset scale timer | |
+
+`GET /api/v1/scale/info` is scoped to the currently connected scale. It returns `503` when no scale is connected and `{}` when connected metadata is not yet known. `firmwareVersion`, when present, is an opaque value reported by the scale (for example `R029`). `batteryLevel` is optional and nullable; unknown values are omitted, while `0` and `100` are valid readings. This endpoint is separate from device inventory.
 
 ### Devices
 
@@ -129,18 +144,43 @@ Pre-stream responses are `400` for malformed input, `404` for an unknown artifac
 |--------|------|-------------|---------|
 | GET | `/api/v1/devices` | List devices (present + remembered) | `devices_handler.dart` |
 | GET | `/api/v1/devices/scan` | Scan and fill missing device slots; set `?connect=false` for discovery only | |
-| PUT | `/api/v1/devices/connect` | Connect to device by ID | |
+| PUT | `/api/v1/devices/connect` | Connect to device by ID (`connectionRole: primary|auxiliary` for scales) | |
 | PUT | `/api/v1/devices/disconnect` | Disconnect device | |
 | PUT | `/api/v1/devices/forget` | Forget a remembered device | |
 | GET | `/api/v1/devices/wifi` | List manually-added WiFi scale endpoints | `wifi_scale_handler.dart` |
 | POST | `/api/v1/devices/wifi` | Add a WiFi scale by IP/hostname (`{host}`) | |
 | DELETE | `/api/v1/devices/wifi` | Remove a manual WiFi endpoint (`{host}` body or `?host=`) | |
 
-`/api/v1/devices/scan` keeps the existing query shape and defaults:
+`/api/v1/devices/scan` preserves the existing defaults:
 `connect=true` when omitted and `quick=false` when omitted. With connection
 enabled, the request scans first, preserves occupied slots, then fills missing
-machine and scale slots; this may take longer than the former quick-connect
+machine and scale slots and connects the preferred runtime grinder when present;
+this may take longer than the former quick-connect
 behavior. `quick=true` returns immediately but does not change that policy.
+REST and devices-WebSocket scans (including `connect=false`) may be coalesced
+and deferred during preferred-scale post-wake recovery, or dropped without a
+scan if the preferred scale reconnects first, the machine disconnects, the
+preferred scale is cleared, or Decaid shuts down.
+
+REST scans accept `connectPreferredScaleEarly=true`; the devices WebSocket
+accepts `{"command":"scan","connect":true,"connectPreferredScaleEarly":true}`.
+The option defaults to false and is ignored with `connect=false`. It is
+independent of `quick`: it changes connection policy, not request waiting.
+With a connected non-Bengle machine, resolved machine ownership, an empty
+primary scale slot and a configured preferred scale, a matching sighting stops
+the scan. GATT starts only after successful teardown; the request need not
+finish exhaustive discovery. Pending machine/selection work, occupied slots,
+auxiliary claims and sleeping-scale restrictions disable the shortcut. If
+ineligible or the preferred scale is absent, normal full explicit discovery and
+post-scan policy (including partial-service-failure handling) apply unless an
+earlier shortcut teardown fault is still latched. Once the shortcut requests
+stop, failed or uncertain BLE teardown prevents connection and blocks scale
+reacquisition until a later scan confirms teardown. An early-stop request that
+throws still falls back to normal post-scan policy once the scan completes
+normally and BLE ownership is released. Unrelated discovery failures do not
+block a confirmed BLE handoff.
+Coalesced connect requests retain an opt-in from any caller.
+Automatic startup and Bengle integrated-scale precedence are unchanged.
 
 `PUT /api/v1/devices/connect` waits for the attempt and returns `deviceId`,
 `operation`, `outcome`, the resulting device `state`, and a structured
@@ -149,6 +189,10 @@ behavior. `quick=true` returns immediately but does not change that policy.
 and connection timeouts return 504. The devices WebSocket returns the same result
 after each connect command.
 
+Disconnect failures return 500. A selected grinder clears local controller
+state before its failure is reported. The devices WebSocket reports the same
+failure in an `error` frame.
+
 Each device entry carries an **`available`** boolean. `true` = currently present
 in discovery or actively connected; `false` = a **remembered** device that isn't
 present (reported with `state: "disconnected"`). Devices the user connects to are
@@ -156,6 +200,15 @@ remembered and persist across restarts, shown as unavailable when offline, until
 forgotten via `PUT /api/v1/devices/forget` (deviceId in the JSON body or
 `?deviceId=` query). The same `available` field is on each device in the
 `ws/v1/devices` snapshot.
+
+`GET /api/v1/devices` and `/ws/v1/devices` are inventory-only surfaces. Their device entries contain identity, availability, and connection state, not connection metadata such as `deviceInfo`, `firmwareVersion`, or `batteryLevel`. Connected scale entries additionally expose `connectionRole` (`primary` or `auxiliary`); disconnected and remembered entries omit it. A metadata refresh therefore does not emit an inventory update. Clients that need current connected-scale metadata should call `GET /api/v1/scale/info`; no scale metadata WebSocket is defined until a concrete live-update need exists.
+
+Scale connections are primary by default. Send `connectionRole: "auxiliary"` in
+the generic connect body to retain an explicitly connected scale as a runtime
+auxiliary session. Auxiliary sessions are not persisted and do not affect shot
+sequencing or the legacy singular scale routes. Use
+`PUT /api/v1/scales/{id}/tare` and `/ws/v1/scales/{id}/snapshot` to address a
+connected primary or auxiliary scale independently.
 
 `available` describes inventory presence, not command ownership. A connected
 controller-owned device such as Bengle's integrated virtual scale is listed as
@@ -215,10 +268,10 @@ move a consumer's cursor backwards.
 ### Steams
 
 Recorded milk-steaming sessions. Each record is opened when the machine
-enters `steam` and finalized when it leaves. Today no probe is wired in
-production, so `SteamSnapshot.milkTemperature` is `null` on every frame —
-the API surface is scaffolding for skin developers and for future
-probe / FW support. `SteamSettings.stopAtTemperature` (in
+enters `steam` and finalized when it leaves. `SteamSnapshot.milkTemperature`
+uses the preferred Bengle milk probe when its declared temperature channel is
+available, and is `null` when no suitable sensor is registered.
+`SteamSettings.stopAtTemperature` (in
 `/api/v1/workflow`) is the target the future FW-autonomous stop or
 in-app stop will trigger on.
 
@@ -313,6 +366,59 @@ supplied values replace them. Explicit `null` for non-nullable fields returns
 
 ### Grinders
 
+The singular `/api/v1/grinder/*` surface controls the one selected runtime
+`GrinderDevice`:
+
+| Method | Path | Description | Handler |
+|--------|------|-------------|---------|
+| GET | `/api/v1/grinder/info` | Runtime `deviceId`, unchanged command capabilities, optional observations, effective controls and available plugin surfaces | `grinder_handler.dart` |
+| GET | `/api/v1/grinder/state` | Latest validated grinder snapshot | |
+| PUT | `/api/v1/grinder/state/grinding` | Start grinding | |
+| PUT | `/api/v1/grinder/state/idle` | Stop grinding | |
+| PUT | `/api/v1/grinder/setting` | Set a string setting (`{"setting":"12.3"}`) | |
+| PUT | `/api/v1/grinder/rpm` | Set a nonnegative integer RPM (`{"rpm":1200}`) | |
+| WS | `/ws/v1/grinder/snapshot` | Snapshot-only stream across disconnect and replacement | |
+
+No connected grinder returns 503. Unsupported declared operations return an
+error with `code: "unsupported_operation"`. Effective descriptors validate
+string settings and integer RPM before invoking the driver; rejected values
+return `code: "invalid_argument"` without clamping or rewriting. Numeric
+settings require a finite parsed value within inclusive bounds; enumerated
+settings match exactly; opaque settings accept any string. `step` is a display
+hint, never a rounding rule. Without descriptors, v1 commands remain valid.
+
+`observations`, when present in info, lists independently declared `setting`
+and/or `rpm` observations; it is omitted when none are declared. These declarations
+do not enable commands or create writable controls. Snapshot `observedSetting`
+(string) and `observedRpm` (nonnegative integer) report only declared observations.
+They are omitted when unavailable for that snapshot, never defaulted or carried
+forward. Drivers decide freshness in an active session; the host fences stale,
+disconnected, retired and superseded sessions. Existing `setting` / `rpm` retain
+v1 semantics and require their existing command capabilities in plugin publications.
+Observations are runtime-only and are not saved to shot history or equipment records.
+
+`controls` is omitted when no descriptors exist. `surfaces` is omitted when
+none are declared, or `[]` when declared surfaces are temporarily hidden.
+Plugins update session info through `context.publishInfo({controls, surfaces})`,
+not snapshot `context.publish({state, setting, rpm, observedSetting, observedRpm})`. Info and snapshot publication
+share connection authority and cleanup; invalid info preserves accepted values.
+Each surface has a host-owned role and a host-built same-plugin `href` with the
+runtime `deviceId` query-encoded once; do not treat that identity as a persisted
+Grinder UUID. The API exposes no vendor command or catch-all route.
+
+New snapshot WebSocket subscribers immediately receive the selected grinder's
+current snapshot when available. Disconnect and replacement clear the retained
+snapshot; disconnected subscriptions stay silent and never receive stale or
+null frames.
+
+This runtime identity is deliberately separate from persisted equipment. A
+persisted `Grinder.id` is a UUID used by the plural `/api/v1/grinders` CRUD
+surface and workflow metadata. A runtime grinder has a transport/plugin
+`deviceId`. `preferredGrinderDeviceId` stores that runtime ID for connection
+from normal scan results; it is never a persisted `grinderId`.
+
+### Grinder Records
+
 | Method | Path | Description | Handler |
 |--------|------|-------------|---------|
 | GET | `/api/v1/grinders` | List all grinders | `grinders_handler.dart` |
@@ -328,7 +434,7 @@ supplied values replace them. Explicit `null` for non-nullable fields returns
 | GET | `/api/v1/settings` | All app settings (gateway, theme, charging, devices, etc.) | `settings_handler.dart` |
 | POST | `/api/v1/settings` | Update settings (partial, key-by-key) | |
 
-Settings fields include: `gatewayMode`, `themeMode`, `logLevel`, `weightFlowMultiplier`, `volumeFlowMultiplier`, `hotWaterFlowMultiplier`, `scalePowerMode`, `blockOnNoScale`, `blockTareDuringShot`, `stopHotWaterAtWeight`, `preferredMachineId`, `preferredScaleId`, `defaultSkinId`, `automaticUpdateCheck`, `chargingMode`, `nightModeEnabled`, `nightModeSleepTime`, `nightModeMorningTime`, `lowBatteryBrightnessLimit`, `keepAwake`, `simulatedDevices`.
+Settings fields include: `gatewayMode`, `themeMode`, `logLevel`, `weightFlowMultiplier`, `volumeFlowMultiplier`, `hotWaterFlowMultiplier`, `scalePowerMode`, `blockOnNoScale`, `blockTareDuringShot`, `stopHotWaterAtWeight`, `preferredMachineId`, `preferredScaleId`, `preferredGrinderDeviceId`, `defaultSkinId`, `automaticUpdateCheck`, `chargingMode`, `nightModeEnabled`, `nightModeSleepTime`, `nightModeMorningTime`, `lowBatteryBrightnessLimit`, `keepAwake`, `simulatedDevices`.
 
 `stopHotWaterAtWeight` (boolean, default `true`): when on and a scale is connected, hot-water dispensing tares the scale and stops at the configured hot-water `volume` target treated as grams (mirrors the espresso stop-at-weight). The machine's own volume/time stop remains a backstop, and the value is ignored in `full` gateway mode (a skin owns the machine). `hotWaterFlowMultiplier` (number, default `0.3`) is the seconds-of-lookahead applied to scale weight flow for that stop — separate from `weightFlowMultiplier` because hot water dispenses with a different pump/flow profile than espresso. See [DeviceManagement.md](DeviceManagement.md#hot-water-stop-at-weight).
 
@@ -348,7 +454,7 @@ Settings fields include: `gatewayMode`, `themeMode`, `logLevel`, `weightFlowMult
 | DELETE | `/api/v1/webui/skins/:id` | Remove installed skin | |
 | POST | `/api/v1/webui/skins/update` | Check all skins for updates from remote sources | |
 | GET | `/api/v1/webui/server/status` | Server status (`{serving, path, port, ip}`) | |
-| POST | `/api/v1/webui/server/start` | Start serving default skin on port 3000 | |
+| POST | `/api/v1/webui/server/start` | Start serving default skin through the port 3000 entry point | |
 | POST | `/api/v1/webui/server/stop` | Stop serving | |
 | GET | `/api/v1/webui/skin-assets/:id/:filepath` | Fetch a file from another installed skin (cross-skin asset sharing) | |
 
@@ -370,6 +476,11 @@ Settings fields include: `gatewayMode`, `themeMode`, `logLevel`, `weightFlowMult
 | POST | `/api/v1/plugins/:id/update/approve` | Install an update that asks for new permissions | |
 | ANY | `/api/v1/plugins/:id/:endpoint` | Plugin HTTP endpoint; requires `api` and returns 403 without it | |
 | WS | `/ws/v1/plugins/:id/:endpoint` | Plugin WebSocket endpoint | |
+
+For plugin HTTP and WebSocket endpoint routes, `id` and `endpoint` are opaque
+URI path components. Clients percent-encode each once; the handler decodes each
+once before lookup or subscription matching. Generated device surface hrefs
+already encode these components, including spaces and literal percent signs.
 
 Plugin setting updates use patch semantics for every field: an omitted field
 preserves the existing value, a field sent as `null` clears it, and a secure
@@ -507,7 +618,10 @@ means at least one recognized section was processed and every processed section
 completed without errors. `207 Multi-Status` means at least one processed
 section contains errors; successful sections, counts, warnings, and errors are
 all retained. Warnings and conflict-strategy skips alone still return `200`.
-Clients must inspect both the HTTP status and each section result.
+Clients must inspect both the HTTP status and each section result. Invalid
+backup archives return `400` with `error` and `message`. Only an archive that
+exceeds the 4096-entry safety limit includes `reason: "too_many_entries"`;
+other invalid archives and `400` responses omit `reason`.
 
 Data sync preserves the same phase distinction. A complete pull or push is
 represented by `200`. An incomplete single-direction sync returns `502`, even
@@ -570,7 +684,7 @@ archive is also bounded by the 2 GiB import request limit.
 
 Linking/unlinking a Decent account is **native-only** — there are no network login/logout routes. The webserver is unauthenticated with `Access-Control-Allow-Origin: *`, so exposing credential operations would let any LAN client or browser origin store attacker credentials or unlink the account. The status response omits the linked email (PII).
 
-The **proxy** lets clients *use* the account without ever seeing the credentials: it attaches the linked account's Basic auth server-side, forwards to `decentespresso.com`, and relays the upstream status + body verbatim. It requires `Authorization: Bearer <token>` and is enforced only on this path. `GET` requires `account:proxy` (including the skin token injected into served skin pages); `POST`/`PUT` require the stronger `account:proxy:write` scope, so the read-only skin token cannot write. Forwarding is restricted to the `support/api/` prefix. The OpenAPI spec documents the generated-client-safe `/support/api/{endpoint}` form; use this raw catch-all route when a Decent backend path contains additional slashes. Each served skin generation gets a fresh origin and token bound to that skin's immutable consent key; switching or stopping the skin server revokes the previous token. The stable port 3000 entry point redirects without caching to the active origin. The first request from each skin, plugin, or named API client pauses for native approval on the Decaid device. Explicit allow and deny decisions are remembered; a 30-second timeout denies only that request. Responses: 401 (missing/invalid token or no linked account), 403 (token unscoped, path not allowed, or account access not granted). Write-scoped tokens are minted from the account page's API-token UI by enabling "Allow write access". Headless operators can grant session-only access with `--trust-consent=<caller-key>` or `--trust-all-consent`.
+The **proxy** lets clients *use* the account without ever seeing the credentials: it attaches the linked account's Basic auth server-side, forwards to `decentespresso.com`, and relays the upstream status + body verbatim. It requires `Authorization: Bearer <token>` and is enforced only on this path. `GET` requires `account:proxy` (including the skin token injected into served skin pages); `POST`/`PUT` require the stronger `account:proxy:write` scope, so the read-only skin token cannot write. Forwarding is restricted to the `support/api/` prefix. The OpenAPI spec documents the generated-client-safe `/support/api/{endpoint}` form; use this raw catch-all route when a Decent backend path contains additional slashes. Each served skin generation gets a fresh token bound to that skin's immutable consent key; switching or stopping the skin server revokes the previous token. The skin's origin normally remains stable across restarts, with a temporary fallback if its assigned port is occupied; see [Skin Origins and Browser Storage](Skins.md#skin-origins-and-browser-storage). The stable port 3000 entry point redirects without caching to the active origin and is the address to bookmark. The first request from each skin, plugin, or named API client pauses for native approval on the Decaid device. Explicit allow and deny decisions are remembered; a 30-second timeout denies only that request. Responses: 401 (missing/invalid token or no linked account), 403 (token unscoped, path not allowed, or account access not granted). Write-scoped tokens are minted from the account page's API-token UI by enabling "Allow write access". Headless operators can grant session-only access with `--trust-consent=<caller-key>` or `--trust-all-consent`.
 
 ### Other
 
@@ -579,10 +693,41 @@ The **proxy** lets clients *use* the account without ever seeing the credentials
 | GET | `/api/v1/info` | Build metadata (version, commit, branch) + gateway LAN IP (`localIp`) | `info_handler.dart` |
 | GET | `/api/v1/diagnostics/ble` | Read-only BLE adapter, scan/watch ownership, reconnect policy, cache, and advertisement diagnostics | `ble_diagnostics_handler.dart` |
 | GET | `/api/v1/update` | App-update state snapshot (`phase`, `latestVersion`, `releaseNotes`, `releaseUrl`, `installable`). Pure read — no network call; force a re-check via `/ws/v1/update`. | `update_handler.dart` |
-| POST | `/api/v1/feedback` | Submit feedback (creates GitHub issue) | `feedback_handler.dart` |
+| POST | `/api/v1/feedback` | Submit feedback with an authenticated Decent account (creates GitHub issue) | `feedback_handler.dart` |
 | GET | `/api/v1/logs` | Recent log entries, newest first. Live log + rotated files `log.txt.1..N` are always stitched chronologically; response is a size-bounded tail window (`?kb=N`, default 1024 KB, clamped to 4096 KB). `?order=asc` for original chronological order | `logs_handler.dart` |
 | GET | `/api/v1/webview/logs` | WebView console log forwarding, newest first (`?order=asc` for original chronological order) | `webview_logs_handler.dart` |
 | POST | `/api/v1/derek/answers/stream` | Relay to the Derek RAG assistant: forwards the JSON body verbatim to `derek.decentespresso.com/api/answers/stream` and pipes the SSE response back unbuffered. No auth (public data). Exists so browser skins avoid Derek's failing CORS preflight. | `derek_handler.dart` |
+
+Feedback verifies the stored Decent credentials before uploading attachments,
+creating an issue, or contacting Support. Missing, rejected, or unverifiable
+credentials return `400` with `success: false`, `error: "Decent account required"`,
+and a `message` explaining whether to sign in or retry verification. This applies
+to native feedback and the Settings plugin's HTTP submissions. Both UI entry
+points offer feedback only while logged in; otherwise they direct users to
+Decent Account. Submission always re-verifies credentials, with a 30-second
+deadline covering credential reads and the complete upstream response. A timeout
+returns `400`, aborts the verification request, and ignores late replies.
+Account failures take precedence over missing GitHub configuration: `503` only
+applies after successful account verification. Other submission failures remain
+`500`. Trusted-LAN callers use the host's account without separate caller
+authentication.
+After issue creation, Support linking is best-effort: only the returned
+`messageId` is appended to the latest issue body as `**Support message:**`.
+The Support response contract is `{"messageId":67890}`; no user ID is requested
+or retained. The proposed ID format is a positive JSON integer or an ASCII
+decimal string of 1-256 digits without leading zeros. The value `1` is reserved
+and never published as a message ID. Email addresses, opaque strings, and other
+invalid IDs skip linking without failing the created issue. The backend
+maintainer must confirm the numeric format, lookup uniqueness, and public safety;
+numeric validation alone cannot establish that an ID is safe to publish.
+Unexpected response fields are ignored, and raw responses are never
+included in logs or errors. Temporary Support acknowledgement `1` means
+no message ID is available and skips the GitHub update. A Support outage does
+not undo the GitHub issue. No response-mode query parameter is sent.
+Support delivery and feedback receipts are separate: a successful legacy opaque
+response or an invalid receipt has no message ID and skips linking. It does not
+fail delivery-only callers such as the serial-mismatch notification. Non-200
+responses and empty/zero acknowledgements still fail delivery.
 
 ### Debug (debug builds only)
 
@@ -613,6 +758,7 @@ All WebSocket endpoints are on port 8080 at `/ws/v1/...`. See [`assets/api/webso
 |------|-------------|------|
 | `/ws/v1/machine/snapshot` | Machine state stream (~10Hz). Re-binds across a machine reconnect — see [Machine sockets re-bind](#machine-sockets-re-bind-across-a-reconnect). | Temps, pressures, flow, state |
 | `/ws/v1/scale/snapshot` | Scale weight/flow stream. Device-provided flow is passed through; weight-only scales use Decaid's estimator. Stays open across scale disconnects; emits `{"status":"connected"\|"disconnected"}` frames on state change. | Weight, flow, battery |
+| `/ws/v1/scales/{id}/snapshot` | Addressed raw stream for one connected primary or auxiliary scale (`timestamp`, `weight`, `batteryLevel`, `timerValue`, `flow`). Includes status frames and remains isolated from sibling sessions. | Weight, flow, battery |
 | `/ws/v1/machine/shotSettings` | Shot settings changes. Re-binds across a machine reconnect. | Target temp, volume, weight |
 | `/ws/v1/machine/waterLevels` | Water level changes. Re-binds across a machine reconnect. | Current/limit levels |
 | `/ws/v1/machine/raw` | Raw BLE characteristic data. Re-binds across a machine reconnect; writes go to the currently-bound machine. | Hex-encoded bytes |
@@ -623,7 +769,7 @@ All WebSocket endpoints are on port 8080 at `/ws/v1/...`. See [`assets/api/webso
 | `/ws/v1/logs` | App log stream | Timestamped log entries |
 | `/ws/v1/webview/logs` | WebView console log stream | WebView console messages |
 | `/ws/v1/display` | Display state changes | Brightness, wakelock |
-| `/ws/v1/update` | App-update state stream. Also accepts `{"command":"check"}` and `{"command":"install"}` (Android installs; other platforms reply `{"error","url"}`). | `phase`, `progress`, `latestVersion`, `installable` |
+| `/ws/v1/update` | App-update state stream. Also accepts `{"command":"check"}` (refused on macOS and on externally managed App Store/TestFlight builds, where the store owns app updates) and `{"command":"install"}` (Android installs; refused elsewhere). Either refusal replies `{"error","url"}` carrying `releaseUrl` — the release tag when one is known, otherwise the releases page. | `phase`, `progress`, `latestVersion`, `installable` |
 
 ### Machine sockets re-bind across a reconnect
 
@@ -742,3 +888,7 @@ Built-in settings dashboard accessible at `/api/v1/plugins/settings.reaplugin/ui
 ### DYE2 Plugin (`dye2.reaplugin`)
 
 Bean and grinder management. See [`packages/dye2-plugin/README.md`](../packages/dye2-plugin/README.md).
+
+### Scale information
+
+`GET /api/v1/scale/info` returns optional metadata for the currently connected scale, such as opaque `firmwareVersion`. It returns `503` when no scale is connected. Device inventory remains separate: `/api/v1/devices` and `/ws/v1/devices` describe discovery and connection state only and never include connection-scoped scale metadata.

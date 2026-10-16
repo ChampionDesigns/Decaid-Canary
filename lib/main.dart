@@ -25,8 +25,10 @@ import 'package:reaprime/src/controllers/hot_water_sequencer.dart';
 import 'package:reaprime/src/controllers/steam_sequencer.dart';
 import 'package:reaprime/src/controllers/connection_error.dart';
 import 'package:reaprime/src/controllers/connection_manager.dart';
+import 'package:reaprime/src/controllers/auxiliary_scale_registry.dart';
 import 'package:reaprime/src/controllers/de1_controller.dart';
 import 'package:reaprime/src/controllers/device_controller.dart';
+import 'package:reaprime/src/controllers/grinder_controller.dart';
 import 'package:reaprime/src/controllers/remembered_device_sources.dart';
 import 'package:reaprime/src/controllers/remembered_devices_controller.dart';
 import 'package:reaprime/src/controllers/display_controller.dart';
@@ -44,8 +46,10 @@ import 'package:reaprime/src/plugins/plugin_device_service.dart';
 import 'package:reaprime/src/plugins/plugin_loader_service.dart';
 import 'package:reaprime/src/plugins/plugin_source_service.dart';
 import 'package:reaprime/src/services/android_updater.dart';
+import 'package:reaprime/src/services/github_rate_limit.dart';
 import 'package:reaprime/src/services/wifi/wifi_scale_discovery_service.dart';
 import 'package:reaprime/src/services/database/database.dart' hide Workflow;
+import 'package:reaprime/src/models/data/shot_record.dart' as domain;
 import 'package:reaprime/src/services/database/mappers/shot_mapper.dart';
 import 'package:reaprime/src/services/database/mappers/steam_mapper.dart';
 import 'package:reaprime/src/services/database/mappers/bean_mapper.dart';
@@ -71,10 +75,14 @@ import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:reaprime/src/services/storage/hive_store_service.dart';
 import 'package:reaprime/src/database_failure_view.dart';
+import 'package:reaprime/src/services/export/support_package.dart';
+import 'package:reaprime/src/services/storage/database_recovery.dart';
 import 'package:reaprime/src/services/universal_ble_discovery_service.dart';
 import 'package:reaprime/src/services/simulated_device_service.dart';
 import 'package:reaprime/src/services/webserver/data_export/backup_data_sources.dart';
 import 'package:reaprime/src/services/webserver_service.dart';
+import 'package:reaprime/src/services/webserver/port_binding.dart';
+import 'package:reaprime/src/ui/webserver_port_conflict_app.dart';
 import 'package:reaprime/src/services/macos_updater.dart';
 import 'package:reaprime/src/services/update_check_service.dart';
 import 'package:reaprime/src/webui_support/webui_service.dart';
@@ -152,6 +160,30 @@ Set<SimulatedDevicesTypes> _parseSimulateFlag(String value) {
       .map((e) => SimulatedDevicesTypesFromString.fromString(e))
       .whereType<SimulatedDevicesTypes>()
       .toSet();
+}
+
+Future<List<domain.ShotRecord>> pageShotsForExport(
+  AppDatabase appDatabase,
+  int limit, {
+  DateTime? afterTimestamp,
+  DateTime? afterCreatedAt,
+  String? afterId,
+}) async {
+  final result = <domain.ShotRecord>[];
+  DateTime? cursorTimestamp = afterTimestamp;
+  String? cursorId = afterId;
+  while (result.length < limit) {
+    final rows = await appDatabase.shotDao.getShotsForExport(
+      limit: limit - result.length,
+      cursorTimestamp: cursorTimestamp,
+      cursorId: cursorId,
+    );
+    if (rows.isEmpty) break;
+    cursorTimestamp = rows.last.timestamp;
+    cursorId = rows.last.id;
+    result.addAll(ShotMapper.fromRows(rows));
+  }
+  return result;
 }
 
 Future<void> _printStoragePaths() async {
@@ -348,17 +380,22 @@ void main(List<String> args) async {
       DatabaseFailureApp(
         logFilePath: '$logDir/log.txt',
         detail: databaseStartupError.runtimeType.toString(),
+        onSavePackage: (resolveShareOrigin) =>
+            saveSupportPackage(sharePositionOrigin: resolveShareOrigin),
+        onResetDatabase: () async =>
+            (await DatabaseReset.fromAppDirectories()).run(),
       ),
     );
     return;
   }
 
-  final persistenceController = PersistenceController(
-    storageService: DriftStorageService(appDatabase),
-  );
-
   final beanStorage = DriftBeanStorageService(appDatabase);
   final grinderStorage = DriftGrinderStorageService(appDatabase);
+
+  final persistenceController = PersistenceController(
+    storageService: DriftStorageService(appDatabase),
+    grinderStorageService: grinderStorage,
+  );
   final profileStorage = DriftProfileStorageService(appDatabase);
 
   final WorkflowController workflowController = WorkflowController();
@@ -384,6 +421,8 @@ void main(List<String> args) async {
   final de1Controller = De1Controller(controller: deviceController)
     ..defaultWorkflow = workflowController.currentWorkflow;
   final scaleController = ScaleController();
+  final grinderController = GrinderController();
+  final auxiliaryScaleRegistry = AuxiliaryScaleRegistry();
   final sensorController = SensorController(controller: deviceController);
 
   final rememberedDevicesController = RememberedDevicesController(
@@ -400,6 +439,8 @@ void main(List<String> args) async {
     deviceScanner: deviceController,
     de1Controller: de1Controller,
     scaleController: scaleController,
+    grinderController: grinderController,
+    auxiliaryScaleRegistry: auxiliaryScaleRegistry,
     settingsController: settingsController,
     rememberedDevices: rememberedDevicesController,
   );
@@ -463,7 +504,11 @@ void main(List<String> args) async {
     loadSkinPortAssignments: loadPersistedSkinPortAssignments,
     saveSkinPortAssignments: persistSkinPortAssignments,
   );
-  final WebUIStorage webUIStorage = WebUIStorage(settingsController);
+  final githubRateLimit = GithubRateLimit();
+  final WebUIStorage webUIStorage = WebUIStorage(
+    settingsController,
+    rateLimit: githubRateLimit,
+  );
 
   DecentAccountService? decentAccountService;
   DecentProxyService? decentProxyService;
@@ -561,12 +606,17 @@ void main(List<String> args) async {
   pluginService.pluginManager.attachWorkflowController(workflowController);
   persistenceController.onShotStored = (shotId) =>
       pluginService.pluginManager.broadcastEvent('shotStored', {'id': shotId});
+  persistenceController.onShotUpdated = (record, patch) =>
+      pluginService.pluginManager.broadcastEvent('shotUpdated', {
+        'id': record.id,
+        'shot': record.toJsonWithoutMeasurements(),
+        'patch': patch,
+      });
 
   BatteryController? batteryController;
   if (Platform.isAndroid || Platform.isIOS) {
     batteryController = BatteryController(
       de1Controller: de1Controller,
-      deviceController: deviceController,
       settingsController: settingsController,
     );
   }
@@ -578,10 +628,12 @@ void main(List<String> args) async {
   );
   displayController.initialize();
 
+  final pluginSourceService = PluginSourceService(pluginService);
   final updateCheckService = UpdateCheckService(
     settingsService: SharedPreferencesSettingsService(),
     webUIStorage: webUIStorage,
-    pluginSourceService: PluginSourceService(pluginService),
+    pluginSourceService: pluginSourceService,
+    rateLimit: githubRateLimit,
   );
 
   final macosUpdater = Platform.isMacOS && !BuildInfo.appStore
@@ -606,18 +658,19 @@ void main(List<String> args) async {
       batteryController,
       presenceController,
       displayController,
+      pluginSourceService: pluginSourceService,
       beanStorage: beanStorage,
       grinderStorage: grinderStorage,
       connectionManager: connectionManager,
       backupSources: BackupDataSources(
-        pageShots: (limit, {afterTimestamp, afterCreatedAt, afterId}) async {
-          final rows = await appDatabase.shotDao.getShotsForExport(
-            limit: limit,
-            cursorTimestamp: afterTimestamp,
-            cursorId: afterId,
-          );
-          return rows.map(ShotMapper.fromRow).toList();
-        },
+        pageShots: (limit, {afterTimestamp, afterCreatedAt, afterId}) =>
+            pageShotsForExport(
+              appDatabase,
+              limit,
+              afterTimestamp: afterTimestamp,
+              afterCreatedAt: afterCreatedAt,
+              afterId: afterId,
+            ),
         pageSteams: (limit, {afterTimestamp, afterCreatedAt, afterId}) async {
           final rows = await appDatabase.steamDao.getSteamsForExport(
             limit: limit,
@@ -650,6 +703,12 @@ void main(List<String> args) async {
       proxyTokenService: proxyTokenService,
       updateCheckService: updateCheckService,
     );
+  } on WebServerPortInUse catch (e) {
+    log.severe(
+      'port ${e.port} already in use; refusing to boot without the API',
+    );
+    runApp(WebServerPortConflictApp(port: e.port));
+    return;
   } catch (e, st) {
     log.severe('failed to start web server', e, st);
   }
@@ -682,11 +741,23 @@ void main(List<String> args) async {
   bleDiscoveryService.requestLargeMtuNonAndroid = () =>
       settingsController.isFeatureFlagEnabled(.largeBleMtuNonAndroid);
 
-  if (cliArgs.bypassOnboarding) {
+  if (cliArgs.bypassOnboarding && cliArgs.forceOnboarding) {
+    log.warning(
+      '--bypass-onboarding and --force-onboarding are mutually exclusive; '
+      '--force-onboarding wins',
+    );
+  }
+  if (cliArgs.bypassOnboarding && !cliArgs.forceOnboarding) {
     log.info('--bypass-onboarding: skipping onboarding screens');
     await settingsController.setOnboardingCompleted(true);
     await settingsController.setAccountStepSeen(true);
     await settingsController.setAndroidWarningDismissed(true);
+  }
+  if (cliArgs.forceOnboarding) {
+    log.info('--force-onboarding: re-arming onboarding screens');
+    await settingsController.setOnboardingCompleted(false);
+    await settingsController.setAccountStepSeen(false);
+    await settingsController.setAndroidWarningDismissed(false);
   }
   if (cliArgs.skinId != null) {
     log.info('--skin: setting default skin to ${cliArgs.skinId}');
@@ -745,6 +816,7 @@ void main(List<String> args) async {
         workflowController: workflowController,
         persistenceController: persistenceController,
         pluginLoaderService: pluginService,
+        pluginSourceService: pluginSourceService,
         webUIService: webUIService,
         webUIStorage: webUIStorage,
         updateCheckService: updateCheckService,
@@ -972,6 +1044,7 @@ class AppRoot extends StatefulWidget {
   final WorkflowController workflowController;
   final PersistenceController persistenceController;
   final PluginLoaderService pluginLoaderService;
+  final PluginSourceService pluginSourceService;
   final WebUIService webUIService;
   final WebUIStorage webUIStorage;
   final UpdateCheckService? updateCheckService;
@@ -999,6 +1072,7 @@ class AppRoot extends StatefulWidget {
     required this.workflowController,
     required this.persistenceController,
     required this.pluginLoaderService,
+    required this.pluginSourceService,
     required this.webUIService,
     required this.webUIStorage,
     required this.webViewLogService,
@@ -1090,6 +1164,7 @@ class _AppRootState extends State<AppRoot> {
         workflowController: widget.workflowController,
         persistenceController: widget.persistenceController,
         pluginLoaderService: widget.pluginLoaderService,
+        pluginSourceService: widget.pluginSourceService,
         webUIService: widget.webUIService,
         webUIStorage: widget.webUIStorage,
         updateCheckService: widget.updateCheckService,

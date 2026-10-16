@@ -82,6 +82,40 @@ void main() {
   }
 
   group('ShotsHandler', () {
+    test(
+      'PUT emits exactly one update with the submitted patch and current metadata',
+      () async {
+        await persistAnnotatedShot();
+        final events = <Map<String, dynamic>>[];
+        persistence.onShotUpdated = (shot, patch) => events.add({
+          'id': shot.id,
+          'shot': shot.toJsonWithoutMeasurements(),
+          'patch': patch,
+        });
+        final patch = <String, dynamic>{
+          'shotNotes': 'new legacy notes',
+          'annotations': {'enjoyment': 8.5},
+        };
+        final response = await sendPut('annotated', patch);
+        expect(response.statusCode, 200);
+        final stored = await persistence.storageService.getShot('annotated');
+        expect(events, [
+          {
+            'id': 'annotated',
+            'shot': stored!.toJsonWithoutMeasurements(),
+            'patch': patch,
+          },
+        ]);
+        expect(events.single['shot'].containsKey('measurements'), isFalse);
+        expect(
+          events.single['shot']['annotations']['espressoNotes'],
+          'new legacy notes',
+        );
+        expect((await sendPut('missing', patch)).statusCode, 404);
+        expect(events, hasLength(1));
+      },
+    );
+
     test('GET /api/v1/shots filters by beanId across all batches', () async {
       final bean = Bean.create(roaster: 'Old roaster', name: 'Old name');
       final otherBean = Bean.create(roaster: 'Other', name: 'Coffee');
@@ -154,6 +188,31 @@ void main() {
             jsonDecode(await response.readAsString()) as Map<String, dynamic>;
         expect(body['total'], 0);
         expect(body['items'], isEmpty);
+      },
+    );
+
+    test(
+      'PUT clears the grinder burrs snapshot with an explicit null',
+      () async {
+        await persistence.persistShot(
+          makeShot(id: 'burrs', grinderModel: 'EG1', grinderBurrs: 'Core'),
+        );
+
+        final (putJson, getJson) = await putAndGet('burrs', {
+          'workflow': {
+            'context': {
+              'grinderModel': 'EG1 (Lab Sweet)',
+              'grinderBurrs': null,
+            },
+          },
+        });
+
+        for (final json in [putJson, getJson]) {
+          final context =
+              (json['workflow'] as Map)['context'] as Map<String, dynamic>;
+          expect(context['grinderModel'], 'EG1 (Lab Sweet)');
+          expect(context.containsKey('grinderBurrs'), isFalse);
+        }
       },
     );
 
@@ -359,6 +418,58 @@ void main() {
       expect((await decode(response))['error'], contains('measurements'));
     });
 
+    test('PUT with an enjoyment above the canonical max is rejected', () async {
+      await persistAnnotatedShot();
+
+      final response = await sendPut('annotated', {
+        'annotations': {'enjoyment': 80},
+      });
+      expect(response.statusCode, 400);
+      expect((await decode(response))['error'], contains('enjoyment'));
+
+      final stored = await decode(await sendGet('/api/v1/shots/annotated'));
+      expect((stored['annotations'] as Map)['enjoyment'], isNull);
+    });
+
+    test('PUT with a negative enjoyment is rejected', () async {
+      await persistAnnotatedShot();
+
+      final response = await sendPut('annotated', {
+        'annotations': {'enjoyment': -1},
+      });
+      expect(response.statusCode, 400);
+    });
+
+    test('PUT with a non-numeric enjoyment is rejected', () async {
+      await persistAnnotatedShot();
+
+      final response = await sendPut('annotated', {
+        'annotations': {'enjoyment': 'great'},
+      });
+      expect(response.statusCode, 400);
+    });
+
+    test('PUT accepts an enjoyment inside the canonical range', () async {
+      await persistAnnotatedShot();
+
+      final (_, getJson) = await putAndGet('annotated', {
+        'annotations': {'enjoyment': 8.5},
+      });
+      expect((getJson['annotations'] as Map)['enjoyment'], 8.5);
+    });
+
+    test('PUT accepts a null enjoyment to clear the rating', () async {
+      await persistAnnotatedShot();
+      await putAndGet('annotated', {
+        'annotations': {'enjoyment': 3},
+      });
+
+      final (_, getJson) = await putAndGet('annotated', {
+        'annotations': {'enjoyment': null},
+      });
+      expect((getJson['annotations'] as Map)['enjoyment'], isNull);
+    });
+
     test('content patch advances updatedAt', () async {
       await persistAnnotatedShot();
 
@@ -529,6 +640,8 @@ ShotRecord makeShot({
   String? beanBatchId,
   String? coffeeName,
   String? coffeeRoaster,
+  String? grinderModel,
+  String? grinderBurrs,
   ShotAnnotations? annotations,
 }) {
   final workflow = WorkflowController().currentWorkflow.copyWith(
@@ -536,6 +649,8 @@ ShotRecord makeShot({
       beanBatchId: beanBatchId,
       coffeeName: coffeeName,
       coffeeRoaster: coffeeRoaster,
+      grinderModel: grinderModel,
+      grinderBurrs: grinderBurrs,
     ),
   );
   return ShotRecord(

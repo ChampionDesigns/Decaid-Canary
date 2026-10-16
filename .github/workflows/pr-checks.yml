@@ -185,6 +185,9 @@ jobs:
       - name: Test Decent app skill docs
         run: scripts/test_decent_app_skill.sh
 
+      - name: Check Apple camera privacy declarations
+        run: python3 tool/ci/check_apple_camera_privacy_test.py
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -253,7 +256,7 @@ jobs:
           echo "Using QuickJS lib dir: $QUICKJS_LIB_DIR"
           mkdir -p build/test-results
           LD_LIBRARY_PATH="$QUICKJS_LIB_DIR:${LD_LIBRARY_PATH:-}" \
-            flutter test --no-pub --machine | \
+            flutter test --no-pub --machine --concurrency=4 | \
             tee build/test-results/flutter-events.json
 
       - name: Gate slow test suites

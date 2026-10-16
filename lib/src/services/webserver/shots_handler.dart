@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:logging/logging.dart';
 import 'package:reaprime/src/controllers/persistence_controller.dart';
+import 'package:reaprime/src/import/parsers/enjoyment_scale.dart';
 import 'package:reaprime/src/models/data/shot_record.dart';
-import 'package:reaprime/src/plugins/plugin_manager.dart';
 import 'package:reaprime/src/services/storage/bean_storage_service.dart';
 import 'package:reaprime/src/services/webserver/bounded_request_body.dart';
 import 'package:reaprime/src/services/webserver/json_response.dart';
@@ -11,17 +11,14 @@ import 'package:shelf_plus/shelf_plus.dart';
 class ShotsHandler {
   final PersistenceController _controller;
   final BeanStorageService? _beanStorage;
-  final PluginManager? _pluginManager;
 
   final Logger _log = Logger("ShotsHandler");
 
   ShotsHandler({
     required PersistenceController controller,
     BeanStorageService? beanStorage,
-    PluginManager? pluginManager,
   }) : _controller = controller,
-       _beanStorage = beanStorage,
-       _pluginManager = pluginManager;
+       _beanStorage = beanStorage;
 
   void addRoutes(RouterPlus app) {
     app.get('/api/v1/shots', _getShots);
@@ -218,6 +215,11 @@ class ShotsHandler {
         });
       }
 
+      final enjoymentError = _enjoymentRangeError(json);
+      if (enjoymentError != null) {
+        return jsonBadRequest({"error": enjoymentError});
+      }
+
       final existingShot = await _controller.storageService.getShot(id);
       if (existingShot == null) {
         return jsonNotFound({"error": "Shot not found"});
@@ -230,7 +232,7 @@ class ShotsHandler {
       _synchronizeLegacyAnnotationAliases(merged);
       merged['id'] = id;
 
-      final contentChanged = !ShotRecord.fromJson(
+      final contentChanged = !ShotRecord.fromRecordedJson(
         merged,
       ).sameContent(existingShot);
       merged['updatedAt'] =
@@ -241,14 +243,8 @@ class ShotsHandler {
                         existingShot.timestamp)
               .toIso8601String();
 
-      final updatedShot = ShotRecord.fromJson(merged);
-      await _controller.updateShot(updatedShot);
-      _log.info("Broadcasting shotUpdated for ${updatedShot.id}");
-      _pluginManager?.broadcastEvent('shotUpdated', {
-        'id': updatedShot.id,
-        'shot': updatedShot.toJsonWithoutMeasurements(),
-        'patch': json,
-      });
+      final updatedShot = ShotRecord.fromRecordedJson(merged);
+      await _controller.updateShot(updatedShot, patch: json);
 
       return jsonOk(updatedShot.toJson());
     } on RequestBodyReadException {
@@ -271,6 +267,22 @@ class ShotsHandler {
       }
       return jsonError({"error": e.toString()});
     }
+  }
+
+  static String? _enjoymentRangeError(Map<String, dynamic> json) {
+    final annotations = json['annotations'];
+    if (annotations is! Map<String, dynamic>) return null;
+    if (!annotations.containsKey('enjoyment')) return null;
+    final value = annotations['enjoyment'];
+    if (value == null) return null;
+    final max = enjoymentMax.toStringAsFixed(0);
+    if (value is! num || value.isNaN) {
+      return 'annotations.enjoyment must be a number between 0 and $max';
+    }
+    if (value < 0 || value > enjoymentMax) {
+      return 'annotations.enjoyment must be between 0 and $max, got $value';
+    }
+    return null;
   }
 
   Map<String, dynamic> _normalizeLegacyAnnotationPatch(

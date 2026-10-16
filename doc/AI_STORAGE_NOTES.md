@@ -38,6 +38,7 @@ Gotchas:
 - `Hive.init()` does not register the Flutter `ColorAdapter`/`TimeOfDayAdapter` that `Hive.initFlutter()` did; `main()` calls `ensureFlutterTypeAdaptersRegistered()` after `Hive.init()`.
 - Web UI downloads/extraction use `Directory.createTemp()` under the temp directory, never fixed names (`/tmp` is shared on Linux).
 - Log readers (feedback, export, import report, discovery views) read `<logs>/log.txt` via `AppDirectories.logs`.
+- `AppDirectories.logs` is the whole support/Documents root on mobile, so it is **not** a log-only directory: it also holds the database, the Hive store, plugins, and web-ui. Never walk it. Read `log.txt` and `webview_console.log` by literal name (`lib/src/services/export/support_package.dart`).
 - CI (`pr-checks.yml` Linux build smoke) runs the app with controlled `XDG_DATA_HOME`/`XDG_CONFIG_HOME`, asserts resolved paths, then fresh-starts the app and requires `log.txt` under `XDG_DATA_HOME`.
 
 ## Storage Ownership
@@ -50,6 +51,35 @@ Gotchas:
 | File system | `StorageService` | Data export, log files, skin assets |
 
 Keep these stores independent. A settings reset must not clear account credentials unless explicitly requested.
+
+## Recovery Package Destination Rule
+
+The recovery package reads its own app data as sources, so a destination that
+aliases a source would let a save destroy the thing it is trying to preserve.
+`buildSupportPackage` (`lib/src/services/export/support_package.dart`) rejects a
+destination whose directory holds sources:
+
+- the drift file's directory and the log directory are rejected by **equality**,
+  because their sources are direct children only (the database, `-wal`, `-shm`,
+  and the two log files);
+- the Hive directory is rejected by **containment**, because it is enumerated
+  recursively, so a nested subdirectory is source territory too.
+
+Directories are compared after `resolveSymbolicLinks`, which resolves symlinked
+ancestors and returns the on-disk path, so neither a symlinked parent nor a
+case-only difference on a case-insensitive filesystem slips past a lexical check.
+Per-file path comparison is not sufficient here and was replaced.
+
+The archive is staged in the app's own temporary directory and then copied onto
+the selected path, so no predictable path (`<destination>.part`) is ever opened
+for writing. A predictable path is itself a hazard: `FileMode.write` follows an
+existing symlink and truncates its target. Staging must not happen beside the
+user-selected destination, because the macOS App Sandbox grants only the
+selected URL (see `AI_BUILD_NOTES.md` Footgun #6).
+
+`DatabaseReset.run()` also reclaims `<target>.reset-*` quarantine left by an
+earlier attempt before it touches the live targets, so a retry cannot report
+`isClean` while quarantined data from the previous attempt is still on disk.
 
 ## Account Auth State (gh#696)
 
@@ -73,6 +103,21 @@ Persistence uses Drift (SQLite) via `AppDatabase`. DAOs in `lib/src/daos/`, mapp
 
 **Schema v5 (shot revision metadata):** `shot_records.createdAt`/`updatedAt` were added as nullable TEXT and backfilled from `timestamp` during the 4→5 migration, so pre-v5 rows carry a real DB-level revision instead of NULL. `ShotMapper.fromRow` still falls back to `timestamp` for any row with NULL fields (e.g. rows inserted without stamps). The revision contract (bookkeeping extras do not advance `updatedAt`, PUT cannot write the fields) is documented in `doc/Api.md` under Shots → Modification tracking.
 
+**Schema v6 (enjoyment scale repair):** `annotations.enjoyment` is Decaid's own 0-10 field. 0-10 was the documented design intent, but no deployed writer had followed it: de1app and Visualizer use 0-100, the older importer and back-sync paths stored that external value unconverted, and DYE2 shipped `stars * 20`. Treat 0-10 as the contract this change establishes, not as one existing data already obeyed.
+
+Rows are rewritten when either holds:
+
+- the value exceeds 10, which cannot be a valid Decaid 0-10 rating; or
+- the id starts with `de1app-`, `created_at != timestamp`, and `updated_at <= created_at`, meaning schema-v5 revision stamps were created at import time and no content edit followed.
+
+Both `shot_records.enjoyment` and the `enjoyment` key inside `annotations_json` are divided by 10; an annotations blob that cannot be parsed is left unchanged. Native 0-10 rows are not rescaled.
+
+**Known gap:** a raw external 0-100 value at or below 10 is numerically indistinguishable from a Decaid 0-10 value once provenance is lost. Pre-v5 rows have `created_at`/`updated_at` backfilled from `timestamp`, so an overlapping de1app value on those rows cannot be proven untouched; edited de1app rows and old Visualizer back-sync rows have the same ambiguity. These cases are left unchanged rather than guessed at. `PUT /api/v1/shots/<id>` now rejects values outside 0-10, and the Visualizer plugin converts `* 10` out and `/ 10` in with range clamping.
+
+**Client coupling:** every client that renders or writes the field has to agree on 0-10. DYE2 is the one that does, and its fix is decentespresso/dye2#8, which replaces `stars * 20` and `/ 20` with a halving and doubling. Release the two together. Shipping only the Decaid side means a DYE2 star click writes 80 and is rejected with HTTP 400, and a stored 8 renders as zero stars.
+
+**Recovering a pre-release schema 6 database:** an earlier revision of this branch shipped a different schema 6 that divided by 20 onto a 0-5 scale. Drift keys migrations on `user_version` alone, so a database opened by that revision is already stamped 6 and will never re-run the corrected step; its ratings stay at half the intended value. The two cases cannot be told apart afterwards, since both leave `user_version = 6` with in-range numbers, so there is no sound automatic repair. Schema 6 has never appeared in a release, so this only affects developers and testers who ran the branch: delete the development database, or restore it from a backup taken before that build. Do not renumber a migration that has already shipped for exactly this reason.
+
 **Migration lesson from #811 (0.8.5 startup failures):** Drift only writes `PRAGMA user_version` after `beforeOpen`/`onUpgrade` completes, and the upgrade body is NOT automatically transactional. An interrupted multi-step migration can therefore leave a partially upgraded physical schema (e.g. only `created_at` added) while `user_version` stays at the old value; the next open re-enters the same step and the unconditional `ADD COLUMN` fails with `duplicate column name`. Rules for future migrations:
 
 - Wrap the whole `onUpgrade` body in an explicit Drift `transaction()` so any failed step rolls back atomically and the next open retries from a known state.
@@ -88,13 +133,55 @@ Content-based hash IDs for deduplication. `ProfileController` manages the profil
 - `ProfileStorageService` interface with `DriftProfileStorageService` implementation.
 - ID-changing updates use `ProfileStorageService.replace`, which inserts the replacement and deletes the original in one Drift transaction. Target-ID collisions throw `ArgumentError` and leave both records unchanged.
 
+### Recorded Shot Profiles Are Not Executable Profiles
+
+A shot's stored `workflowJson.profile` is a historical record, not something the
+app brews from, so `ShotMapper.fromRow` reads it with
+`Workflow.fromRecordedJson`, which parses the profile via
+`Profile.fromRecordedJson` and allows an empty `steps` array and a missing
+title. `Workflow.fromJson` and `Profile.fromJson` stay strict and back the
+profile library, the profile and workflow REST handlers, the stored current
+workflow, and DE1 upload; a step-less profile must never enter the brewable
+library, and `PUT /api/v1/workflow` must keep returning 400 for one (issue
+#338).
+
+de1app `.shot` files carry the shot, not the profile that produced it, so
+`TclShotParser` and the no-profile branch of `ShotV2JsonParser` store a
+placeholder profile with `steps: []`. Before the lenient read path existed, the
+strict parser refused to read those rows back, and because
+`DriftStorageService.getShotsPaginated` mapped rows with a bare `rows.map(...)`,
+a single de1app import made `GET /api/v1/shots` return 500 and hid the entire
+history rather than one shot (issue #784).
+
+The same leniency has to hold for every path that re-reads a stored shot as
+JSON, not just the row mapper. `PUT /api/v1/shots/<id>` merges the patch into
+`existingShot.toJson()` and reparses the result; `ShotImporter`
+(`lib/src/util/shot_importer.dart`) reads shots from a standalone backup file;
+and `ShotExportSection.importJson` (`lib/src/services/webserver/data_export/shot_export_section.dart`)
+is the restore side of the app's own `/backup` archive endpoint. All three use
+`ShotRecord.fromRecordedJson`. With the strict parser there, an imported
+step-less shot read back fine but could not be annotated, re-imported, or
+restored from a `/backup` archive. `ShotRecord.fromJson` stays strict for
+everything else.
+
+`ShotMapper.fromRows` now skips and logs a row it cannot map, so any future
+corruption costs its own shot instead of the whole list. Single-shot reads
+(`getShot`, `getLatestShot`) still surface the error, because there the failing
+row is the answer.
+
+`ShotExportSection.exportJson` (wired from `pageShotsForExport` in
+`lib/main.dart`) pages through `ShotDao.getShotsForExport` and treats a page
+shorter than the requested page size as end-of-stream. Because
+`ShotMapper.fromRows` drops unmappable rows, a raw page that happened to
+contain one would come back short even with more rows waiting, truncating the
+backup. `pageShotsForExport` re-queries past a dropped row, using the raw
+row's cursor (not the last successfully mapped shot's) to advance, until it
+either fills the requested page or the table is genuinely exhausted.
+
 ### Legacy Profile Corpus Ingestion
 
-`tools/ingest_profiles.py` rejects de1app TCL profiles whose type is `settings_2a`
-or `settings_2b`, whether `advanced_shot` is empty or populated. de1app's stored
-`advanced_shot` is not authoritative for these simple-profile types. Reaprime does
-not maintain a duplicate implementation of de1app's frame generators; maintainers
-must generate final advanced-profile JSON externally before adding such a profile.
+This DE1-specific conversion constraint is documented in
+[`device-notes/de1.md`](device-notes/de1.md#protocol-source-of-truth).
 
 ## SharedPreferences Keys
 

@@ -68,10 +68,24 @@ class PluginBleService {
       throw const PluginBleException('stale_session', 'BLE driver retired');
     }
     final id = normalizeBleDeviceId(physicalId);
-    for (final binding in _bindings.values) {
-      if (identical(binding.driver, driver) && binding.physicalId == id) {
+    final candidates = _bindings.values
+        .where(
+          (binding) =>
+              identical(binding.driver, driver) && binding.physicalId == id,
+        )
+        .toList();
+    for (final binding in candidates) {
+      if (binding.occupied) {
+        // An active session owns this physical device: reuse it so concurrent
+        // advertisements cannot create a duplicate candidate or connection.
         return binding.device;
       }
+      // The session is closed (deliberate disconnect or link loss) and the
+      // discovery inventory has already dropped this device. Reusing the
+      // retired device replays `disconnected`, so the discovery service can
+      // never re-adopt it from a fresh advertisement. Discard the stale
+      // binding so the next observation creates a fresh candidate.
+      await discard(binding.device);
     }
     final handle = 'ble_${const Uuid().v4()}';
     try {
@@ -127,6 +141,20 @@ class PluginBleService {
           'sleepDisplay',
           'wakeDisplay',
         ],
+        if (driver.declaration.grinderCapabilities.contains(
+          PluginGrinderCapability.startStop,
+        )) ...[
+          'start',
+          'stop',
+        ],
+        if (driver.declaration.grinderCapabilities.contains(
+          PluginGrinderCapability.grindSetting,
+        ))
+          'setGrindSetting',
+        if (driver.declaration.grinderCapabilities.contains(
+          PluginGrinderCapability.rpmControl,
+        ))
+          'setRpm',
       };
       for (final operation in PluginDeviceOperation.values) {
         final name = operation.name;
@@ -200,6 +228,14 @@ class PluginBleService {
     generation,
     handle,
   ).publish(snapshot, session, sample: sample);
+
+  void publishInfo(
+    String pluginId,
+    int generation,
+    String handle,
+    Map<String, dynamic> info,
+    String? session,
+  ) => _binding(pluginId, generation, handle).publishInfo(info, session);
 
   void reportDisconnected(
     String pluginId,

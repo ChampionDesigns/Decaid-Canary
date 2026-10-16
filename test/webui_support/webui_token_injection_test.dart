@@ -6,6 +6,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:reaprime/src/webui_support/webui_service.dart';
 
+Future<int> reservePort() async {
+  final server = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
+  final port = server.port;
+  await server.close();
+  return port;
+}
+
 void main() {
   const token = 'abc.123';
   const scriptUrl = 'http://localhost:3000$skinApiScriptPath';
@@ -98,8 +105,10 @@ const bodyExample = "</body>";
   group('serveFolderAtPath offline', () {
     late Directory tempDir;
     late WebUIService service;
+    late int entryPort;
 
     setUp(() async {
+      entryPort = await reservePort();
       tempDir = await Directory.systemTemp.createTemp('webui_offline_test');
       await File(
         '${tempDir.path}/index.html',
@@ -269,7 +278,7 @@ const bodyExample = "</body>";
       WebUIService.resolveWifiIP = () async => wifiIp;
       service = WebUIService(listLocalAddresses: () async => [ethernetIp]);
       service.skinProxyToken = token;
-      await service.serveFolderAtPath(tempDir.path, port: 3001);
+      await service.serveFolderAtPath(tempDir.path, port: entryPort);
 
       final body = await getBodyForHost(ethernetIp);
 
@@ -288,7 +297,7 @@ const bodyExample = "</body>";
       WebUIService.resolveWifiIP = () async => staleWifiIp;
       service = WebUIService(listLocalAddresses: () async => ['10.0.0.7']);
       service.skinProxyToken = token;
-      await service.serveFolderAtPath(tempDir.path, port: 3001);
+      await service.serveFolderAtPath(tempDir.path, port: entryPort);
 
       final body = await getBodyForHost(staleWifiIp);
 
@@ -303,7 +312,7 @@ const bodyExample = "</body>";
         listLocalAddresses: () async => throw Exception('unavailable'),
       );
       service.skinProxyToken = token;
-      await service.serveFolderAtPath(tempDir.path, port: 3001);
+      await service.serveFolderAtPath(tempDir.path, port: entryPort);
 
       final body = await getBodyForHost(wifiIp);
 
@@ -315,7 +324,7 @@ const bodyExample = "</body>";
       WebUIService.resolveWifiIP = () async => '192.168.50.20';
       service = WebUIService(listLocalAddresses: () async => ['10.0.0.7']);
       service.skinProxyToken = token;
-      await service.serveFolderAtPath(tempDir.path, port: 3001);
+      await service.serveFolderAtPath(tempDir.path, port: entryPort);
 
       final body = await getBodyForHost('example.invalid');
 
@@ -333,7 +342,7 @@ const bodyExample = "</body>";
             : throw const SocketException('unresolvable');
         service = WebUIService(listLocalAddresses: () async => [lanIp]);
         service.skinProxyToken = token;
-        await service.serveFolderAtPath(tempDir.path, port: 3001);
+        await service.serveFolderAtPath(tempDir.path, port: entryPort);
 
         final body = await getBodyForHost('decent');
 
@@ -355,7 +364,7 @@ const bodyExample = "</body>";
       WebUIService.resolveHost = (_) async => [InternetAddress(lanIp)];
       service = WebUIService(listLocalAddresses: () async => [lanIp]);
       service.skinProxyToken = token;
-      await service.serveFolderAtPath(tempDir.path, port: 3001);
+      await service.serveFolderAtPath(tempDir.path, port: entryPort);
 
       final body = await getBodyForHost(lanIp);
 
@@ -372,7 +381,7 @@ const bodyExample = "</body>";
           ? [InternetAddress(lanIp)]
           : throw const SocketException('temporary failure');
       service = WebUIService(listLocalAddresses: () async => [lanIp]);
-      await service.serveFolderAtPath(tempDir.path, port: 3001);
+      await service.serveFolderAtPath(tempDir.path, port: entryPort);
 
       expect(
         await getBodyForHost('decent'),
@@ -390,7 +399,7 @@ const bodyExample = "</body>";
       WebUIService.resolveWifiIP = () async => lanIp;
       WebUIService.resolveHost = (_) async => [InternetAddress(lanIp)];
       service = WebUIService(listLocalAddresses: () async => interfaces);
-      await service.serveFolderAtPath(tempDir.path, port: 3001);
+      await service.serveFolderAtPath(tempDir.path, port: entryPort);
 
       expect(await getBodyForHost('decent'), contains(skinApiScriptPath));
 
@@ -409,7 +418,7 @@ const bodyExample = "</body>";
       ];
       service = WebUIService(listLocalAddresses: () async => ['10.0.0.7']);
       service.skinProxyToken = token;
-      await service.serveFolderAtPath(tempDir.path, port: 3001);
+      await service.serveFolderAtPath(tempDir.path, port: entryPort);
 
       final body = await getBodyForHost('rebound.example');
 
@@ -424,15 +433,15 @@ const bodyExample = "</body>";
         WebUIService.resolveWifiIP = () async => lanIp;
         WebUIService.resolveHost = (_) async => [InternetAddress(lanIp)];
         service = WebUIService(listLocalAddresses: () async => [lanIp]);
-        await service.serveFolderAtPath(tempDir.path, port: 3001);
+        await service.serveFolderAtPath(tempDir.path, port: entryPort);
 
         final client = HttpClient();
         addTearDown(client.close);
         final request = await client.getUrl(
-          Uri.parse('http://localhost:3001/'),
+          Uri.parse('http://localhost:$entryPort/'),
         );
         request.followRedirects = false;
-        request.headers.set(HttpHeaders.hostHeader, 'decent:3001');
+        request.headers.set(HttpHeaders.hostHeader, 'decent:$entryPort');
         final response = await request.close();
         await response.drain<void>();
 

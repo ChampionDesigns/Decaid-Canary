@@ -5,7 +5,7 @@ Read this when changing REST endpoints, WebSocket topics, API specs, auth proxy,
 ## Source Of Truth
 
 - REST spec: `assets/api/rest_v1.yml` (OpenAPI 3.0). Always read before making calls.
-- WebSocket spec: `assets/api/websocket_v1.yml` (AsyncAPI 3.0).
+- WebSocket spec: `assets/api/websocket_v1.yml` (AsyncAPI 3.1.0).
 - Full endpoint reference: `doc/Api.md`.
 - Handler implementations: `lib/src/services/webserver/`.
 - Router registration: `lib/src/services/webserver/webserver_service.dart` `_init()`.
@@ -23,6 +23,25 @@ Read this when changing REST endpoints, WebSocket topics, API specs, auth proxy,
 - Error responses use `jsonBadRequest()` / `jsonError()` / `jsonNotFound()` helpers.
 - Content-based hash IDs for profile deduplication (`ProfileController`).
 - ETag / `If-None-Match` support on cacheable resources (#203).
+
+### Opaque external route IDs
+
+Sensor IDs supplied by external plugins are opaque strings: clients
+percent-encode one path component once, and the sensor route boundary decodes
+it once with `decodeOpaquePathComponent` before REST lookup or WebSocket
+subscription/rebind matching. Preserve literal `%`, `%ZZ`, trailing `%`,
+reserved characters, Unicode, plus signs, and `%252F` decode-once behavior;
+invalid UTF-8 is rejected with HTTP 400 at the Shelf boundary.
+
+`Request.url.queryParameters` is already decoded and must not use the path
+helper. Plugin HTTP and WebSocket endpoint routes also decode plugin and
+endpoint IDs once before lookup or subscription matching; generated device
+surface hrefs encode both components once. Surface endpoint validation rejects
+unpaired UTF-16 surrogates because URI encoding replaces them with U+FFFD;
+valid surrogate pairs, encoded control characters, and whitespace round-trip.
+Host-assigned UUID resource IDs,
+plugin management/KV/skin/file/command paths, and account-proxy normalization
+retain their existing route contracts.
 
 ### Patch Nullability
 
@@ -55,6 +74,12 @@ safety consequence, and widening it to the sibling numeric fields is a separate 
 change. One consequence worth knowing before widening it: `validatePatchFieldTypes()` requires
 `value is num`, so a numeric *string* such as `"36"` that `parseOptionalDouble()` accepted now
 returns `400`. Nothing in this repo sends one and `type: number` never permitted it.
+## Device inventory and connected-scale metadata
+
+- `GET /api/v1/devices` and `/ws/v1/devices` are inventory-only surfaces. They must not include connection-scoped metadata such as `deviceInfo`, `firmwareVersion`, or `batteryLevel`.
+- Metadata refreshes do not emit inventory updates. Do not add a metadata WebSocket until a concrete live-update need exists.
+- `GET /api/v1/scale/info` reports only the currently connected scale. Disconnected requests return `503`; a connected scale with unknown metadata returns `{}`. `firmwareVersion` is optional and opaque. `batteryLevel` is optional/nullable where supported; unknown values are omitted, and `0`/`100` are valid.
+- Keep connected-scale metadata separate from remembered-device inventory state; use the scale-info endpoint for it.
 
 ### Admission Control
 
@@ -119,6 +144,16 @@ could not produce.
 ## WebSocket Conventions
 
 - WebSocket topics are path-based: `/ws/v1/machine/state`, `/ws/v1/machine/shotState`, `/ws/v1/scale/snapshot`, etc.
+
+Scale paths are split by compatibility boundary: singular `/scale/*` routes
+remain primary-only, while `/scales/{id}/tare` and
+`/ws/v1/scales/{id}/snapshot` address a connected primary or auxiliary scale.
+Scale IDs are opaque URI path components: clients encode once and handlers use
+the shared one-decode helper. Auxiliary sessions are runtime-only and never
+enter shot sequencing or persisted preferences.
+The addressed snapshot stream uses the raw `ScaleSnapshot.toJson()` payload
+for both roles (`timestamp`, `weight`, `batteryLevel`, `timerValue`, `flow`);
+the legacy singular stream retains its existing `WeightSnapshot` payload.
 - `ShotSequencer` emits structured `ShotDecision`s (why a step advanced, why the shot stopped).
 - `SteamSequencer` manages steam session lifecycle (start on entry, finalize on exit).
 - Presence tracking via `PresenceController` — client keep-alive.
@@ -145,11 +180,12 @@ A hostname that resolves to a device address does pass the port-3000 entry redir
 
 ## Decent Binary Protocol
 
-**Source:** Original DE1 app at `github.com/decentespresso/de1app` is the authoritative source for DE1 protocol behavior, BLE characteristics, and machine state logic.
+The protocol is DE1-specific. See
+[`device-notes/de1.md`](device-notes/de1.md#protocol-source-of-truth).
 
-**Profiles:** Use Profile JSON v2 format. See `doc/Profiles.md` for the full profile API and content-based hashing.
-
-**MMR (Memory-Mapped Register) reads:** Used for DE1 debug log buffer, firmware settings, and advanced state. Not for general profile or workflow operations.
+MMR (Memory-Mapped Register) reads serve DE1 debug logs, firmware settings, and
+advanced machine state. Use the profile and workflow APIs for general profile
+or workflow operations, not raw MMR access.
 
 ## Workflow Dual Representation
 
@@ -208,6 +244,69 @@ All four machine sockets: `/ws/v1/machine/snapshot`, `/ws/v1/machine/shotSetting
 `PUT /api/v1/scale/tare` rejects with `400` (`type: "block_tare_during_shot"`) when the `blockTareDuringShot` setting is on and `De1Controller.currentShotState.state` is not `idle`/`finished`. The gate lives in `ScaleHandler`, not `ScaleController.tare()` — `ShotSequencer`/`HotWaterSequencer` call the controller method directly for legitimate in-app tares (arm-before-pour, stop-at-weight), and gating the controller method would break the shot itself.
 
 **Full gateway mode is explicitly exempt**, checked via `settingsController.gatewayMode == GatewayMode.full` alongside the shot-state check — not left implicit. In `full` mode the skin owns the shot and `De1StateManager` normally never starts its own `ShotSequencer` for it, so `currentShotState` would usually stay idle anyway; but the launcher/home-screen path in `De1StateManager._handleEspressoState` starts an app-owned `ShotSequencer` "regardless of mode" whenever the app's own home screen is foregrounded, even under `full` gateway mode. Relying on ShotSequencer-absence alone would make the lockout accidentally engage in that edge case, which is out of scope for the setting's intent (it exists to protect app-tracked shots, not skin-owned ones) — hence the explicit gateway-mode check rather than an inferred one.
+
+## Fixed Port Already Bound
+
+### Problem
+
+`startWebServer` binds two fixed ports: 8080 for the REST and WebSocket API, and
+4001 for the API docs. `main()` wrapped the call in a bare `catch` that logged
+`failed to start web server` and carried on, so a bind failure left the app
+running with no API at all.
+
+That failure was close to invisible. The WebUI binds an ephemeral port and is
+unaffected, so the skin still loaded and the app looked normal; only every REST
+call and every WebSocket behind it was gone. `BootTiming.mark('webserver_up')`
+fired either way. The user saw an app that opened correctly and then misbehaved,
+with the reason only in the log.
+
+Two Decaid-family apps installed on one device share those fixed ports, so the
+common cause is that the other one is already running.
+
+### Solution
+
+`lib/src/services/webserver/port_binding.dart` wraps both binds.
+`serveOrReportPortInUse` raises a typed `WebServerPortInUse`; `main()` catches it
+and runs `WebServerPortConflictApp` instead of the app.
+
+Only the 8080 API bind reaches `main()`. `startApiDocsServer` catches the same
+exception for 4001, logs it, and returns null, so the docs port is best effort.
+
+### Design Choices
+
+- **Only EADDRINUSE is a port clash.** Every other `SocketException` is
+  rethrown unchanged so it keeps its own error path. A check that treated all of
+  them as a clash would tell the user to close an app that is not running.
+- **The errno set is per platform.** Dart reports the raw OS code and does not
+  normalise it: 98 on Linux and Android, 48 on macOS and iOS, 10048 on Windows.
+- **A same-process double bind carries no errno.** Dart refuses it before the OS
+  sees it and raises its own message, "The shared flag to bind() needs to be
+  `true` ...". That is the same condition for the user, so `isAddressInUse`
+  matches on `sameProcessBindClashMessage` as well. Matching a message is
+  brittle, so a test pins the wording: a Dart change fails that test rather than
+  letting the check fall through to the unknown-failure path. This is also why
+  an in-process test can exercise `serveOrReportPortInUse` at all.
+- **The boot stops for 8080, not for 4001.** Continuing without the API would
+  present a working-looking app with nothing behind it, which is the defect this
+  replaces. 4001 serves only the API docs, and it binds after 8080 has already
+  succeeded. Treating a docs conflict as fatal would abort a boot whose API was
+  running, and would leave that 8080 server open behind the conflict screen,
+  because `startWebServer` holds the only reference to it.
+- **The screen does not close the other app.** Android does not let one app stop
+  another; `killBackgroundProcesses` needs its own permission and only ever
+  touches background processes. The screen offers "Check again", which re-probes
+  the port, and "Close this app".
+- **`probePortIsFree` is injected into the screen.** A widget test drives a fake
+  clock and real socket I/O never settles under it, so the widget takes a
+  `PortProbe`. The real probe is covered separately in a plain test.
+
+### Focused Tests
+
+```
+flutter test test/unit/services/webserver/port_binding_test.dart
+flutter test test/unit/services/webserver/api_docs_server_port_test.dart
+flutter test test/unit/ui/webserver_port_conflict_app_test.dart
+```
 
 ## Keeping Notes Fresh
 
@@ -276,6 +375,14 @@ of records and one JSON record, never with backup size. Rationale and traps:
   (`util/temp_archive_files.dart`), deleted in `finally` or on stream
   cancel/done. Native export defers cleanup (grace timer) because the OS
   share sheet reads the file asynchronously.
+- **Native share anchors**: full backup, recovery package, and import Share
+  Report resolve their initiating widget's bounds immediately before the mobile
+  share call, not before asynchronous file preparation. Desktop save dialogs do
+  not resolve geometry. An unmounted or offscreen action fails without a fallback
+  anchor: archive delivery cleans up and propagates to the existing UI error
+  handler; Share Report uses its existing error handler. Mounted views show the
+  error; disposed views suppress UI updates. Native iPad presentation still
+  requires hardware verification, including resize during preparation.
 - **Legacy compatibility**: entry names, JSON shapes (including
   `store.json`'s `namespaces` wrapper and beans' embedded `batches`),
   `metadata.json` semantics, conflict strategies, selected-section behavior,
@@ -382,3 +489,10 @@ behavior is documented.
 | 429 | Admission capacity full (8 active or queued requests) |
 | 500 | A required direct machine write failed, or no machine was ever connected |
 | 503 | Mutation timed out waiting for its execution turn, the 32-entry DE1 pending queue is full, or the same machine did not return within the bounded wait for a replaceable workflow write |
+
+## Device inventory and connected-scale metadata
+
+- `GET /api/v1/devices` and `/ws/v1/devices` are inventory-only surfaces. They must not include connection-scoped metadata such as `deviceInfo`, `firmwareVersion`, or `batteryLevel`.
+- Metadata refreshes do not emit inventory updates. Do not add a metadata WebSocket until a concrete live-update need exists.
+- `GET /api/v1/scale/info` reports only the currently connected scale. Disconnected requests return `503`; a connected scale with unknown metadata returns `{}`. `firmwareVersion` is optional and opaque.
+- Keep connected-scale metadata separate from remembered-device inventory state; use the scale-info endpoint for it.

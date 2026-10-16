@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show gzip;
 
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
@@ -92,6 +93,7 @@ class DecentProxyService {
     List<int>? bodyBytes,
     String? body,
     String? contentType,
+    bool gzipBody = false,
   }) async {
     final normalizedMethod = method.toUpperCase();
     if (normalizedMethod != 'GET' &&
@@ -153,6 +155,14 @@ class DecentProxyService {
       outbound.bodyBytes = utf8.encode(body);
     }
 
+    if (gzipBody && outbound.bodyBytes.length >= 1024) {
+      final compressed = gzip.encode(outbound.bodyBytes);
+      if (compressed.length < outbound.bodyBytes.length) {
+        outbound.bodyBytes = compressed;
+        outbound.headers['content-encoding'] = 'gzip';
+      }
+    }
+
     final response = await _httpClient.send(outbound);
     final responseBody = await response.stream.toBytes();
 
@@ -201,6 +211,7 @@ class DecentProxyService {
     List<int>? bodyBytes,
     String? body,
     String? contentType,
+    bool gzipBody = false,
   }) {
     return proxy(
       callerId: callerId,
@@ -211,6 +222,7 @@ class DecentProxyService {
       bodyBytes: bodyBytes,
       body: body,
       contentType: contentType,
+      gzipBody: gzipBody,
     );
   }
 
@@ -222,6 +234,7 @@ class DecentProxyService {
     List<int>? bodyBytes,
     String? body,
     String? contentType,
+    bool gzipBody = false,
   }) {
     return proxy(
       callerId: callerId,
@@ -232,6 +245,7 @@ class DecentProxyService {
       bodyBytes: bodyBytes,
       body: body,
       contentType: contentType,
+      gzipBody: gzipBody,
     );
   }
 

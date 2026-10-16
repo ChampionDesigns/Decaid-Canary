@@ -17,6 +17,7 @@ import '../helpers/mock_settings_service.dart';
 class _RecordingUpdater extends AndroidUpdater {
   _RecordingUpdater() : super(owner: 'tadelv', repo: 'reaprime');
   int checkCalls = 0;
+  Object? checkError;
 
   @override
   Future<UpdateInfo?> checkForUpdate(
@@ -24,6 +25,7 @@ class _RecordingUpdater extends AndroidUpdater {
     UpdateChannel channel = UpdateChannel.stable,
   }) async {
     checkCalls++;
+    if (checkError != null) throw checkError!;
     return null;
   }
 
@@ -111,6 +113,13 @@ Future<(UpdateCheckService, _RecordingUpdater)> _pumpSettingsView(
 
 void main() {
   group('SettingsView updates', () {
+    testWidgets('shows device management entry', (tester) async {
+      final calls = <MethodCall>[];
+      await _pumpSettingsView(tester, calls, macos: false);
+
+      expect(find.text('Devices'), findsOneWidget);
+    });
+
     testWidgets('macOS manual check delegates to Sparkle without a Snackbar', (
       tester,
     ) async {
@@ -365,6 +374,35 @@ void main() {
       expect(find.text('You are on the latest version'), findsOneWidget);
 
       await tester.pump(const Duration(seconds: 4));
+      await tester.pump(const Duration(milliseconds: 300));
+    });
+
+    testWidgets('rate-limited manual check offers the releases page', (
+      tester,
+    ) async {
+      final calls = <MethodCall>[];
+      final (_, updater) = await _pumpSettingsView(tester, calls, macos: false);
+      updater.checkError = UpdateCheckException(
+        'GitHub rejected releases request (HTTP 403)',
+        rateLimited: true,
+        resetAt: DateTime.utc(2030, 1, 1, 12),
+      );
+
+      await tester.tap(find.text('Check for updates'));
+      await tester.pump();
+      for (
+        var i = 0;
+        i < 20 && find.text('Open releases').evaluate().isEmpty;
+        i++
+      ) {
+        await tester.pump(const Duration(seconds: 1));
+      }
+
+      expect(find.textContaining('GitHub rate limit reached'), findsOneWidget);
+      expect(find.textContaining('Update checks resume at'), findsOneWidget);
+      expect(find.text('Open releases'), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 10));
       await tester.pump(const Duration(milliseconds: 300));
     });
   });

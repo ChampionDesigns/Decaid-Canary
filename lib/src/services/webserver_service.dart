@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart' hide Router, Visibility, ConnectionState;
 import 'package:flutter/services.dart';
 import 'package:logging/logging.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:reaprime/src/controllers/device_controller.dart';
+import 'package:reaprime/src/controllers/grinder_controller.dart';
 import 'package:reaprime/src/controllers/remembered_devices_controller.dart';
 import 'package:reaprime/src/models/device/remembered_device.dart';
 import 'package:reaprime/src/controllers/persistence_controller.dart';
@@ -18,6 +20,7 @@ import 'package:reaprime/src/models/data/profile_record.dart';
 import 'package:reaprime/src/models/data/shot_state_event.dart';
 import 'package:reaprime/src/models/data/utils.dart';
 import 'package:reaprime/src/models/device/device.dart';
+import 'package:reaprime/src/models/device/grinder_device.dart';
 import 'package:reaprime/src/models/device/scale.dart';
 import 'package:reaprime/src/models/device/scale_calibration.dart';
 import 'package:reaprime/src/models/errors.dart';
@@ -28,6 +31,7 @@ import 'package:reaprime/src/plugins/plugin_source.dart';
 import 'package:reaprime/src/plugins/plugin_source_service.dart';
 import 'package:reaprime/src/services/storage/hive_store_service.dart';
 import 'package:reaprime/src/services/webserver/json_response.dart';
+import 'package:reaprime/src/services/webserver/opaque_path_component.dart';
 import 'package:reaprime/src/services/webserver/bounded_request_body.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
@@ -62,8 +66,10 @@ import 'package:reaprime/src/webui_support/webui_storage.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:shelf_plus/shelf_plus.dart';
 import 'package:reaprime/src/controllers/de1_controller.dart';
+
 import 'dart:convert';
 import 'dart:typed_data';
+
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/bengle_interface.dart';
@@ -71,7 +77,7 @@ import 'package:reaprime/src/models/device/led_strip.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/calibration_codec.dart';
 import 'package:reaprime/src/models/device/transport/ble_timeout_exception.dart';
-import 'package:shelf/shelf_io.dart' as io;
+import 'package:reaprime/src/services/webserver/port_binding.dart';
 import 'package:shelf_web_socket/shelf_web_socket.dart' as sws;
 import 'package:shelf_cors_headers/shelf_cors_headers.dart';
 import 'package:stack_trace/stack_trace.dart';
@@ -84,6 +90,7 @@ import 'package:reaprime/src/services/account/proxy_token_service.dart';
 import 'package:reaprime/src/services/webserver/proxy_auth_middleware.dart';
 import 'package:reaprime/src/controllers/battery_controller.dart';
 import 'package:reaprime/src/controllers/connection_manager.dart';
+import 'package:reaprime/src/controllers/auxiliary_scale_registry.dart';
 import 'package:reaprime/src/controllers/connection_error.dart';
 import 'package:reaprime/src/controllers/display_controller.dart';
 import 'package:reaprime/src/controllers/presence_controller.dart';
@@ -107,6 +114,7 @@ import 'webserver/feedback_handler.dart';
 part 'webserver/de1handler.dart';
 part 'webserver/scale_handler.dart';
 part 'webserver/devices_handler.dart';
+part 'webserver/grinder_handler.dart';
 part 'webserver/settings_handler.dart';
 part 'webserver/sensors_handler.dart';
 part 'webserver/kv_store_handler.dart';
@@ -160,6 +168,7 @@ Future<void> startWebServer(
   DecentProxyService? decentProxyService,
   ProxyTokenService? proxyTokenService,
   UpdateCheckService? updateCheckService,
+  required PluginSourceService pluginSourceService,
 }) async {
   log.info("starting webserver");
   final de1Handler = De1Handler(
@@ -174,8 +183,12 @@ Future<void> startWebServer(
   );
   final scaleHandler = ScaleHandler(
     controller: scaleController,
+    auxiliaryScaleRegistry: connectionManager.auxiliaryScaleRegistry,
     de1Controller: de1Controller,
     settingsController: settingsController,
+  );
+  final grinderHandler = GrinderHandler(
+    controller: connectionManager.grinderController,
   );
   final deviceHandler = DevicesHandler(
     controller: deviceController,
@@ -183,6 +196,7 @@ Future<void> startWebServer(
     connectionManager: connectionManager,
     rememberedController: rememberedDevicesController,
     preferredScaleId: () => settingsController.preferredScaleId,
+    preferredGrinderDeviceId: () => settingsController.preferredGrinderDeviceId,
   );
   final settingsHandler = SettingsHandler(
     controller: settingsController,
@@ -198,7 +212,6 @@ Future<void> startWebServer(
   final ShotsHandler shotsHandler = ShotsHandler(
     controller: persistenceController,
     beanStorage: beanStorage,
-    pluginManager: pluginService.pluginManager,
   );
   final SteamsHandler steamsHandler = SteamsHandler(
     controller: persistenceController,
@@ -207,6 +220,7 @@ Future<void> startWebServer(
   final PluginsHandler pluginsHandler = PluginsHandler(
     pluginManager: pluginService.pluginManager,
     pluginService: pluginService,
+    pluginSourceService: pluginSourceService,
   );
 
   final profileHandler = ProfileHandler(controller: profileController);
@@ -222,6 +236,7 @@ Future<void> startWebServer(
         const String.fromEnvironment('GITHUB_FEEDBACK_TOKEN', defaultValue: ''),
       ),
       currentSerialNumbers: () => de1Controller.seenSerials,
+      accountService: decentAccountService,
     ),
   );
 
@@ -346,12 +361,13 @@ Future<void> startWebServer(
     );
   }
 
-  final server = await io.serve(
+  final server = await serveOrReportPortInUse(
     _init(
       deviceHandler,
       de1Handler,
       firmwareHandler,
       scaleHandler,
+      grinderHandler,
       settingsHandler,
       sensorsHandler,
       workflowHandler,
@@ -394,6 +410,7 @@ Handler _init(
   De1Handler de1Handler,
   FirmwareHandler firmwareHandler,
   ScaleHandler scaleHandler,
+  GrinderHandler grinderHandler,
   SettingsHandler settingsHandler,
   SensorsHandler sensorsHandler,
   WorkflowHandler workflowHandler,
@@ -431,6 +448,7 @@ Handler _init(
   de1Handler.addRoutes(app);
   firmwareHandler.addRoutes(app);
   scaleHandler.addRoutes(app);
+  grinderHandler.addRoutes(app);
   settingsHandler.addRoutes(app);
   sensorsHandler.addRoutes(app);
   workflowHandler.addRoutes(app);
@@ -637,7 +655,7 @@ String _appendVary(String? value, String headerName) {
   return '$value, $headerName';
 }
 
-Future<void> startApiDocsServer() async {
+Future<HttpServer?> startApiDocsServer() async {
   final tempDir = await getTemporaryDirectory();
   final apiDir = Directory('${tempDir.path}/api');
   if (!apiDir.existsSync()) {
@@ -664,8 +682,17 @@ Future<void> startApiDocsServer() async {
     listDirectories: true,
   );
 
-  final apiServer = await io.serve(apiHandler, '0.0.0.0', 4001);
+  final HttpServer apiServer;
+  try {
+    apiServer = await serveOrReportPortInUse(apiHandler, '0.0.0.0', 4001);
+  } on WebServerPortInUse catch (e) {
+    log.warning(
+      'API docs server not started: port ${e.port} is already in use',
+    );
+    return null;
+  }
   log.info(
     '✅ API Docs server running at http://${apiServer.address.host}:${apiServer.port}',
   );
+  return apiServer;
 }

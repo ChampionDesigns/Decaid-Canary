@@ -6,6 +6,7 @@ import 'package:logging/logging.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pub_semver/pub_semver.dart';
 import 'package:reaprime/src/services/apk_installer.dart';
+import 'package:reaprime/src/services/github_rate_limit.dart';
 
 class UpdateInfo {
   final String version;
@@ -42,6 +43,19 @@ class UpdateInfo {
   }
 }
 
+class UpdateCheckException implements Exception {
+  final String message;
+
+  final bool rateLimited;
+
+  final DateTime? resetAt;
+
+  UpdateCheckException(this.message, {this.rateLimited = false, this.resetAt});
+
+  @override
+  String toString() => message;
+}
+
 enum UpdateChannel { stable, beta }
 
 class AndroidUpdater {
@@ -50,13 +64,17 @@ class AndroidUpdater {
   final String _repo;
   final http.Client _httpClient;
   final ApkInstaller _apkInstaller;
+  final GithubRateLimit _rateLimit;
 
   AndroidUpdater({
     required String owner,
     required String repo,
     http.Client? httpClient,
     ApkInstaller? apkInstaller,
+    DateTime Function()? now,
+    GithubRateLimit? rateLimit,
   }) : _owner = owner,
+       _rateLimit = rateLimit ?? GithubRateLimit(now: now),
        _repo = repo,
        _httpClient = httpClient ?? http.Client(),
        _apkInstaller = apkInstaller ?? ApkInstaller();
@@ -68,16 +86,77 @@ class AndroidUpdater {
     String currentVersion, {
     UpdateChannel channel = UpdateChannel.stable,
   }) async {
+    final cooldownEnd = _rateLimit.resetAt;
+    if (cooldownEnd != null) {
+      throw UpdateCheckException(
+        'GitHub rate limit active; update checks resume at '
+        '${cooldownEnd.toIso8601String()}',
+        rateLimited: true,
+        resetAt: cooldownEnd,
+      );
+    }
     try {
       _log.info(
         'Checking for updates on $channel channel (current: $currentVersion)',
       );
 
-      final response = await _httpClient.get(Uri.parse(_releasesUrl));
+      final response = await _httpClient.get(
+        Uri.parse(_releasesUrl),
+        headers: const {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'Decaid',
+        },
+      );
 
       if (response.statusCode != 200) {
-        _log.warning('Failed to fetch releases: ${response.statusCode}');
-        return null;
+        _rateLimit.recordIfLimited(response);
+        var message = 'Failed to fetch releases: HTTP ${response.statusCode}';
+        if (response.statusCode == 403 || response.statusCode == 429) {
+          final remaining = response.headers['x-ratelimit-remaining'];
+          final body = response.body
+              .substring(
+                0,
+                response.body.length > 200 ? 200 : response.body.length,
+              )
+              .replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ')
+              .trim();
+          if (remaining == '0') {
+            final reset = int.tryParse(
+              response.headers['x-ratelimit-reset'] ?? '',
+            );
+            final resetDate =
+                reset == null || reset < 0 || reset > 8640000000000
+                ? null
+                : DateTime.fromMillisecondsSinceEpoch(
+                    reset * 1000,
+                    isUtc: true,
+                  );
+            final resetAt = resetDate == null
+                ? 'reset time unavailable'
+                : 'resets at ${resetDate.toIso8601String()}';
+            final quotaContext = 'rate limit remaining: 0; $resetAt';
+            if (body.isNotEmpty) {
+              final suffix = response.body.length > 200 ? '…' : '';
+              message =
+                  'GitHub rejected releases request (HTTP ${response.statusCode}): $body$suffix '
+                  '($quotaContext)';
+            } else {
+              message =
+                  'GitHub rejected releases request (HTTP ${response.statusCode}; $quotaContext)';
+            }
+          } else if (body.isNotEmpty) {
+            final suffix = response.body.length > 200 ? '…' : '';
+            message =
+                'GitHub rejected releases request (HTTP ${response.statusCode}): $body$suffix';
+          }
+        }
+        throw UpdateCheckException(
+          message,
+          rateLimited:
+              (response.statusCode == 403 || response.statusCode == 429) &&
+              response.headers['x-ratelimit-remaining'] == '0',
+          resetAt: _rateLimit.resetAt,
+        );
       }
 
       final releases = json.decode(response.body) as List<dynamic>;
@@ -113,7 +192,7 @@ class AndroidUpdater {
       }
     } catch (e, stackTrace) {
       _log.severe('Error checking for updates', e, stackTrace);
-      return null;
+      rethrow;
     }
   }
 

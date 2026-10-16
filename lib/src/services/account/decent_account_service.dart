@@ -45,9 +45,15 @@ class _IdentityMapping {
 
 enum DecentAccountStatus { authenticated, unauthenticated, indeterminate }
 
+class SupportMessageReceipt {
+  final String? messageId;
+
+  const SupportMessageReceipt({this.messageId});
+}
+
 class DecentAccountService {
   static const bool kEnableSerialVerification = true;
-  static const int _maxContactIdLength = 256;
+  static const int _maxSupportIdLength = 256;
 
   static const String _registeredMachinesKey = 'registered_machines';
   static const String _identityMappingsKey = 'identity_mappings';
@@ -506,10 +512,24 @@ class DecentAccountService {
     return _authenticated ?? false;
   }
 
-  Future<DecentAccountStatus> verifyStoredCredentialsStatus() async {
+  Future<DecentAccountStatus> verifyStoredCredentialsStatus() {
+    final abort = Completer<void>();
+    return _verifyStoredCredentialsStatus(abort).timeout(
+      const Duration(seconds: 30),
+      onTimeout: () {
+        abort.complete();
+        return DecentAccountStatus.indeterminate;
+      },
+    );
+  }
+
+  Future<DecentAccountStatus> _verifyStoredCredentialsStatus(
+    Completer<void> abort,
+  ) async {
     final generation = _authGeneration;
     final email = await _store.read(key: 'email');
     final password = await _store.read(key: 'password');
+    if (abort.isCompleted) return DecentAccountStatus.indeterminate;
     if (email == null || password == null) {
       _log.info('validation -> no stored credentials (account not linked)');
       if (generation == _authGeneration) {
@@ -521,13 +541,19 @@ class DecentAccountService {
     }
     final http.Response response;
     try {
-      response = await _authedGet(email, password, '/support/api/login_test');
+      response = await _authedGet(
+        email,
+        password,
+        '/support/api/login_test',
+        abortTrigger: abort.future,
+      );
     } catch (_) {
       _log.info('validation -> indeterminate');
       return _authenticated == false
           ? DecentAccountStatus.unauthenticated
           : DecentAccountStatus.indeterminate;
     }
+    if (abort.isCompleted) return DecentAccountStatus.indeterminate;
     final token = response.body.trim();
     final valid =
         response.statusCode == 200 && token.isNotEmpty && token != '0';
@@ -636,7 +662,7 @@ class DecentAccountService {
     return response;
   }
 
-  Future<String> sendSupportMessage({
+  Future<SupportMessageReceipt> sendSupportMessage({
     required String subject,
     required String body,
     Future<void>? abortTrigger,
@@ -665,17 +691,34 @@ class DecentAccountService {
     if (response.statusCode == 401 && generation == _authGeneration) {
       reportAuthenticationFailure();
     }
-    final contactId = response.body.trim();
-    if (response.statusCode != 200 ||
-        contactId.isEmpty ||
-        contactId == '0' ||
-        contactId.length > _maxContactIdLength ||
-        contactId.contains('\r') ||
-        contactId.contains('\n') ||
-        contactId.contains('`')) {
+    if (response.statusCode != 200) {
       throw Exception('support message failed (${response.statusCode})');
     }
-    return contactId;
+    final responseBody = response.body.trim();
+    if (responseBody.isEmpty || responseBody == '0') {
+      throw Exception('support message rejected');
+    }
+    if (responseBody == '1') return const SupportMessageReceipt();
+    try {
+      final json = jsonDecode(responseBody) as Map<String, dynamic>;
+      final messageId = _parseSupportMessageId(json['messageId']);
+      return SupportMessageReceipt(messageId: messageId);
+    } catch (_) {
+      return const SupportMessageReceipt();
+    }
+  }
+
+  static String _parseSupportMessageId(Object? value) {
+    if (value is! String && value is! int) throw const FormatException();
+    final id = value.toString();
+    if (id.isEmpty ||
+        id.startsWith('0') ||
+        id == '1' ||
+        id.length > _maxSupportIdLength ||
+        RegExp(r'[^0-9]').hasMatch(id)) {
+      throw const FormatException();
+    }
+    return id;
   }
 
   Future<void> emailSerialMismatch(String serial) async {
@@ -683,8 +726,8 @@ class DecentAccountService {
       subject:
           'My machine serial number #$serial is not associated with my login',
       body:
-          'I linked my de1app to my Decent account, and found that this '
-          'account does not list the machine #$serial I am connected to.',
+          'I linked my Decaid app to my Decent account, and found that this '
+          'account does not list the machine #$serial I am currently connected to.',
     );
   }
 

@@ -10,7 +10,7 @@ import 'package:reaprime/src/services/webserver/data_export/data_export_section.
 import 'package:reaprime/src/services/webserver/data_export/data_transfer_result.dart';
 import 'package:reaprime/src/services/webserver/data_export/data_transfer_limits.dart';
 import 'package:reaprime/src/services/webserver/data_export/kv_store_export_section.dart';
-import 'package:reaprime/src/services/webserver/data_export/streaming_zip_writer.dart';
+import 'package:reaprime/src/services/export/streaming_zip_writer.dart';
 import 'package:reaprime/src/services/webserver/data_export/streaming_zip_reader.dart';
 import 'package:reaprime/src/services/webserver/json_response.dart';
 import 'package:reaprime/src/util/incremental_json_parser.dart';
@@ -99,7 +99,15 @@ class DataExportHandler {
     Directory tempDir, {
     List<String>? sections,
   }) async {
-    final writer = await StreamingZipWriter.create(tempDir, _limits);
+    final writer = await StreamingZipWriter.create(
+      destination: File('${tempDir.path}${Platform.pathSeparator}export.zip'),
+      compressionLevel: 6,
+      maxFilenameBytes: _limits.maxFilenameBytes,
+      maxEntryCount: _limits.maxEntryCount,
+      maxEntryUncompressedBytes: _limits.maxEntryUncompressedBytes,
+      maxTotalUncompressedBytes: _limits.maxTotalUncompressedBytes,
+      maxArchiveBytes: _limits.maxImportRequestBytes,
+    );
     try {
       final metadata = {
         'formatVersion': _currentFormatVersion,
@@ -433,6 +441,7 @@ class DataExportHandler {
       return jsonBadRequest({
         'error': 'Invalid backup archive',
         'message': e.message,
+        if (e.reason == 'too_many_entries') 'reason': e.reason,
       });
     } on TimeoutException {
       return jsonRequestTimeout({

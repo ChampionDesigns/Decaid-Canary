@@ -64,6 +64,121 @@ backgrounded. After ten minutes in the background, it unloads the page and
 reloads the selected skin when the app returns. Skin state that must survive
 this reload should be persisted through the Decaid API or browser storage.
 
+### Live Camera Access on Android, iOS and macOS
+
+An installed skin in the embedded Android, iOS or macOS WebView can request a
+live camera with
+`navigator.mediaDevices.getUserMedia({video: true, audio: false})`.
+Decaid asks for consent for that skin, then requests system camera permission
+only when needed. No camera permission is requested during onboarding.
+Microphone and combined camera/microphone requests are denied.
+
+Consent is remembered by skin ID. In the native skin selector, select the skin
+and set **Live camera access** to **Ask**, **Allow**, or **Deny**. These settings
+control future live-camera requests, not tracks already acquired by a page.
+Exit/reload the skin to end an existing stream; skins should stop their media
+tracks when capture is finished. System privacy settings can revoke the app
+permission.
+
+Only the currently served installed skin's exact `http://localhost:<port>`
+origin is eligible. Remote pages, other ports, live-edit folders, background
+requests and requests invalidated by navigation are denied. Localhost is a
+potentially trustworthy origin for camera APIs; an HTTP LAN address is not.
+Availability still depends on the device's camera, system permission and
+WebView implementation. Handle permission denial and missing cameras in the
+skin rather than assuming capture is available.
+
+Apple live-camera support uses WKWebView's media permission callback, available
+on iOS 15+ and macOS 12+. Decaid's current minimum versions meet those requirements.
+macOS uses a camera-only AVFoundation permission request and the app sandbox's
+camera entitlement. Live microphone access remains denied.
+
+### Native File-Input Capture
+
+On Android,
+`<input type="file" accept="image/*" capture="environment">` requests a
+native confirmation for each capture, including when live-camera access was
+previously allowed or denied. This one-shot confirmation does not change the
+stored live-camera decision. Image extensions such as `.jpg` and mixed image
+MIME/extension specifiers such as `image/jpeg,.jpg` are supported; unknown
+extensions and image/non-image mixtures are denied for capture.
+The Android chooser callback does not identify its
+requesting frame, so a remembered origin grant alone is insufficient here.
+Ordinary file selection uses the system file picker rather than the WebView
+plugin's chooser, so Decaid does not add native camera or video capture
+shortcuts. A system document provider may offer to create new content; choosing
+it is an explicit file transfer, not a live-camera grant to the skin. Only
+explicitly selected files are shared; no new broad gallery/storage permissions
+are needed.
+
+On iOS and macOS, Decaid leaves the system file picker unchanged. The pinned
+WebView plugin does not expose Apple's file-input chooser to the Android
+confirmation handler. Per-skin Ask/Allow/Deny governs live-camera requests on
+Apple platforms; it does not govern user-selected files or any camera option
+offered by the iOS system picker. Android's per-capture confirmation and chooser
+restrictions do not apply to Apple file inputs.
+
+The iOS system picker can record video with audio, including for
+`<input type="file" accept="video/*" capture="environment">`. Apple configures
+a microphone input for this recorder, so the app declares
+`NSMicrophoneUsageDescription`. Without that description, iOS terminates the
+app with a TCC privacy violation before Dart can handle the request. iOS can ask
+for microphone permission when the user chooses native recording; granting it
+allows audio in that recording. This permission does not enable live microphone
+requests from skins or change the stored live-camera decision. Skins must handle
+denial and cancellation. Camera-only live video remains available through
+`getUserMedia({video: true, audio: false})`.
+
+macOS does not declare microphone usage, add the audio-input entitlement or
+request microphone access. The pinned macOS plugin uses a file-selection
+panel, not the iOS camera recorder.
+A skin can capture a still image or record camera-only video from an approved
+live stream instead.
+
+Windows and Linux camera support remain unchanged.
+
+### Android Composition Diagnostics
+
+The native **Advanced > Skin composition (diagnostic)** selector offers
+**HC (default)** and **TLHC (HC fallback)**. Hybrid composition remains the
+default. The texture-layer option is experimental and persisted through the
+existing feature-flag settings. Changing it recreates the embedded WebView;
+unsaved page state may be lost. Failed saves keep the previous mode selected
+and report the failure. Other platforms are unaffected.
+Selections made while a save is pending are persisted in order, so the last
+selection wins. A failed save does not prevent a queued selection or retry.
+
+With the pinned Android plugin, `useHybridComposition: false` requests
+texture-layer hybrid composition with hybrid fallback, not Virtual Display.
+Impeller remains unchanged. Neither mode is claimed to be faster on all devices.
+
+Creation records in the app log and `webview_console.log` include view ID,
+requested mode, WebView provider/package version, Android SDK, Flutter version
+and revision, Android plugin version and read-back rendering settings. Missing
+or failed probes are recorded as null (Flutter metadata may be `unknown` in
+tests/custom builds). Renderer exits include the view ID, mode and crash data
+in the WebView log. The plugin does not expose which Flutter fallback path
+actually ran: `actualComposition` is explicitly `not-exposed-by-plugin`.
+Read-back settings are not proof that a texture path was selected.
+
+For a comparison, keep device, provider, skin/version and workload fixed;
+record the build and creation record for each run. Warm up each mode, reset
+`dumpsys gfxinfo` for the app package, repeat equal-length swipes and compare
+frame-time percentiles with skin renderer traces. Test keyboard, accessibility,
+native overlays and background/resume separately before retaining a mode.
+Windows unit tests and a Samsung test cannot establish an improvement on the
+reported Teclast P85Pro with WebView 91.
+
+### Text Scaling
+
+Decaid pins the embedded WebView's text zoom to 100%, so the device's system
+font-size setting does not rescale a skin. Android would otherwise apply that
+setting to text but not to layout, growing a skin's type while the boxes
+holding it stayed the same size — text then overflows its container, and only
+inside the app, since a browser on the same device is unaffected. A skin owns
+its own scaling and should size its text itself.
+
+
 ### Skin Origins and Browser Storage
 
 Each installed skin is served from its own **stable origin** — a port derived
@@ -77,8 +192,11 @@ unload described above — and it never survives an app restart.
 
 Ports are assigned from 24800 upward. 3000, 4001 and 8080 are reserved, so a
 skin never lands on the entry point, the local listener or the REST API.
-`localhost:3000` remains the entry point and redirects to the skin's own
-origin.
+Bookmark `http://localhost:3000` on the device running Decaid, or
+`http://<gateway-ip>:3000` from another device. This entry point redirects
+without caching to the selected skin's origin. Bookmark the entry point
+rather than the redirected address so the bookmark follows skin changes
+and temporary port fallbacks.
 
 **The fallback, and what it costs.** If a skin's assigned port cannot be bound
 — another process holds it — Decaid retries briefly, then falls back to a
@@ -167,6 +285,11 @@ The snapshot WebSocket sends complete machine state at regular intervals:
   "steamTemperature": 135.5
 }
 ```
+
+On classic DE1 machines, `mixTemperature` is not a reliable measurement of
+dispensed hot-water outlet temperature while `state.state` is `hotWater`.
+`targetMixTemperature` remains the requested target, not a measured outlet
+temperature.
 
 ---
 
@@ -602,6 +725,9 @@ Update just the profile:
   A PUT also refuses a whole `"context": null` and a non-numeric `targetYield` with `400`
 - `grinderId` (string): ID of a managed Grinder entity (see Grinders API)
 - `grinderModel` (string): Grinder model name (display string)
+- `grinderBurrs` (string): Burrs fitted to the grinder (display string). Resolved from the
+  linked grinder each time a shot is stored, so a stored shot records the burrs that were
+  fitted when it was pulled and later grinder edits leave that history alone
 - `grinderSetting` (string): Current grinder setting
 - `beanBatchId` (string): ID of a managed BeanBatch entity (see Beans API)
 - `coffeeName` (string): Coffee bean name (display string)
@@ -781,7 +907,7 @@ Supports partial updates via deep merge — only include the fields you want to 
 - `actualYield`: Actual beverage yield in grams
 - `drinkTds`: Measured total dissolved solids percentage
 - `drinkEy`: Calculated extraction yield percentage
-- `enjoyment`: Numeric rating
+- `enjoyment`: Subjective rating on Decaid's **0-10** scale. A value outside that range is rejected with 400, so convert before writing: de1app and visualizer.coffee use 0-100, and a five-star UI maps at two points per star. Decaid handles the de1app and Visualizer boundaries itself; a skin only converts its own display scale.
 - `espressoNotes`: Tasting notes and observations
 - `extras`: Flexible dictionary for tags, flags, plugin data, or other custom fields
 
@@ -846,7 +972,7 @@ Decaid manages coffee beans, bean batches, and grinders as first-class entities 
 - **Bean** represents a coffee origin (roaster + name + metadata). A bean can have multiple **BeanBatches** — each batch tracks a specific purchase with roast date, weight remaining, price, and frozen state.
 - **Grinder** represents grinder equipment with its burr info and setting type (numeric dial or named presets).
 - **WorkflowContext** ties everything together in a workflow. Set `grinderId` and `beanBatchId` to link to managed entities. Also include display strings (`grinderModel`, `coffeeName`, etc.) so UIs can show the info without extra lookups.
-- When a shot is pulled, the current workflow context is saved with the shot record, creating a permanent record of which beans, grinder, and settings were used.
+- When a shot is pulled, the current workflow context is saved with the shot record, creating a permanent record of which beans, grinder, and settings were used. Storing a shot also resolves the linked grinder's `burrs` into `grinderBurrs`, replacing any value the context inherited from a repeated shot; a context with no `grinderId` keeps whatever burrs it carries.
 
 #### Typical Workflow
 
@@ -3075,13 +3201,13 @@ This creates an `out/` directory with static HTML/CSS/JS files.
 **Option B: Install from ZIP** (works on all platforms):
 
 1. Package your build output as a `.zip`
-2. In Decaid, open **Launcher → Skins**, tap the **+** (Install skin) button and choose **ZIP file**
+2. In Decaid, open **Launcher → Skins**, open the cogwheel menu, then **Install skin → ZIP file**
 3. Pick the file; the skin is extracted, installed, and loaded immediately
 
 **Option B2: Install from GitHub** (public repositories only):
 
 1. Push your skin to a GitHub repository — either as a tagged release with a `.zip` asset, or on a branch
-2. In Decaid, open **Launcher → Skins**, tap the **+** (Install skin) button and choose **GitHub Release** or **GitHub Branch**
+2. In Decaid, open **Launcher → Skins**, open the cogwheel menu, then **Install skin → GitHub Release** or **GitHub Branch**
 3. Enter `owner/repo` (and optionally the asset name, or the branch, defaulting to `main`)
 4. The skin is installed and appears in the skin list; **Check for updates** re-fetches from the same source
 
@@ -3366,7 +3492,7 @@ This shows "Back to MySkin" in the settings plugin's nav bar. When clicked, it n
 
 **External links:** When a skin runs inside the embedded webview (mobile/desktop app), navigations to the active skin origin, `localhost:3000`, and the settings plugin load in place; any other `http`/`https` link opens in the **system browser** while the skin stays loaded. A plain `<a href="https://…">` works, but the in-app webview blocks `target="_blank"` popups (`javaScriptCanOpenWindowsAutomatically: false`). For JS-driven links, use a delegated click handler with `window.open(url, '_blank')` and a `location.href` fallback so the navigation reaches `shouldOverrideUrlLoading` and is handed off to the OS.
 
-**Return to the dashboard:** Port 3000 is a stable no-store entry point that redirects to a fresh browser origin each time Decaid serves a skin. The active origin loads the tokenless `/__decent/skin-api.js` from an absolute same-origin URL, which exposes `window.decentApp.exitToDashboard()`. ReaPrime stores a newly rotated, skin-bound account-proxy token in escaped page metadata that only the same-origin script reads; switching or stopping the server revokes it. This prevents a stale skin tab from reading or using the next skin's token. Token injection accepts loopback and IP addresses currently assigned to the device, including Ethernet and secondary adapters; arbitrary hostnames and stale addresses are rejected. If local interface enumeration is unavailable, the WiFi address cached for the server link is used as a fallback. A hostname that resolves to one of those addresses — a router DNS record, an mDNS name, a hosts file entry — reaches the entry redirect and receives the script tag, but never the token, which stays restricted to loopback and literal device addresses so the DNS-rebinding boundary holds. A skin that needs the account-proxy token must therefore be opened by loopback or device IP; a skin that only needs `window.decentApp` also works when opened by name. The script response also uses `Cross-Origin-Resource-Policy: same-origin`. In the embedded webview the callback closes the skin and reveals the Decent dashboard. In an external browser it is a no-op. The script works with `script-src 'self'`; policies that reject all same-origin scripts, such as `script-src 'none'` or nonce-only policies without `'self'`, also reject this API.
+**Return to the dashboard:** Port 3000 is a stable no-store entry point that redirects to the selected skin's origin, normally retained across restarts as described in [Skin Origins and Browser Storage](#skin-origins-and-browser-storage). The active origin loads the tokenless `/__decent/skin-api.js` from an absolute same-origin URL, which exposes `window.decentApp.exitToDashboard()`. ReaPrime stores a newly rotated, skin-bound account-proxy token in escaped page metadata that only the same-origin script reads; switching or stopping the server revokes it. Separate skin origins prevent a stale tab from reading another skin's token. Token injection accepts loopback and IP addresses currently assigned to the device, including Ethernet and secondary adapters; arbitrary hostnames and stale addresses are rejected. If local interface enumeration is unavailable, the WiFi address cached for the server link is used as a fallback. A hostname that resolves to one of those addresses — a router DNS record, an mDNS name, a hosts file entry — reaches the entry redirect and receives the script tag, but never the token, which stays restricted to loopback and literal device addresses so the DNS-rebinding boundary holds. A skin that needs the account-proxy token must therefore be opened by loopback or device IP; a skin that only needs `window.decentApp` also works when opened by name. The script response also uses `Cross-Origin-Resource-Policy: same-origin`. In the embedded webview the callback closes the skin and reveals the Decent dashboard. In an external browser it is a no-op. The script works with `script-src 'self'`; policies that reject all same-origin scripts, such as `script-src 'none'` or nonce-only policies without `'self'`, also reject this API.
 
 The embedded webview also shows a platform-specific navigation guide when a skin opens. On Windows, choose **Back to Dashboard** from the system menu, available from the window icon or by right-clicking the title bar. Disable or restore the guide in **Settings** under **General** with **Skin navigation guide**.
 
@@ -3481,7 +3607,13 @@ Decaid tracks skin metadata in `.rea_metadata.json`:
 - User-installed skins are checked for updates via `updateAllSkins()`, which
   runs on the app's periodic update check, from `POST /api/v1/webui/skins/update`,
   from the web settings plugin's "Check for Skin Updates", and from the native
-  skin selector's "Check for updates" button.
+  skin page's cogwheel menu under **Check for updates**.
+- During an update check on the native skin page, the cogwheel shows progress
+  and **Check for updates** is disabled until the check finishes, including
+  after a failure. The menu can still be opened to access installation.
+- Concurrent native, periodic, and REST checks share one in-flight operation.
+  Leaving and reopening the page preserves its busy state and refreshes the
+  current skin list when that operation finishes.
 - Raw-URL and GitHub-release skins are compared against their recorded source
   on every check: URL skins via HTTP `ETag` / `Last-Modified` headers,
   release skins by re-resolving the latest release (honoring the recorded

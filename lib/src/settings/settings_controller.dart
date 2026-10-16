@@ -42,6 +42,8 @@ class SettingsController with ChangeNotifier {
 
   String? _preferredScaleId;
 
+  String? _preferredGrinderDeviceId;
+
   String _defaultSkinId = 'streamline.js';
 
   bool _automaticUpdateCheck = true;
@@ -71,6 +73,7 @@ class SettingsController with ChangeNotifier {
   bool _enableSimulatedWebViews = false;
 
   final Map<FeatureFlag, bool> _featureFlags = {};
+  Future<void> _featureFlagSave = Future.value();
 
   TelemetryService? _telemetryService;
 
@@ -87,6 +90,7 @@ class SettingsController with ChangeNotifier {
   bool get stopHotWaterAtWeight => _stopHotWaterAtWeight;
   String? get preferredMachineId => _preferredMachineId;
   String? get preferredScaleId => _preferredScaleId;
+  String? get preferredGrinderDeviceId => _preferredGrinderDeviceId;
   String get defaultSkinId => _defaultSkinId;
   bool get automaticUpdateCheck => _automaticUpdateCheck;
   UpdateChannel get updateChannel => _updateChannel;
@@ -127,6 +131,8 @@ class SettingsController with ChangeNotifier {
     _stopHotWaterAtWeight = await _settingsService.stopHotWaterAtWeight();
     _preferredMachineId = await _settingsService.preferredMachineId();
     _preferredScaleId = await _settingsService.preferredScaleId();
+    _preferredGrinderDeviceId = await _settingsService
+        .preferredGrinderDeviceId();
     _defaultSkinId = await _settingsService.defaultSkinId();
     _automaticUpdateCheck = await _settingsService.automaticUpdateCheck();
     _updateChannel = await _settingsService.updateChannel();
@@ -306,8 +312,14 @@ class SettingsController with ChangeNotifier {
     if (machineId == _preferredMachineId) {
       return;
     }
+    final previous = _preferredMachineId;
     _preferredMachineId = machineId;
-    await _settingsService.setPreferredMachineId(machineId);
+    try {
+      await _settingsService.setPreferredMachineId(machineId);
+    } catch (_) {
+      _preferredMachineId = previous;
+      rethrow;
+    }
     notifyListeners();
   }
 
@@ -317,6 +329,13 @@ class SettingsController with ChangeNotifier {
     }
     _preferredScaleId = scaleId;
     await _settingsService.setPreferredScaleId(scaleId);
+    notifyListeners();
+  }
+
+  Future<void> setPreferredGrinderDeviceId(String? deviceId) async {
+    if (deviceId == _preferredGrinderDeviceId) return;
+    _preferredGrinderDeviceId = deviceId;
+    await _settingsService.setPreferredGrinderDeviceId(deviceId);
     notifyListeners();
   }
 
@@ -474,10 +493,14 @@ class SettingsController with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setFeatureFlag(FeatureFlag flag, bool value) async {
-    if (value == _featureFlags[flag]) return;
-    _featureFlags[flag] = value;
-    await _settingsService.setFeatureFlag(flag, value);
-    notifyListeners();
+  Future<void> setFeatureFlag(FeatureFlag flag, bool value) {
+    final save = _featureFlagSave.then((_) async {
+      if (value == _featureFlags[flag]) return;
+      await _settingsService.setFeatureFlag(flag, value);
+      _featureFlags[flag] = value;
+      notifyListeners();
+    });
+    _featureFlagSave = save.catchError((Object _) {});
+    return save;
   }
 }

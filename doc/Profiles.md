@@ -109,6 +109,22 @@ REA uses **content-based hashing** for profile identification instead of random 
 - **Conflict-free merging**: No manual conflict resolution needed
 - **Provable identity**: ID proves the profile content hasn't changed
 
+#### Parsing Strictness
+
+`Profile.fromJson` requires a non-empty `title`, a non-empty `steps` array,
+`tank_temperature`, and `target_volume_count_start`. It backs the profile
+library, `POST`/`PUT /api/v1/profiles`, and DE1 profile upload, so a profile that
+cannot be brewed is rejected at the boundary.
+
+`Profile.fromRecordedJson` relaxes those requirements and is reached only
+through `Workflow.fromRecordedJson`, which `ShotMapper.fromRow` and
+`ShotRecord.fromRecordedJson` use to read the profile embedded in a stored
+shot's workflow. A shot's profile is a
+record of what happened, and shots imported from de1app `.shot` files carry no
+profile steps at all. Missing or empty titles read back as `Unknown profile`;
+missing numeric fields read back as `0`. Never use it to load a profile the user
+can brew from.
+
 #### Hash Types
 
 Profiles use three SHA-256 hashes:
@@ -554,7 +570,7 @@ Example error response:
 
 ### Simulated shot execution (MockDe1 / MockBengle)
 
-Mock machines execute profiles in a simulated shot loop that follows profile step targets (flow, pressure, temperature) with simplified machine-response dynamics. Pressure steps model flow limiters and flow steps model pressure limiters with a progressive response across each limiter's range of action. This is a simulator approximation rather than firmware control-loop emulation. Each shot also samples bounded puck resistance so repeated pulls are not identical. Design decisions are recorded in archived plans — see `doc/plans/archive/mock-shot-simulator/mock-shot-fidelity.md` for the substate model, flow→pressure coupling, weight accumulation, transition shaping, and skipStep semantics.
+See [`device-notes/simulators.md`](device-notes/simulators.md#simulated-shot-execution).
 
 ### Profile Wire Format
 
@@ -604,6 +620,51 @@ physical upload.
 - See `doc/plans/archive/profile-upload-recovery/design.md` for the full
   design rationale.
 
+### de1app Legacy `.tcl` Profile Import
+
+de1app dual-writes every profile save to both `profiles/*.tcl` (legacy) and
+`profiles_v2/*.json`. The de1app import (`De1appImporter`,
+`lib/src/import/de1app_importer.dart`) prefers the v2 file for a given
+basename and falls back to `TclProfileParser`
+(`lib/src/import/parsers/tcl_profile_parser.dart`) only for profiles that
+predate a user's dual-write era and exist solely as legacy `.tcl`. See
+`doc/plans/archive/de1app-history-profile-merge/design.md` for the full
+root-cause writeup.
+
+**Supported profile type:** only `settings_profile_type settings_2c`
+("advanced", frame-based) profiles import. de1app's own `fix_profile_type`
+normalization is applied first, so these are also accepted as aliases of
+`settings_2c`:
+
+| Legacy/pre-alias value | Normalizes to |
+|---|---|
+| `settings_profile_advanced` | `settings_2c` |
+| `settings_2c2` | `settings_2c` |
+
+**Rejected profile types** (`UnsupportedProfileTypeException`): `settings_2a`
+(basic pressure) and `settings_2b` (basic flow), including their pre-alias
+names `settings_2`/`settings_profile_pressure` (→ `settings_2a`) and
+`settings_profile_flow` (→ `settings_2b`), plus any value that isn't one of
+the above. de1app's stored `advanced_shot` for basic pressure/flow profiles
+is a snapshot of whatever the pressure/flow UI last generated, not an
+authoritative source; decaid does not reimplement that generator. This
+mirrors `tools/ingest_profiles.py`'s existing `settings_2a`/`settings_2b`
+rejection (see `doc/AI_STORAGE_NOTES.md`'s "Legacy Profile Corpus Ingestion"
+section).
+
+**Beverage type mapping:** de1app's `tea`, `filter`, and `tea_portafilter`
+map to `pourover`; `descale` maps to `cleaning` (matching
+`tools/ingest_profiles.py`'s `BEVERAGE_TYPE_MAP`). Any other value that
+isn't already a valid `BeverageType` name is rejected
+(`UnsupportedBeverageTypeException`) rather than silently defaulting to
+`espresso`.
+
+**Malformed `advanced_shot` frames** (too few tokens, or an odd trailing key
+with no value) reject the whole profile (`MalformedProfileFrameException`)
+rather than silently importing a shorter or truncated recipe. All three
+exceptions surface as a per-file `ImportError` from `De1appImporter.import`,
+so one bad profile doesn't abort the rest of the import.
+
 ### Future Enhancements
 
 - **Cloud Sync**:
@@ -622,4 +683,3 @@ physical upload.
 - **Auto-cleanup**: Configurable purge of old deleted profiles (e.g., 30 days)
 - **Profile Templates**: Pre-configured templates for common brewing styles
 - **Smart Import**: When importing, use compound hash to detect duplicates with different IDs from old UUID-based exports
-

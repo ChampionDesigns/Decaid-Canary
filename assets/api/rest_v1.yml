@@ -5,6 +5,11 @@ info:
   description: |
     This API provides endpoints to retrieve a list of Bluetooth devices, trigger a scan for new devices, manage DE1 espresso machine state and settings, and interact with a connected scale.
 
+    External sensor IDs are opaque URI path components: clients percent-encode
+    them once and the host decodes them once at the sensor route boundary.
+    Host-assigned UUID resource IDs retain their existing route contracts.
+    Invalid UTF-8 in a percent-encoded sensor ID is rejected with HTTP 400.
+
     Requests under `/api/` are subject to process-local admission limits. A
     per-client limit returns 429 and a global limit returns 503; both include
     `Retry-After: 1`. Saturated requests are rejected rather than queued.
@@ -45,27 +50,7 @@ paths:
               schema:
                 type: array
                 items:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    id:
-                      type: string
-                    state:
-                      type: string
-                      enum: [connected, disconnected]
-                    type:
-                      type: string
-                      enum: [machine, scale, sensor]
-                    available:
-                      type: boolean
-                      description: >
-                        true if the device is currently present in discovery or
-                        is actively connected; false for a remembered device
-                        that is not present (reported with state "disconnected").
-                        Remembered devices are those the user has connected to;
-                        they persist across restarts until forgotten via
-                        /api/v1/devices/forget.
+                  $ref: "#/components/schemas/DeviceInventory"
         "500":
           description: Internal Server Error
           content:
@@ -110,7 +95,20 @@ paths:
   /api/v1/devices/scan:
     get:
       summary: Scan for Devices
-      description: Triggers a device scan. When connect=true (default), scans first and automatically fills missing machine and scale slots without replacing connected devices. When connect=false, performs discovery only.
+      description: >
+        Triggers a device scan. When connect=true (default), scans first and
+        automatically fills missing machine and scale slots, then asynchronously
+        attempts the preferred runtime grinder when present after primary
+        machine/scale selection resolves, without replacing connected devices.
+        When connect=false, performs discovery only. During
+        the protected post-wake preferred-scale recovery window, an explicit
+        scan - discovery-only included - is deferred and coalesced with any
+        other pending explicit scan instead of preempting the background
+        preferred-scale watch. At most one scan runs when the window ends. The
+        pending scan is dropped instead when the preferred scale reconnects
+        first, when the machine disconnects, when the preferred scale is
+        cleared, or when Decaid shuts down; the waiting request then completes
+        without a scan.
       tags: [Devices]
       parameters:
         - name: connect
@@ -119,15 +117,42 @@ paths:
           schema:
             type: boolean
             default: true
+        - name: connectPreferredScaleEarly
+          description: >
+            Opt-in preferred primary scale reconnect, only with connect=true.
+            When a non-Bengle machine is connected and ownership is resolved,
+            the primary scale slot is empty, and a preferred scale is configured,
+            a matching sighting requests scan termination. Connection begins only
+            after successful scan teardown, without restarting full discovery.
+            Pending machine/selection work, occupied slots, auxiliary claims,
+            and sleeping-scale restrictions disable the shortcut. Otherwise the
+            normal full explicit scan applies. Failed or uncertain BLE teardown
+            never starts an early connection. If an early-stop request fails but
+            the scan later completes normally with BLE ownership released, normal
+            post-scan connection policy applies. Unrelated discovery failures do
+            not block a confirmed BLE handoff. Independent of quick; does not affect
+            automatic startup. Opt-in is retained when connect requests coalesce.
+          in: query
+          schema:
+            type: boolean
+            default: false
         - name: quick
-          description: If true, Decaid returns an empty array immediately while the same scan-first policy continues in the background. Useful when polling for device updates manually.
+          description: If true, Decaid returns an empty array immediately while the same scan-first policy continues in the background, after any post-wake deferral has elapsed. Useful when polling for device updates manually.
           in: query
           schema:
             type: boolean
             default: false
       responses:
         "200":
-          description: Scan started successfully
+          description: >
+            Device inventory after the scan, or immediately when a pending scan
+            is dropped or quick=true is set, before any deferred scan runs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeviceInventory"
         "500":
           description: Internal Server Error
           content:
@@ -152,6 +177,14 @@ paths:
           required: false
           schema:
             type: string
+        - name: connectionRole
+          description: Optional local role for a scale connection.
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [primary, auxiliary]
+            nullable: false
       requestBody:
         description: JSON object with deviceId
         required: false
@@ -163,6 +196,14 @@ paths:
                 deviceId:
                   type: string
                   description: The id of the device, previously discovered with /api/v1/devices/scan request
+                connectionRole:
+                  type: string
+                  enum: [primary, auxiliary]
+                  nullable: false
+                  default: primary
+                  description: >
+                    Local scale connection role. Omitted is equivalent to primary;
+                    auxiliary is runtime-only and applies only to scale devices.
               required:
                 - deviceId
       responses:
@@ -173,7 +214,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/DeviceConnectResult"
         "400":
-          description: "Missing deviceId"
+          description: Missing deviceId or invalid connectionRole (including explicit null)
         "404":
           description: "Device not found"
         "409":
@@ -234,6 +275,14 @@ paths:
           description: "Device not found"
         "409":
           description: "Device is inventory-only and cannot be disconnected independently"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: >
+            Device disconnect failed. A selected grinder clears local
+            controller state before the failure is reported.
           content:
             application/json:
               schema:
@@ -1132,6 +1181,21 @@ paths:
           description: No machine connected or machine write queue full
 
   # Scale API
+  /api/v1/scale/info:
+    get:
+      summary: Get connected scale information
+      description: Returns metadata for the currently connected scale.
+      tags: [Scale]
+      responses:
+        "200":
+          description: Connected scale information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScaleInfo'
+        "503":
+          description: No scale is connected
+
   /api/v1/scale/tare:
     put:
       summary: Tare Scale
@@ -1169,6 +1233,49 @@ paths:
                     type: string
         "404":
           description: Scale not found
+        "500":
+          description: Scale command failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScaleCommandError"
+
+  /api/v1/scales/{id}/tare:
+    put:
+      summary: Tare a connected scale by device id
+      description: >
+        Tares the connected primary or auxiliary scale identified by the opaque
+        URI path component. Primary tare retains the shot safety gate above;
+        auxiliary tare is independent of shot state.
+      tags: [Scale]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Scale tared successfully
+        "400":
+          description: >
+            Invalid percent-encoded scale id or primary tare rejected by the
+            active shot safety gate.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ScaleCommandError"
+                  - type: object
+                    required: [details, type]
+                    properties:
+                      details:
+                        type: string
+                      type:
+                        type: string
+                        enum: [block_tare_during_shot]
+        "404":
+          description: Scale not found or not connected
         "500":
           description: Scale command failed
           content:
@@ -1227,6 +1334,124 @@ paths:
               schema:
                 $ref: "#/components/schemas/ScaleCommandError"
 
+  # Connected Grinder API
+  /api/v1/grinder/info:
+    get:
+      summary: Get connected grinder information
+      description: Returns runtime identity, unchanged command capabilities, optional observation declarations, effective control descriptors and host-built available plugin surfaces. Runtime identity is separate from persisted grinder records under /api/v1/grinders.
+      tags: [Grinder]
+      responses:
+        "200":
+          description: Connected grinder information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrinderInfo"
+        "503":
+          description: No grinder is connected
+
+  /api/v1/grinder/state:
+    get:
+      summary: Get connected grinder state
+      tags: [Grinder]
+      responses:
+        "200":
+          description: Latest validated grinder snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrinderSnapshot"
+        "503":
+          description: No grinder or snapshot is available
+
+  /api/v1/grinder/state/grinding:
+    put:
+      summary: Start the connected grinder
+      tags: [Grinder]
+      responses:
+        "200":
+          description: Start command accepted
+        "500":
+          description: Command failed or startStop is unsupported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrinderCommandError"
+        "503":
+          description: No grinder is connected
+
+  /api/v1/grinder/state/idle:
+    put:
+      summary: Stop the connected grinder
+      tags: [Grinder]
+      responses:
+        "200":
+          description: Stop command accepted
+        "500":
+          description: Command failed or startStop is unsupported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrinderCommandError"
+        "503":
+          description: No grinder is connected
+
+  /api/v1/grinder/setting:
+    put:
+      summary: Set the connected grinder setting
+      tags: [Grinder]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrinderSettingRequest"
+      responses:
+        "200":
+          description: Setting command accepted
+        "400":
+          description: setting is missing or is not a string
+        "408":
+          description: Request body was not received within 10 seconds
+        "413":
+          description: Request body exceeds 64 KiB
+        "500":
+          description: Command failed or grindSetting is unsupported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrinderCommandError"
+        "503":
+          description: No grinder is connected
+
+  /api/v1/grinder/rpm:
+    put:
+      summary: Set the connected grinder RPM
+      tags: [Grinder]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrinderRpmRequest"
+      responses:
+        "200":
+          description: RPM command accepted
+        "400":
+          description: rpm is missing, is not an integer, or is negative
+        "408":
+          description: Request body was not received within 10 seconds
+        "413":
+          description: Request body exceeds 64 KiB
+        "500":
+          description: Command failed or rpmControl is unsupported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrinderCommandError"
+        "503":
+          description: No grinder is connected
+
   # Sensors API handling
   /api/v1/sensors:
     get:
@@ -1258,6 +1483,7 @@ paths:
           required: true
           schema:
             type: string
+          description: External sensor ID as one percent-encoded URI path component.
       responses:
         "200":
           description: Full sensor manifest
@@ -1267,6 +1493,8 @@ paths:
                 $ref: "#/components/schemas/SensorManifest"
         "404":
           description: Sensor not found
+        "400":
+          description: Invalid UTF-8 in a percent-encoded sensor ID
 
   /api/v1/sensors/{id}/execute:
     post:
@@ -1278,6 +1506,7 @@ paths:
           required: true
           schema:
             type: string
+          description: External sensor ID as one percent-encoded URI path component.
       requestBody:
         required: true
         content:
@@ -1305,6 +1534,8 @@ paths:
                     nullable: true
         "404":
           description: Sensor not found
+        "400":
+          description: Invalid UTF-8 in a percent-encoded sensor ID
 
   # REA settings API
   /api/v1/settings:
@@ -3143,7 +3374,9 @@ paths:
     get:
       summary: Call a plugin HTTP endpoint
       description: >
-        Routes the request to a loaded plugin's declared HTTP endpoint. The
+        Routes the request to a loaded plugin's declared HTTP endpoint. Plugin
+        and endpoint IDs are opaque URI path components: clients percent-encode
+        each once, and the route decodes each once before lookup. The
         runtime applies this contract to every HTTP method. The plugin manifest
         must declare the api permission; otherwise Decaid rejects the request
         before dispatch.
@@ -4774,6 +5007,9 @@ paths:
                     type: string
                   message:
                     type: string
+                  reason:
+                    type: string
+                    description: Present as `too_many_entries` only when the ZIP entry-count safety limit is exceeded; absent for other 400 errors.
         "408":
           description: Import request body stopped arriving for 30 seconds
         "500":
@@ -5283,6 +5519,22 @@ paths:
         Submits user feedback as a GitHub issue. Logs and system info are
         attached as a private Gist when requested. Requires the app to be
         built with `--dart-define=GITHUB_FEEDBACK_TOKEN=<token>`.
+        Requires an authenticated Decent account. Stored credentials are verified
+        before any Gist upload, GitHub issue creation, or Support message.
+        Verification has a 30-second deadline, including credential reads and
+        the complete upstream response. Missing, rejected, or unverifiable
+        credentials (including timeout) return 400, even without a GitHub token.
+        Trusted-LAN callers use the host's account without separate caller authentication.
+        Support linking is best-effort after issue creation. Only the support
+        message ID, when available, is added to the public issue. The Support
+        response needs only messageId; no user ID is requested or published.
+        The proposed messageId format is a positive JSON integer or an ASCII
+        decimal string (1-256 digits, no leading zeros). The value 1 is reserved
+        for the temporary acknowledgement and is never published as an ID.
+        Invalid IDs skip linking without failing the created issue. The backend
+        maintainer must confirm the numeric format, lookup uniqueness, and public safety.
+        A successful Support delivery without a recognized receipt has no message
+        ID and skips the GitHub update; it does not fail delivery-only callers.
       tags: [System]
       requestBody:
         required: true
@@ -5298,11 +5550,22 @@ paths:
               schema:
                 $ref: "#/components/schemas/FeedbackResponse"
         "400":
-          description: Missing or empty description
+          description: Missing or empty description, or Decent account not currently verified as authenticated
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              examples:
+                accountRequired:
+                  value:
+                    success: false
+                    error: Decent account required
+                    message: You must be logged in to your Decent account to submit feedback.
+                verificationUnavailable:
+                  value:
+                    success: false
+                    error: Decent account required
+                    message: Could not verify your Decent account. Check your connection and try again.
         "500":
           description: Submission failed or internal error
           content:
@@ -5310,7 +5573,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "503":
-          description: Feedback service not configured (no GitHub token)
+          description: Account authenticated but feedback service not configured (no GitHub token)
           content:
             application/json:
               schema:
@@ -5565,6 +5828,171 @@ components:
           additionalProperties: true
       additionalProperties: true
 
+    ScaleInfo:
+      type: object
+      properties:
+        firmwareVersion:
+          type: string
+          description: Opaque scale firmware version, when reported.
+        batteryLevel:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 100
+    GrinderCommandError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          description: Optional plugin error code, including unsupported_operation.
+    GrinderInfo:
+      type: object
+      required: [deviceId, capabilities]
+      additionalProperties: false
+      properties:
+        deviceId:
+          type: string
+          description: Runtime GrinderDevice identity, not a persisted Grinder UUID.
+        capabilities:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [startStop, grindSetting, rpmControl]
+        observations:
+          type: array
+          uniqueItems: true
+          description: Declared read-only observations, independent of command capabilities. Omitted when none are declared; declarations do not imply a currently available value or enable controls.
+          items:
+            type: string
+            enum: [setting, rpm]
+        controls:
+          type: object
+          additionalProperties: false
+          description: Effective standard controls for this connected session (session overrides from context.publishInfo({controls, surfaces}), then fixed declaration). Not snapshot fields. Omitted if no descriptors are available.
+          properties:
+            grindSetting:
+              $ref: '#/components/schemas/GrinderSettingDescriptor'
+            rpmControl:
+              $ref: '#/components/schemas/GrinderRpmDescriptor'
+        surfaces:
+          type: array
+          description: Currently available pre-authorized surfaces (availability from context.publishInfo({controls, surfaces})), including an empty array when all declared surfaces are hidden. Omitted if none are declared.
+          items:
+            $ref: '#/components/schemas/PluginDeviceSurface'
+    GrinderSettingDescriptor:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind]
+          properties:
+            kind:
+              type: string
+              enum: [opaque]
+        - type: object
+          additionalProperties: false
+          required: [kind, min, max]
+          properties:
+            kind:
+              type: string
+              enum: [numeric]
+            min:
+              type: number
+            max:
+              type: number
+            step:
+              type: number
+              minimum: 0
+              exclusiveMinimum: true
+              description: Rendering hint; no command rounding or divisibility requirement.
+        - type: object
+          additionalProperties: false
+          required: [kind, values]
+          properties:
+            kind:
+              type: string
+              enum: [enumerated]
+            values:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items:
+                type: string
+    GrinderRpmDescriptor:
+      type: object
+      additionalProperties: false
+      required: [kind, min, max]
+      properties:
+        kind:
+          type: string
+          enum: [numeric]
+        min:
+          type: integer
+          minimum: 0
+        max:
+          type: integer
+          minimum: 0
+        step:
+          type: integer
+          minimum: 1
+          description: Rendering hint, not an RPM rounding rule.
+    PluginDeviceSurface:
+      type: object
+      additionalProperties: false
+      required: [id, role, href]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [settings, diagnostics]
+        label:
+          type: string
+        href:
+          type: string
+          description: Host-built same-plugin HTTP URL with query-encoded runtime deviceId.
+    GrinderSnapshot:
+      type: object
+      required: [timestamp, state]
+      additionalProperties: false
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Host-owned publication timestamp.
+        state:
+          type: string
+          enum: [idle, grinding, error, unknown]
+        setting:
+          type: string
+          description: Present only when grindSetting is declared and published.
+        rpm:
+          type: integer
+          minimum: 0
+          description: Present only when rpmControl is declared and published.
+        observedSetting:
+          type: string
+          description: Explicit setting observation, independent of grindSetting command support. Omitted when unavailable in this snapshot; never reuse a previous value.
+        observedRpm:
+          type: integer
+          minimum: 0
+          description: Explicit RPM observation, independent of rpmControl command support. Omitted when unavailable in this snapshot; never reuse a previous value.
+    GrinderSettingRequest:
+      type: object
+      required: [setting]
+      properties:
+        setting:
+          type: string
+    GrinderRpmRequest:
+      type: object
+      required: [rpm]
+      properties:
+        rpm:
+          type: integer
+          minimum: 0
     FlowSmoothingConfig:
       type: object
       required: [windowMs, movingAverageSamples]
@@ -5662,6 +6090,34 @@ components:
           type: string
           description: Error message (on failure)
 
+    DeviceInventory:
+      type: object
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+        state:
+          type: string
+          enum: [discovered, connecting, connected, disconnecting, disconnected]
+        type:
+          type: string
+          enum: [machine, scale, sensor, grinder]
+        available:
+          type: boolean
+          description: >
+            true if the device is currently present in discovery or is actively
+            connected; false for a remembered device that is not present
+            (reported with state "disconnected"). Remembered devices persist
+            across restarts until forgotten via /api/v1/devices/forget.
+        connectionRole:
+          type: string
+          enum: [primary, auxiliary]
+          nullable: false
+          description: >
+            Present only for connected scale entries. Disconnected and
+            remembered entries omit this runtime ownership field.
+
     DeviceConnectResult:
       type: object
       required: [deviceId, operation, outcome, state, connectionError]
@@ -5686,6 +6142,11 @@ components:
         error:
           type: string
           nullable: true
+        connectionRole:
+          type: string
+          enum: [primary, auxiliary]
+          nullable: false
+          description: Present for successful scale connections.
 
     ConnectionError:
       type: object
@@ -6031,10 +6492,12 @@ components:
         targetPressure:
           type: number
         mixTemperature:
+          description: On classic DE1 machines, this is not a reliable measurement of dispensed hot-water outlet temperature while state is hotWater.
           type: number
         groupTemperature:
           type: number
         targetMixTemperature:
+          description: Requested mix temperature target; during hotWater on classic DE1 this is the requested hot-water temperature, not a measured outlet temperature.
           type: number
         targetGroupTemperature:
           type: number
@@ -6570,6 +7033,11 @@ components:
           type: string
           nullable: true
           example: "AA:BB:CC:DD:EE:FF"
+        preferredGrinderDeviceId:
+          description: Runtime grinder deviceId to connect when it appears in normal scan results. This is not a persisted grinderId.
+          type: string
+          nullable: true
+          example: "plugin:grinder.example:grinder:one"
         defaultSkinId:
           description: ID of the default WebUI skin to serve
           type: string
@@ -6668,6 +7136,11 @@ components:
           type: string
           nullable: true
           example: "AA:BB:CC:DD:EE:FF"
+        preferredGrinderDeviceId:
+          description: Runtime grinder deviceId preferred during normal scans. This is not a persisted grinderId.
+          type: string
+          nullable: true
+          example: "plugin:grinder.example:grinder:one"
         defaultSkinId:
           description: ID of the default WebUI skin being served
           type: string
@@ -7026,6 +7499,14 @@ components:
         enjoyment:
           type: number
           nullable: true
+          minimum: 0
+          maximum: 10
+          description: >-
+            Subjective rating on Decaid's 0-10 scale. de1app and Visualizer both
+            use a 0-100 scale; the de1app importer and the Visualizer plugin
+            convert at their boundaries. PUT /shots/{id} rejects a value outside
+            0-10. Unambiguous ratings stored on the old 0-100 scale are repaired
+            by the schema 6 database migration.
         espressoNotes:
           type: string
           nullable: true
@@ -7275,14 +7756,50 @@ components:
                 pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
               type:
                 type: string
-                enum: [sensor, scale]
+                enum: [sensor, scale, grinder]
               capabilities:
                 type: array
                 uniqueItems: true
-                description: Scale-only capabilities. displayControl and disconnectToSleep are mutually exclusive.
+                description: Scale or Grinder capabilities, interpreted according to driver type. Scale displayControl and disconnectToSleep are mutually exclusive.
                 items:
                   type: string
-                  enum: [battery, flow, timerTelemetry, tare, timerControl, displayControl, disconnectToSleep]
+                  enum: [battery, flow, timerTelemetry, tare, timerControl, displayControl, disconnectToSleep, startStop, grindSetting, rpmControl]
+              observations:
+                type: array
+                uniqueItems: true
+                description: Grinder-only explicit observations, independent of command capabilities. Unsupported names and declarations on other driver types are rejected. Does not grant write support or expose controls. Omission declares no observations.
+                items:
+                  type: string
+                  enum: [setting, rpm]
+              controls:
+                type: object
+                additionalProperties: false
+                description: Optional fixed descriptors for declared Grinder capabilities only.
+                properties:
+                  grindSetting:
+                    $ref: '#/components/schemas/GrinderSettingDescriptor'
+                  rpmControl:
+                    $ref: '#/components/schemas/GrinderRpmDescriptor'
+              surfaces:
+                type: array
+                maxItems: 8
+                description: Pre-authorized device-type-agnostic surfaces; requires api permission and a declared same-plugin HTTP endpoint. IDs must be unique, with at most one settings role.
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [id, role, endpoint]
+                  properties:
+                    id:
+                      type: string
+                      description: Unique safe driver-local identifier.
+                    role:
+                      type: string
+                      enum: [settings, diagnostics]
+                    endpoint:
+                      type: string
+                      description: Safe non-reserved same-plugin declared HTTP endpoint ID.
+                    label:
+                      type: string
               ble:
                 type: object
                 additionalProperties: false
@@ -7900,6 +8417,17 @@ components:
           nullable: true
           description: Grinder model name (display string)
           example: "Niche Zero"
+        grinderBurrs:
+          type: string
+          nullable: true
+          description: |
+            Burrs fitted to the grinder, snapshotted when the shot is stored so
+            later edits to the grinder record do not rewrite shot history.
+            Resolved from the linked grinder whenever `grinderId` is set, which
+            replaces a value inherited from a repeated shot; a context with no
+            `grinderId` keeps the value it was given. Send an explicit null to
+            clear it.
+          example: "SSP HU"
         grinderSetting:
           type: string
           nullable: true
@@ -7988,6 +8516,17 @@ components:
           nullable: true
           description: Grinder model name (display string)
           example: "Niche Zero"
+        grinderBurrs:
+          type: string
+          nullable: true
+          description: |
+            Burrs fitted to the grinder, snapshotted when the shot is stored so
+            later edits to the grinder record do not rewrite shot history.
+            Resolved from the linked grinder whenever `grinderId` is set, which
+            replaces a value inherited from a repeated shot; a context with no
+            `grinderId` keeps the value it was given. Send an explicit null to
+            clear it.
+          example: "SSP HU"
         grinderSetting:
           type: string
           nullable: true
