@@ -8,13 +8,47 @@ import 'package:reaprime/src/models/device/led_strip.dart';
 
 import '../../../../../../helpers/fake_ble_transport.dart';
 
+class _PaletteTransport extends FakeBleTransport {
+  final palette = <int, int>{};
+
+  @override
+  Future<void> write(
+    String serviceUUID,
+    String characteristicUUID,
+    Uint8List data, {
+    bool withResponse = true,
+    Duration? timeout,
+  }) async {
+    if (characteristicUUID == Endpoint.writeToMMR.uuid && data.length >= 8) {
+      final address = (data[1] << 16) | (data[2] << 8) | data[3];
+      if ([0x00803898, 0x0080389C, 0x008038A0, 0x008038A4].contains(address)) {
+        palette[address] = ByteData.sublistView(
+          data,
+          4,
+          8,
+        ).getUint32(0, Endian.little);
+      }
+    }
+    await super.write(
+      serviceUUID,
+      characteristicUUID,
+      data,
+      withResponse: withResponse,
+      timeout: timeout,
+    );
+  }
+}
+
 void main() {
   group('LedStripCapability', () {
     late FakeBleTransport transport;
     late Bengle bengle;
 
-    Future<void> connect({bool queuePalette = true}) async {
-      transport = FakeBleTransport();
+    Future<void> connect({
+      bool queuePalette = true,
+      FakeBleTransport? deviceTransport,
+    }) async {
+      transport = deviceTransport ?? FakeBleTransport();
       bengle = Bengle(transport: transport);
       transport.queueOnConnectResponses(v13Model: 128);
       if (queuePalette) {
@@ -26,8 +60,9 @@ void main() {
       await bengle.onConnect();
     }
 
-    tearDown(() {
-      transport.dispose();
+    tearDown(() async {
+      await bengle.disposeLedStrip();
+      await transport.dispose();
     });
 
     test('ledStripState returns a nullable stream', () async {
@@ -94,74 +129,105 @@ void main() {
       },
     );
 
-    test(
-      'setLedStrip writes ONLY the colour that changed, with 8-bit RGB',
-      () async {
-        await connect();
-        transport.writes.clear();
-        await bengle.setLedStrip(
-          LedStripState(
-            frontStrip: ZoneLedState(
-              awake: const Color16(0xFFFF, 0x8000, 0x0000),
-              sleeping: const Color16(0x3000, 0x2000, 0x1000),
-            ),
-            backStrip: ZoneLedState(
-              awake: const Color16(0x0000, 0xFF00, 0x0000),
-              sleeping: Color16.off,
-            ),
-            frontSwitch: const ZoneLedState(
-              awake: Color16(0xFFFF, 0xFFFF, 0xFFFF),
-              sleeping: Color16(0xFFFF, 0xFFFF, 0xFFFF),
-            ),
+    test('setLedStrip writes all four stored colours with 8-bit RGB', () async {
+      await connect();
+      transport.writes.clear();
+      await bengle.setLedStrip(
+        LedStripState(
+          frontStrip: ZoneLedState(
+            awake: const Color16(0xFFFF, 0x8000, 0x0000),
+            sleeping: const Color16(0x3000, 0x2000, 0x1000),
           ),
+          backStrip: ZoneLedState(
+            awake: const Color16(0x0000, 0xFF00, 0x0000),
+            sleeping: Color16.off,
+          ),
+          frontSwitch: const ZoneLedState(
+            awake: Color16(0xFFFF, 0xFFFF, 0xFFFF),
+            sleeping: Color16(0xFFFF, 0xFFFF, 0xFFFF),
+          ),
+        ),
+      );
+
+      final writes = transport.writes
+          .where((w) => w.characteristicUUID == Endpoint.writeToMMR.uuid)
+          .toList();
+      expect(writes.length, 4);
+
+      void expectWrite(BengleMmr mmr, int rgb) {
+        final frame = writes.firstWhere(
+          (w) =>
+              w.data[1] ==
+                  (ByteData(
+                    4,
+                  )..setInt32(0, mmr.address, Endian.big)).getUint8(1) &&
+              w.data[2] ==
+                  (ByteData(
+                    4,
+                  )..setInt32(0, mmr.address, Endian.big)).getUint8(2) &&
+              w.data[3] ==
+                  (ByteData(
+                    4,
+                  )..setInt32(0, mmr.address, Endian.big)).getUint8(3),
         );
+        final payload = ByteData.sublistView(frame.data, 4, 8);
+        expect(payload.getUint32(0, Endian.little), rgb);
+      }
 
-        final writes = transport.writes
-            .where((w) => w.characteristicUUID == Endpoint.writeToMMR.uuid)
-            .toList();
-        expect(writes.length, 1);
+      expectWrite(BengleMmr.frontLedAwake, 0xFF8000);
+      expectWrite(BengleMmr.frontLedSleep, 0x302010);
+      expectWrite(BengleMmr.rearLedAwake, 0x00FF00);
+      expectWrite(BengleMmr.rearLedSleep, 0x000000);
 
-        void expectWrite(BengleMmr mmr, int rgb) {
-          final frame = writes.firstWhere(
-            (w) =>
-                w.data[1] ==
-                    (ByteData(
-                      4,
-                    )..setInt32(0, mmr.address, Endian.big)).getUint8(1) &&
-                w.data[2] ==
-                    (ByteData(
-                      4,
-                    )..setInt32(0, mmr.address, Endian.big)).getUint8(2) &&
-                w.data[3] ==
-                    (ByteData(
-                      4,
-                    )..setInt32(0, mmr.address, Endian.big)).getUint8(3),
-          );
-          final payload = ByteData.sublistView(frame.data, 4, 8);
-          expect(payload.getUint32(0, Endian.little), rgb);
-        }
-
-        expectWrite(BengleMmr.rearLedSleep, 0x000000);
-
-        final state = (await bengle.getLedStripState())!;
-        expect(state.frontStrip.awake, const Color16(0xFF00, 0x8000, 0x0000));
-        expect(state.frontSwitch.awake, const Color16(0xFF00, 0x8000, 0x0000));
-      },
-    );
+      final state = (await bengle.getLedStripState())!;
+      expect(state.frontStrip.awake, const Color16(0xFF00, 0x8000, 0x0000));
+      expect(state.frontSwitch.awake, const Color16(0xFF00, 0x8000, 0x0000));
+    });
 
     List<FakeBleWrite> mmrWrites() => transport.writes
         .where((w) => w.characteristicUUID == Endpoint.writeToMMR.uuid)
         .toList();
 
-    test('re-saving the palette already held writes nothing', () async {
-      await connect();
-      final held = (await bengle.getLedStripState())!;
-      transport.writes.clear();
+    test(
+      'saving restores every stored zone despite a stale palette cache',
+      () async {
+        final firmware = _PaletteTransport();
+        await connect(deviceTransport: firmware);
+        final held = (await bengle.getLedStripState())!;
+        firmware.palette.addAll({
+          0x00803898: 0x123456,
+          0x008038A0: 0x234567,
+          0x0080389C: 0x345678,
+          0x008038A4: 0x456789,
+        });
+        transport.writes.clear();
 
-      await bengle.setLedStrip(held);
+        await bengle.setLedStrip(held);
 
-      expect(mmrWrites(), isEmpty);
-    });
+        expect(firmware.palette, {
+          0x00803898: 0xFF8000,
+          0x008038A0: 0x302010,
+          0x0080389C: 0x00FF00,
+          0x008038A4: 0x0000FF,
+        });
+        final writes = mmrWrites();
+        expect(writes, hasLength(4));
+        expect(
+          writes.map(
+            (w) => (
+              (w.data[1] << 16) | (w.data[2] << 8) | w.data[3],
+              ByteData.sublistView(w.data, 4, 8).getUint32(0, Endian.little),
+            ),
+          ),
+          [
+            (0x00803898, 0xFF8000),
+            (0x008038A0, 0x302010),
+            (0x0080389C, 0x00FF00),
+            (0x008038A4, 0x0000FF),
+          ],
+        );
+      },
+    );
 
     test(
       'a preview frame that repeats the shown colour writes nothing',
@@ -212,6 +278,96 @@ void main() {
       await bengle.previewLedStrip(front: colour);
 
       expect(mmrWrites().length, 1);
+    });
+
+    Future<void> showPreviewPair() => bengle.previewLedStrip(
+      front: const Color16(0x1100, 0x2200, 0x3300),
+      back: const Color16(0x4400, 0x5500, 0x6600),
+    );
+
+    void expectPreviewPair() {
+      expect(
+        mmrWrites().map(
+          (w) => (
+            (w.data[1] << 16) | (w.data[2] << 8) | w.data[3],
+            ByteData.sublistView(w.data, 4, 8).getUint32(0, Endian.little),
+          ),
+        ),
+        [(0x00803890, 0x112233), (0x00803894, 0x445566)],
+      );
+    }
+
+    for (final states in [
+      [0x02, 0x00],
+      [0x00, 0x02],
+    ]) {
+      test(
+        'preview is resent after state transition ${states.join(' to ')}',
+        () async {
+          await connect();
+          transport.writes.clear();
+          transport.emitNotification(Endpoint.stateInfo, [states.first, 0]);
+          await pumpEventQueue();
+          await showPreviewPair();
+          expectPreviewPair();
+          transport.writes.clear();
+          transport.emitNotification(Endpoint.stateInfo, [states.last, 0]);
+          await pumpEventQueue();
+
+          await showPreviewPair();
+
+          expectPreviewPair();
+        },
+      );
+    }
+
+    test('unchanged awake phase keeps preview deduplication', () async {
+      await connect();
+      transport.writes.clear();
+      transport.emitNotification(Endpoint.stateInfo, [0x02, 0]);
+      await pumpEventQueue();
+      await showPreviewPair();
+      expectPreviewPair();
+      transport.writes.clear();
+      transport.emitNotification(Endpoint.stateInfo, [0x02, 0]);
+      await pumpEventQueue();
+      transport.emitNotification(Endpoint.stateInfo, [0x04, 0]);
+      await pumpEventQueue();
+
+      await showPreviewPair();
+
+      expect(mmrWrites(), isEmpty);
+    });
+
+    test('preview is resent after a partially failed stored save', () async {
+      await connect();
+      transport.writes.clear();
+      await showPreviewPair();
+      transport.failMmrWritesForAddresses.add(BengleMmr.rearLedAwake.address);
+      await expectLater(
+        bengle.setLedStrip(LedStripState()),
+        throwsA(isA<StateError>()),
+      );
+      transport.failMmrWritesForAddresses.clear();
+      transport.writes.clear();
+
+      await showPreviewPair();
+
+      expectPreviewPair();
+    });
+
+    test('preview is resent after LED capability reinitialization', () async {
+      await connect();
+      transport.writes.clear();
+      await showPreviewPair();
+      await bengle.disposeLedStrip();
+      transport.queuePaletteHydrationResponses();
+      await bengle.initLedStrip();
+      transport.writes.clear();
+
+      await showPreviewPair();
+
+      expectPreviewPair();
     });
 
     test('non-byte-aligned 16-bit input is quantized in the cache', () async {

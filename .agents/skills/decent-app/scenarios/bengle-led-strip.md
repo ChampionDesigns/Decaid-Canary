@@ -10,7 +10,12 @@ The firmware keeps SHOWING a colour apart from DECIDING one. The four palette
 registers are stored; the two live registers light the strip at once and are
 recomputed from the stored pair at the next sleep or wake. Preview writes only
 the live pair, which is the only way to show an asleep colour to someone
-editing it on an awake machine.
+editing it on an awake machine. Firmware rheasman/Bengle#114 makes the live
+pair volatile (PERM_RW); the stored rows remain persistent (PERM_RWD).
+Firmware restores the live pair at boot and every sleep/wake transition.
+There is no firmware-build gate: on pre-#114 firmware, each changed preview
+frame still flash-writes the live pair. A palette save always writes all four
+stored rows so another client's changes cannot be hidden by the app cache.
 
 ## Preconditions
 

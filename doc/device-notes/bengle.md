@@ -18,11 +18,12 @@ Domain knowledge for the Bengle machine implementation
 `lib/src/controllers/presence_controller.dart` Bengle sync,
 `lib/src/services/webserver/de1handler.dart` Bengle endpoints).
 
-All Bengle MMR knowledge below was verified against
+The original Bengle MMR surface below was verified against
 `BengleMainCPUFirmware` at tadelv/Bengle master `2377c7e0`
 (`src/Classes/Data/MMR.def` rows 39-61 and the consuming C++:
 `System.cpp`/`System.hpp`, `APIView.cpp`, `ShotMachine.cpp`,
-`CLoadCellCal.hpp`).
+`CLoadCellCal.hpp`). LED persistence was updated for rheasman/Bengle#114
+(merge `57e97b1445`); no released firmware build is required by the app.
 
 ## Supported firmware surface
 
@@ -91,22 +92,28 @@ endpoints 404 only on non-Bengle machines.
   product defaults (kSwitchDefaultAwake 0xFFF0C8 / kSwitchDefaultAsleep
   0x555043 in APIView.cpp — keep in sync) so an "LEDs off" strip never
   blanks a lit switch.
-- The live FrontLEDColor/RearLEDColor registers are persisted snapshots
-  overwritten on every state change; not a configuration surface. They are the
-  PREVIEW surface instead: `previewLedStrip` writes only these, so a colour is
-  shown without being decided, and `applyLEDsForGivenState` recomputes them from
-  the stored pair at the next sleep/wake transition. This is the only way to show
-  an asleep colour to someone editing it on an awake machine, because a stored
-  colour is applied only when the machine is already in that state.
-- Neither path writes a colour the machine already has. `setLedStrip` compares
-  each zone against the held palette, quantized the same way, and writes only what
-  moved: every one of the four stored registers reaches flash, so four writes per
-  save was four flash writes whatever changed. `previewLedStrip` remembers what
-  each live register was last sent and drops a repeated frame, because a colour
-  picker sends a frame per render and a resting finger otherwise keeps the write
-  path busy. `setLedStrip` clears that memory: a stored write makes the firmware
-  re-apply the pair for the current state, so the live registers have moved and
-  what they show is no longer the app's to remember.
+- After rheasman/Bengle#114 (merge `57e97b1445`), the live
+  FrontLEDColor (0x00803890) / RearLEDColor (0x00803894) registers are
+  volatile (PERM_RW), not persisted snapshots. The four stored rows above
+  remain PERM_RWD and persist. The firmware rewrites the live pair from the
+  stored palette at boot and on every sleep/wake transition.
+- `previewLedStrip` writes only the live pair, never the four stored rows.
+  Firmware #114 guarantees that a preview is volatile display state and
+  cannot become a stored decision by accident; choosing the live addresses
+  alone did not guarantee volatility on older firmware. No firmware-build
+  gate is required: on pre-#114 firmware, every changed preview frame still
+  flash-writes the live registers. The addresses and 4-byte payloads are
+  unchanged. A preview can show an asleep colour on an awake machine,
+  unlike a stored colour, which is applied only in its matching state.
+- `setLedStrip` always writes all four stored registers. Its cached palette
+  cannot prove what the firmware currently holds after another client writes;
+  a full save must restore the requested palette even when the cache is stale.
+  Per-frame flash-write avoidance belongs to preview, not to this single save.
+  `previewLedStrip` remembers what each live register was last sent and drops
+  a repeated frame. Sleep/wake phase changes and capability reinitialization
+  invalidate that memory. `setLedStrip` invalidates it before the first stored
+  write, since even a partially failed save can change the live output.
+  The state subscription is canceled when the capability is disposed.
 - The firmware stores 8 bits per RGB channel, so the app quantizes
   (`& 0xFF00`) before writing and publishes exactly the quantized
   representation that was written.

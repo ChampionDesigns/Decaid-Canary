@@ -11,43 +11,32 @@ mixin LedStripCapability on UnifiedDe1 {
 
   Future<LedStripState?> getLedStripState() => _ledStripState.first;
 
-  /// Store the palette. Only a zone whose colour changed is written.
   Future<void> setLedStrip(LedStripState state) async {
+    _forgetLedStripPreview();
     final stored = state.canonical();
-    final held = _ledStripState.valueOrNull?.canonical();
     try {
-      if (held?.frontStrip.awake != stored.frontStrip.awake) {
-        await writeMmrInt(
-          BengleMmr.frontLedAwake,
-          _toFirmwareRgb(stored.frontStrip.awake),
-        );
-      }
-      if (held?.frontStrip.sleeping != stored.frontStrip.sleeping) {
-        await writeMmrInt(
-          BengleMmr.frontLedSleep,
-          _toFirmwareRgb(stored.frontStrip.sleeping),
-        );
-      }
-      if (held?.backStrip.awake != stored.backStrip.awake) {
-        await writeMmrInt(
-          BengleMmr.rearLedAwake,
-          _toFirmwareRgb(stored.backStrip.awake),
-        );
-      }
-      if (held?.backStrip.sleeping != stored.backStrip.sleeping) {
-        await writeMmrInt(
-          BengleMmr.rearLedSleep,
-          _toFirmwareRgb(stored.backStrip.sleeping),
-        );
-      }
+      await writeMmrInt(
+        BengleMmr.frontLedAwake,
+        _toFirmwareRgb(stored.frontStrip.awake),
+      );
+      await writeMmrInt(
+        BengleMmr.frontLedSleep,
+        _toFirmwareRgb(stored.frontStrip.sleeping),
+      );
+      await writeMmrInt(
+        BengleMmr.rearLedAwake,
+        _toFirmwareRgb(stored.backStrip.awake),
+      );
+      await writeMmrInt(
+        BengleMmr.rearLedSleep,
+        _toFirmwareRgb(stored.backStrip.sleeping),
+      );
     } catch (e) {
       if (!_ledStripState.isClosed) {
         _ledStripState.add(null);
       }
       rethrow;
     }
-    _shownFront = null;
-    _shownBack = null;
     if (!_ledStripState.isClosed) {
       _ledStripState.add(stored);
     }
@@ -88,6 +77,12 @@ mixin LedStripCapability on UnifiedDe1 {
   /// The colour each live register was last sent, or null when unknown.
   int? _shownFront;
   int? _shownBack;
+  StreamSubscription<bool>? _ledStripSleepSubscription;
+
+  void _forgetLedStripPreview() {
+    _shownFront = null;
+    _shownBack = null;
+  }
 
   /// Put the strips back to the stored palette for the state the machine is in.
   ///
@@ -114,6 +109,13 @@ mixin LedStripCapability on UnifiedDe1 {
   }
 
   Future<void> initLedStrip() async {
+    await _ledStripSleepSubscription?.cancel();
+    _forgetLedStripPreview();
+    _ledStripSleepSubscription = notificationsFor(Endpoint.stateInfo)
+        .where((data) => data.lengthInBytes > 0)
+        .map((data) => data.getUint8(0) == De1StateEnum.sleep.hexValue)
+        .distinct()
+        .listen((_) => _forgetLedStripPreview());
     if (_ledStripState.isClosed) {
       _ledStripState = BehaviorSubject<LedStripState?>.seeded(null);
     }
@@ -150,6 +152,9 @@ mixin LedStripCapability on UnifiedDe1 {
   }
 
   Future<void> disposeLedStrip() async {
+    await _ledStripSleepSubscription?.cancel();
+    _ledStripSleepSubscription = null;
+    _forgetLedStripPreview();
     if (!_ledStripState.isClosed) {
       await _ledStripState.close();
     }
