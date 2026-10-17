@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_picker/src/platform/file_picker_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:logging/logging.dart';
 import 'package:reaprime/src/plugins/plugin_loader_service.dart';
 import 'package:reaprime/src/plugins/plugin_manifest.dart';
 import 'package:reaprime/src/plugins/plugin_source.dart';
@@ -10,6 +12,18 @@ import 'package:reaprime/src/plugins/plugin_source_service.dart';
 import 'package:reaprime/src/settings/plugins_settings_view.dart';
 import 'package:reaprime/src/widgets/page_action_menu.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
+
+class _FolderPicker extends FilePickerPlatform {
+  @override
+  Future<String?> getDirectoryPath({
+    String? dialogTitle,
+    bool lockParentWindow = false,
+    String? initialDirectory,
+  }) async => throw const FileSystemException(
+    'private folder diagnostics',
+    '/private/plugin.reaplugin',
+  );
+}
 
 class _FakeLoader extends Fake implements PluginLoaderService {
   _FakeLoader(this.plugins);
@@ -36,6 +50,13 @@ class _FakeLoader extends Fake implements PluginLoaderService {
   Future<void> setPluginAutoLoad(String pluginId, bool autoLoad) async {
     autoLoadChanges++;
   }
+
+  @override
+  Future<void> removePlugin(String pluginId) async =>
+      throw const FileSystemException(
+        'private removal diagnostics',
+        '/private/plugin.reaplugin',
+      );
 
   @override
   PluginManifest? getPluginManifest(String pluginId) {
@@ -135,6 +156,70 @@ void main() {
     );
     await tester.pump();
   }
+
+  testWidgets('folder installation failure hides filesystem diagnostics', (
+    tester,
+  ) async {
+    final picker = FilePickerPlatform.instance;
+    FilePickerPlatform.instance = _FolderPicker();
+    addTearDown(() => FilePickerPlatform.instance = picker);
+    await pumpView(
+      tester,
+      sourceService: _FakeSourceService(_FakeLoader(const [])),
+    );
+    await tester.tap(find.byTooltip('Plugin actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Install plugin'));
+    await tester.pumpAndSettle();
+    final install = tester
+        .widget<MenuItemButton>(
+          find.widgetWithText(MenuItemButton, 'Folder snapshot'),
+        )
+        .onPressed!;
+    await tester.runAsync(() async {
+      final failure = Logger('PluginsSettingsView').onRecord.firstWhere(
+        (record) => record.message == 'Failed to install plugin',
+      );
+      install();
+      await failure.timeout(const Duration(seconds: 10));
+    });
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        "Couldn't install the plugin. Check storage space and file permissions, then try again.",
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('private'), findsNothing);
+    expect(find.textContaining('FileSystemException'), findsNothing);
+  });
+
+  testWidgets('plugin removal failure hides filesystem diagnostics', (
+    tester,
+  ) async {
+    await pumpView(
+      tester,
+      sourceService: _FakeSourceService(_FakeLoader(const [])),
+      plugins: [manifest()],
+    );
+    await tester.tap(find.byIcon(LucideIcons.ellipsisVertical));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Remove'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        "Couldn't remove the plugin. Check storage space and file permissions, then try again.",
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('private'), findsNothing);
+    expect(find.textContaining('FileSystemException'), findsNothing);
+    expect(find.text('Sourced plugin'), findsOneWidget);
+  });
 
   testWidgets('offline plugin installation retries with the original options', (
     tester,

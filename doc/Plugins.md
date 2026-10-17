@@ -1429,6 +1429,8 @@ review for approval downloads. Changed candidates require fresh confirmation.
 Downgrades explain removal of the installed version and retain HTTP 409.
 Failed or partial batches return HTTP 500 after processing all items, retaining
 successes. Background failures stay quiet; installed plugins remain usable offline.
+Native folder installation and plugin removal also use plain-language guidance,
+with filesystem and parser diagnostics kept in logs.
 
 ### Bundled plugins
 

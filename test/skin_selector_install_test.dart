@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
+import 'package:file_picker/src/platform/file_picker_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
@@ -11,6 +13,26 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'helpers/mock_settings_service.dart';
+
+class _ZipPicker extends FilePickerPlatform {
+  @override
+  Future<FilePickerResult?> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    int compressionQuality = 0,
+    bool allowMultiple = false,
+    bool withData = false,
+    bool withReadStream = false,
+    bool lockParentWindow = false,
+    bool readSequential = false,
+    bool cancelUploadOnWindowBlur = true,
+  }) async => FilePickerResult([
+    PlatformFile(name: 'skin.zip', size: 0, path: '/private/skin.zip'),
+  ]);
+}
 
 class _FakeWebUIService extends Fake implements WebUIService {
   @override
@@ -52,6 +74,15 @@ class _FakeWebUIStorage extends Fake implements WebUIStorage {
   @override
   WebUISkin? getSkin(String id) =>
       _skins.where((skin) => skin.id == id).firstOrNull;
+
+  @override
+  Future<String> installFromPath(
+    String path, {
+    bool overwriteIfExists = true,
+  }) async {
+    if (installError != null) throw installError!;
+    return _skins.first.id;
+  }
 
   @override
   Future<void> installFromGitHubRelease(
@@ -120,6 +151,31 @@ Future<void> _openInstallMenu(WidgetTester tester, String item) async {
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets('local skin ZIP failure hides filesystem diagnostics', (
+    tester,
+  ) async {
+    final picker = FilePickerPlatform.instance;
+    FilePickerPlatform.instance = _ZipPicker();
+    addTearDown(() => FilePickerPlatform.instance = picker);
+    final storage = _FakeWebUIStorage()
+      ..installError = const FileSystemException(
+        'private filesystem diagnostics',
+        '/private/skin.zip',
+      );
+    await _pumpPage(tester, storage);
+
+    await _openInstallMenu(tester, 'ZIP file');
+
+    expect(
+      find.text(
+        "Couldn't install the skin. Check storage space and file permissions, then try again.",
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('private'), findsNothing);
+    expect(find.textContaining('FileSystemException'), findsNothing);
+  });
 
   testWidgets('the skin installation submenu fits a narrow screen', (
     tester,

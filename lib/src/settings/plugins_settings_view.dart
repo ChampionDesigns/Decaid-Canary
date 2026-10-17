@@ -860,7 +860,9 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
     } catch (e, st) {
       logger.warning('Failed to install plugin', e, st);
       if (context.mounted) {
-        _showSnackBar(context, 'Failed to install plugin: $e', isError: true);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(remoteErrorSnackBar(e, action: 'install the plugin'));
       }
     } finally {
       try {
@@ -905,7 +907,9 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
       } catch (e, st) {
         Logger('PluginsSettingsView').warning('Failed to remove plugin', e, st);
         if (context.mounted) {
-          _showSnackBar(context, 'Failed to remove plugin: $e', isError: true);
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(remoteErrorSnackBar(e, action: 'remove the plugin'));
         }
       }
     }
