@@ -303,7 +303,11 @@ class De1Handler {
       return withQueuedDe1((de1) async {
         final gate = _bengleFirmwareGate(de1, 'ledStrip');
         if (gate != null) return gate;
-        await (de1 as BengleInterface).clearLedStripPreview();
+        try {
+          await (de1 as BengleInterface).clearLedStripPreview();
+        } on LedStripStateUnavailableException catch (e) {
+          return jsonServiceUnavailable({'error': e.message});
+        }
         return jsonAccepted();
       });
     });

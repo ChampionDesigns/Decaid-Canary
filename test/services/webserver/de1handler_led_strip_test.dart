@@ -368,6 +368,53 @@ void main() {
       expect(await after.readAsString(), stored);
     });
 
+    test(
+      'clear returns 503 when palette hydration remains unavailable',
+      () async {
+        transport = FakeBleTransport();
+        transport.queueOnConnectResponses(v13Model: 128);
+        transport.failMmrReadsForAddresses.addAll([
+          BengleMmr.frontLedAwake.address,
+          BengleMmr.frontLedSleep.address,
+          BengleMmr.rearLedAwake.address,
+          BengleMmr.rearLedSleep.address,
+        ]);
+        await wireWith(Bengle(transport: transport));
+        addTearDown(() async {
+          await controller.dispose();
+          await transport.dispose();
+        });
+
+        final res = await post('$previewPath/clear');
+
+        expect(res.statusCode, 503);
+        expect(jsonDecode(await res.readAsString()), {
+          'error':
+              'ledStrip state unavailable (hydration failed or not yet complete)',
+        });
+      },
+    );
+
+    test(
+      'clear uses the latest stateInfo after sleep without a shot',
+      () async {
+        await connectBengle();
+        transport.emitNotification(Endpoint.stateInfo, [0x02, 0]);
+        await pumpEventQueue();
+        transport.emitNotification(Endpoint.bengleShotSample, Uint8List(28));
+        await pumpEventQueue();
+        expect((await post(previewPath, preview)).statusCode, 202);
+        transport.writes.clear();
+
+        transport.emitNotification(Endpoint.stateInfo, [0x00, 0]);
+        await pumpEventQueue();
+        final res = await post('$previewPath/clear');
+
+        expect(res.statusCode, 202);
+        expect(mmrWrites(), [(0x00803890, 0x302010), (0x00803894, 0x0000FF)]);
+      },
+    );
+
     for (final asleep in [false, true]) {
       test('preview then clear restores the ${asleep ? 'sleeping' : 'awake'} '
           'palette through live writes', () async {

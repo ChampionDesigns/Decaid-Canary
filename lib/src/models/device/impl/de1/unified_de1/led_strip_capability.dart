@@ -61,15 +61,21 @@ mixin LedStripCapability on UnifiedDe1 {
     if (front != null) {
       final rgb = _toFirmwareRgb(front);
       if (rgb != _shownFront) {
+        final generation = _ledStripPreviewGeneration;
         await writeMmrInt(BengleMmr.frontLedColor, rgb);
-        _shownFront = rgb;
+        if (generation == _ledStripPreviewGeneration) {
+          _shownFront = rgb;
+        }
       }
     }
     if (back != null) {
       final rgb = _toFirmwareRgb(back);
       if (rgb != _shownBack) {
+        final generation = _ledStripPreviewGeneration;
         await writeMmrInt(BengleMmr.rearLedColor, rgb);
-        _shownBack = rgb;
+        if (generation == _ledStripPreviewGeneration) {
+          _shownBack = rgb;
+        }
       }
     }
   }
@@ -77,9 +83,11 @@ mixin LedStripCapability on UnifiedDe1 {
   /// The colour each live register was last sent, or null when unknown.
   int? _shownFront;
   int? _shownBack;
+  int _ledStripPreviewGeneration = 0;
   StreamSubscription<bool>? _ledStripSleepSubscription;
 
   void _forgetLedStripPreview() {
+    _ledStripPreviewGeneration++;
     _shownFront = null;
     _shownBack = null;
   }
@@ -89,10 +97,21 @@ mixin LedStripCapability on UnifiedDe1 {
   /// A preview otherwise stands until the next sleep or wake transition, which may
   /// be hours away, so leaving a picker has to end it explicitly.
   Future<void> clearLedStripPreview() async {
-    final state = _ledStripState.value;
-    if (state == null) return;
-    final snapshot = await currentSnapshot.first;
-    final asleep = snapshot.state.state == MachineState.sleeping;
+    var state = _ledStripState.value;
+    if (state == null) {
+      await _hydrateLedStrip();
+      state = _ledStripState.value;
+    }
+    if (state == null) {
+      throw LedStripStateUnavailableException(
+        'ledStrip state unavailable (hydration failed or not yet complete)',
+      );
+    }
+    final machineState = latestMachineState;
+    if (machineState == null) {
+      throw StateError('Machine state unavailable');
+    }
+    final asleep = machineState == MachineState.sleeping;
     await previewLedStrip(
       front: asleep ? state.frontStrip.sleeping : state.frontStrip.awake,
       back: asleep ? state.backStrip.sleeping : state.backStrip.awake,

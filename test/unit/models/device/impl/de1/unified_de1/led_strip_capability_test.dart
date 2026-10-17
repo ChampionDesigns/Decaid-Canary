@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +8,42 @@ import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/led_strip.dart';
 
 import '../../../../../../helpers/fake_ble_transport.dart';
+
+class _BlockingPreviewTransport extends FakeBleTransport {
+  final int blockedAddress;
+  final writeStarted = Completer<void>();
+  final releaseWrite = Completer<void>();
+  bool _blocked = false;
+
+  _BlockingPreviewTransport(this.blockedAddress);
+
+  @override
+  Future<void> write(
+    String serviceUUID,
+    String characteristicUUID,
+    Uint8List data, {
+    bool withResponse = true,
+    Duration? timeout,
+  }) async {
+    final address = data.length >= 4
+        ? (data[1] << 16) | (data[2] << 8) | data[3]
+        : null;
+    if (characteristicUUID == Endpoint.writeToMMR.uuid &&
+        address == blockedAddress &&
+        !_blocked) {
+      _blocked = true;
+      writeStarted.complete();
+      await releaseWrite.future;
+    }
+    await super.write(
+      serviceUUID,
+      characteristicUUID,
+      data,
+      withResponse: withResponse,
+      timeout: timeout,
+    );
+  }
+}
 
 class _PaletteTransport extends FakeBleTransport {
   final palette = <int, int>{};
@@ -229,6 +266,74 @@ void main() {
       },
     );
 
+    test('clear rehydrates a missing palette before restoring it', () async {
+      final failing = FakeBleTransport();
+      failing.failMmrReadsForAddresses.addAll([
+        BengleMmr.frontLedAwake.address,
+        BengleMmr.frontLedSleep.address,
+        BengleMmr.rearLedAwake.address,
+        BengleMmr.rearLedSleep.address,
+      ]);
+      await connect(queuePalette: false, deviceTransport: failing);
+      failing.failMmrReadsForAddresses.clear();
+      failing.queueMmrResponseInt(BengleMmr.frontLedAwake, 0xFF8000);
+      failing.queueMmrResponseInt(BengleMmr.frontLedSleep, 0x302010);
+      failing.queueMmrResponseInt(BengleMmr.rearLedAwake, 0x00FF00);
+      failing.queueMmrResponseInt(BengleMmr.rearLedSleep, 0x0000FF);
+      failing.writes.clear();
+
+      await bengle.clearLedStripPreview();
+
+      expect(
+        mmrWrites().map(
+          (w) => ByteData.sublistView(w.data, 4, 8).getUint32(0, Endian.little),
+        ),
+        [0x302010, 0x0000FF],
+      );
+      expect(await bengle.getLedStripState(), isNotNull);
+    });
+
+    test('clear uses stateInfo after a sleep without a new shot', () async {
+      await connect();
+      final snapshotSubscription = bengle.currentSnapshot.listen((_) {});
+      addTearDown(snapshotSubscription.cancel);
+      transport.emitNotification(Endpoint.stateInfo, [0x02, 0]);
+      await pumpEventQueue();
+      transport.emitNotification(Endpoint.bengleShotSample, Uint8List(28));
+      await pumpEventQueue();
+      transport.writes.clear();
+
+      transport.emitNotification(Endpoint.stateInfo, [0x00, 0]);
+      await pumpEventQueue();
+      await bengle.clearLedStripPreview();
+
+      expect(
+        mmrWrites().map(
+          (w) => ByteData.sublistView(w.data, 4, 8).getUint32(0, Endian.little),
+        ),
+        [0x302010, 0x0000FF],
+      );
+    });
+
+    test(
+      'clear rejects an unavailable palette instead of succeeding',
+      () async {
+        final failing = FakeBleTransport();
+        failing.failMmrReadsForAddresses.addAll([
+          BengleMmr.frontLedAwake.address,
+          BengleMmr.frontLedSleep.address,
+          BengleMmr.rearLedAwake.address,
+          BengleMmr.rearLedSleep.address,
+        ]);
+        await connect(queuePalette: false, deviceTransport: failing);
+
+        await expectLater(
+          bengle.clearLedStripPreview(),
+          throwsA(isA<StateError>()),
+        );
+      },
+    );
+
     test(
       'a preview frame that repeats the shown colour writes nothing',
       () async {
@@ -338,6 +443,48 @@ void main() {
 
       expect(mmrWrites(), isEmpty);
     });
+
+    test(
+      'front preview completion cannot restore an invalidated cache',
+      () async {
+        final blocking = _BlockingPreviewTransport(0x00803890);
+        await connect(deviceTransport: blocking);
+        transport.writes.clear();
+        const colour = Color16(0x1100, 0x2200, 0x3300);
+        final preview = bengle.previewLedStrip(front: colour);
+        await blocking.writeStarted.future;
+        transport.emitNotification(Endpoint.stateInfo, [0x02, 0]);
+        await pumpEventQueue();
+        blocking.releaseWrite.complete();
+        await preview;
+        transport.writes.clear();
+
+        await bengle.previewLedStrip(front: colour);
+
+        expect(mmrWrites(), hasLength(1));
+      },
+    );
+
+    test(
+      'rear preview completion cannot restore an invalidated cache',
+      () async {
+        final blocking = _BlockingPreviewTransport(0x00803894);
+        await connect(deviceTransport: blocking);
+        transport.writes.clear();
+        const colour = Color16(0x1100, 0x2200, 0x3300);
+        final preview = bengle.previewLedStrip(back: colour);
+        await blocking.writeStarted.future;
+        transport.emitNotification(Endpoint.stateInfo, [0x02, 0]);
+        await pumpEventQueue();
+        blocking.releaseWrite.complete();
+        await preview;
+        transport.writes.clear();
+
+        await bengle.previewLedStrip(back: colour);
+
+        expect(mmrWrites(), hasLength(1));
+      },
+    );
 
     test('preview is resent after a partially failed stored save', () async {
       await connect();

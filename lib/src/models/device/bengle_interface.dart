@@ -5,6 +5,10 @@ import 'package:reaprime/src/models/device/led_strip.dart';
 import 'package:reaprime/src/models/device/scale.dart';
 import 'package:reaprime/src/models/device/scale_calibration.dart';
 
+class LedStripStateUnavailableException extends StateError {
+  LedStripStateUnavailableException(super.message);
+}
+
 abstract class BengleInterface extends De1Interface {
   Future<ScaleCalibrationState> getScaleCalibrationState();
 
