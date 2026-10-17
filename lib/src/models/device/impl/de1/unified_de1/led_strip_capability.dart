@@ -109,7 +109,9 @@ mixin LedStripCapability on UnifiedDe1 {
     }
     final machineState = latestMachineState;
     if (machineState == null) {
-      throw StateError('Machine state unavailable');
+      throw LedStripStateUnavailableException(
+        'machine state unavailable (stateInfo not yet received)',
+      );
     }
     final asleep = machineState == MachineState.sleeping;
     await previewLedStrip(

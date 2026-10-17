@@ -725,7 +725,7 @@ paths:
         "404":
           description: Machine connected but does not support LED strip
         "503":
-          description: Machine write queue is full
+          description: Machine write queue is full, or the stored palette or machine state is not available yet (hydration failed or has not completed); retrying after hydration may succeed
         "500":
           description: No machine was connected, the machine changed during the write, or the write failed
 

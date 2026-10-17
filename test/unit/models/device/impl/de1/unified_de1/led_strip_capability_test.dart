@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle_mmr.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
@@ -329,7 +330,7 @@ void main() {
 
         await expectLater(
           bengle.clearLedStripPreview(),
-          throwsA(isA<StateError>()),
+          throwsA(isA<LedStripStateUnavailableException>()),
         );
       },
     );
