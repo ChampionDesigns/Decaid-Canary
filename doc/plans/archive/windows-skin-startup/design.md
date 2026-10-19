@@ -52,6 +52,15 @@ missing native creation from a created browser whose page did not load, without
 logging URLs or profile paths. Existing startup logs supply OS, app, and runtime
 versions; the pinned plugin still limits visibility into native HRESULT failures.
 
+Review found that switching simulated devices retained the old controller and
+loading state while replacing the keyed WebView. Reset that state when switching
+and invalidate callbacks from the previous attempt, including delayed renderer
+recovery. Preserve the timeout screen if the browser launcher returns false.
+Record creation as the page-load stage even when creation and load completion
+arrive in the same frame. Inject the compatibility operation through the
+constructor so disposal tests await a pending check on Linux as well as Windows;
+Flutter's target-platform override does not change `Platform.isWindows`.
+
 Preserve profile locations, browser data, dependency pins, navigation policy,
 and security settings. Do not add automatic retries or claim to fix the unknown
 native trigger. PR #998 concerns online update-error reporting, not native

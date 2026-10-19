@@ -68,8 +68,10 @@ On Windows, an embedded skin that has not finished its initial load within
 30 seconds shows an error with **Open in Browser** and **Go to Dashboard**
 instead of an indefinite spinner. The log distinguishes browser creation from
 page loading. The pending WebView remains mounted and can recover if loading
-finishes later. This does not move or clear browser storage, retry downloads,
-or identify the native cause of a startup failure.
+finishes later. Replacing the simulated device starts a new loading attempt;
+callbacks from the previous view cannot complete it. A failed browser launch
+keeps the recovery screen available. This does not move or clear browser storage,
+retry downloads, or identify the native cause of a startup failure.
 
 ### Live Camera Access on Android, iOS and macOS
 

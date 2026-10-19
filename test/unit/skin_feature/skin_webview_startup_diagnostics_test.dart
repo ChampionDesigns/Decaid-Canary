@@ -127,9 +127,15 @@ void main() {
       await tester.pump(const Duration(seconds: 31));
       await tester.pumpWidget(const SizedBox.shrink());
 
-      expect(_events(records).map((event) => event['action']), [
+      final events = _events(records);
+      expect(events.map((event) => event['action']), [
         'started',
         'created',
+        'loaded',
+      ]);
+      expect(events.map((event) => event['stage']), [
+        'webview-creation',
+        'page-load',
         'loaded',
       ]);
     },

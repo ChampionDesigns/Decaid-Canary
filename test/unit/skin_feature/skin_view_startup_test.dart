@@ -10,6 +10,7 @@ import 'package:reaprime/src/launcher/launcher_view.dart';
 import 'package:reaprime/src/services/webview_compatibility_checker.dart';
 import 'package:reaprime/src/services/webview_log_service.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
+import 'package:reaprime/src/skin_feature/simulated_webview_device.dart';
 import 'package:reaprime/src/skin_feature/skin_view.dart';
 import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
@@ -67,8 +68,9 @@ class _UrlLauncher extends Fake
     with MockPlatformInterfaceMixin
     implements UrlLauncherPlatform {
   final void Function(Uri, PreferredLaunchMode) record;
+  final bool launchResult;
 
-  _UrlLauncher(this.record);
+  _UrlLauncher(this.record, {this.launchResult = true});
 
   @override
   Future<bool> canLaunch(String url) async => true;
@@ -76,18 +78,19 @@ class _UrlLauncher extends Fake
   @override
   Future<bool> launchUrl(String url, LaunchOptions options) async {
     record(Uri.parse(url), options.mode);
-    return true;
+    return launchResult;
   }
 
   @override
   Future<bool> supportsMode(PreferredLaunchMode mode) async => true;
 }
 
-Future<void> _pumpSkin(WidgetTester tester, {Future<String?>? version}) async {
+Future<void> _pumpSkin(
+  WidgetTester tester, {
+  Future<CompatibilityResult> Function()? checkCompatibility,
+}) async {
   final previous = InAppWebViewPlatform.instance;
-  InAppWebViewPlatform.instance = _WebViewPlatform(
-    version ?? Future.value('test'),
-  );
+  InAppWebViewPlatform.instance = _WebViewPlatform(Future.value('test'));
   WebViewCompatibilityChecker.clearCache();
   final settings = SettingsController(MockSettingsService());
   final logs = WebViewLogService(logDirectoryPath: '.');
@@ -121,6 +124,9 @@ Future<void> _pumpSkin(WidgetTester tester, {Future<String?>? version}) async {
         deviceIp: '127.0.0.1',
         displayController: display,
         port: 24800,
+        checkCompatibility:
+            checkCompatibility ??
+            WebViewCompatibilityChecker.checkCompatibility,
       ),
     ),
   );
@@ -164,27 +170,88 @@ void main() {
     }, variant: windows);
   }
 
-  testWidgets(
-    'Windows creation timeout retains the view and offers recovery',
-    (tester) async {
-      await _pumpSkin(tester);
-      await tester.pump(const Duration(seconds: 29));
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  testWidgets('failed browser launch keeps the timeout recovery screen', (
+    tester,
+  ) async {
+    final previous = UrlLauncherPlatform.instance;
+    UrlLauncherPlatform.instance = _UrlLauncher((_, _) {}, launchResult: false);
+    addTearDown(() => UrlLauncherPlatform.instance = previous);
+    await _pumpSkin(tester);
+    await tester.pump(const Duration(seconds: 30));
+    await tester.tap(find.text('Open in Browser'));
+    await tester.pumpAndSettle();
 
-      await tester.pump(const Duration(seconds: 1));
-      expect(find.text('WebView Error'), findsOneWidget);
+    expect(find.text('Dashboard'), findsNothing);
+    expect(find.text('WebView Error'), findsOneWidget);
+    expect(find.textContaining('Unable to open browser'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: windows);
+
+  for (final loaded in [false, true]) {
+    testWidgets('replacement starts fresh after loaded=$loaded', (
+      tester,
+    ) async {
+      final previous = simulatedWebViewDevice.value;
+      addTearDown(() => simulatedWebViewDevice.value = previous);
+      await _pumpSkin(tester);
+      final oldParams = _params(tester);
+      oldParams.onWebViewCreated!(controller);
+      if (loaded) oldParams.onLoadStop!(controller, url);
+      await tester.pump();
+
+      simulatedWebViewDevice.value = SimulatedWebViewDevice.teclastP80X;
+      await tester.pump();
+      final replacement = _params(tester);
+      expect(replacement, isNot(same(oldParams)));
+      await tester.pump(const Duration(seconds: 30));
       expect(
         find.textContaining('embedded browser did not start'),
         findsOneWidget,
       );
-      expect(find.text('Open in Browser'), findsOneWidget);
-      expect(find.text('Go to Dashboard'), findsOneWidget);
-      expect(find.byType(CircularProgressIndicator), findsNothing);
-      expect(find.byType(InAppWebView), findsOneWidget);
+
+      oldParams.onWebViewCreated!(controller);
+      oldParams.onLoadStop!(controller, url);
+      oldParams.onReceivedError!(
+        controller,
+        WebResourceRequest(url: url, isForMainFrame: true),
+        WebResourceError(
+          type: WebResourceErrorType.UNKNOWN,
+          description: 'old',
+        ),
+      );
+      await tester.pump();
+      expect(
+        find.textContaining('embedded browser did not start'),
+        findsOneWidget,
+      );
+
+      replacement.onWebViewCreated!(controller);
+      replacement.onLoadStop!(controller, url);
+      await tester.pump();
+      expect(find.text('WebView Error'), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
-    },
-    variant: windows,
-  );
+    }, variant: windows);
+  }
+
+  testWidgets('Windows creation timeout retains the view and offers recovery', (
+    tester,
+  ) async {
+    await _pumpSkin(tester);
+    await tester.pump(const Duration(seconds: 29));
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('WebView Error'), findsOneWidget);
+    expect(
+      find.textContaining('embedded browser did not start'),
+      findsOneWidget,
+    );
+    expect(find.text('Open in Browser'), findsOneWidget);
+    expect(find.text('Go to Dashboard'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byType(InAppWebView), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: windows);
 
   testWidgets(
     'Windows timeout distinguishes a created view from a loaded page',
@@ -237,29 +304,27 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   }, variant: windows);
 
-  testWidgets(
-    'a main-frame error is not overwritten by the Windows timeout',
-    (tester) async {
-      await _pumpSkin(tester);
-      _params(tester).onReceivedError!(
-        controller,
-        WebResourceRequest(url: url, isForMainFrame: true),
-        WebResourceError(
-          type: WebResourceErrorType.UNKNOWN,
-          description: 'connection refused',
-        ),
-      );
-      await tester.pump(const Duration(seconds: 31));
+  testWidgets('a main-frame error is not overwritten by the Windows timeout', (
+    tester,
+  ) async {
+    await _pumpSkin(tester);
+    _params(tester).onReceivedError!(
+      controller,
+      WebResourceRequest(url: url, isForMainFrame: true),
+      WebResourceError(
+        type: WebResourceErrorType.UNKNOWN,
+        description: 'connection refused',
+      ),
+    );
+    await tester.pump(const Duration(seconds: 31));
 
-      expect(
-        find.text('Failed to load skin: connection refused'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('30 seconds'), findsNothing);
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-    variant: windows,
-  );
+    expect(
+      find.text('Failed to load skin: connection refused'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('30 seconds'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: windows);
 
   testWidgets('disposing the Windows view cancels its startup timeout', (
     tester,
@@ -277,10 +342,20 @@ void main() {
   testWidgets(
     'a compatibility probe can finish after the Windows view closes',
     (tester) async {
-      final version = Completer<String?>();
-      await _pumpSkin(tester, version: version.future);
+      final compatibility = Completer<CompatibilityResult>();
+      var checks = 0;
+      await _pumpSkin(
+        tester,
+        checkCompatibility: () {
+          checks++;
+          return compatibility.future;
+        },
+      );
+      expect(checks, 1);
+      expect(find.text('Checking device compatibility...'), findsOneWidget);
+      expect(find.byType(InAppWebView), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
-      version.complete('test');
+      compatibility.complete(const CompatibilityResult.compatible());
       await tester.pump();
       expect(tester.takeException(), isNull);
     },
@@ -304,16 +379,14 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   }, variant: windows);
 
-  testWidgets(
-    'other platforms do not acquire a Windows startup timeout',
-    (tester) async {
-      await _pumpSkin(tester);
-      await tester.pump(const Duration(seconds: 31));
+  testWidgets('other platforms do not acquire a Windows startup timeout', (
+    tester,
+  ) async {
+    await _pumpSkin(tester);
+    await tester.pump(const Duration(seconds: 31));
 
-      expect(find.text('WebView Error'), findsNothing);
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-    variant: TargetPlatformVariant.only(TargetPlatform.android),
-  );
+    expect(find.text('WebView Error'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 }

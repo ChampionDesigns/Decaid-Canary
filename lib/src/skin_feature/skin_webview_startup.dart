@@ -84,7 +84,9 @@ class _SkinWebViewStartupState extends State<SkinWebViewStartup> {
         'attemptId': _attemptId,
         'skinId': widget.skinId,
         'port': widget.port,
-        'stage': !widget.isLoading
+        'stage': action == 'created'
+            ? 'page-load'
+            : !widget.isLoading
             ? 'loaded'
             : widget.isCreated
             ? 'page-load'

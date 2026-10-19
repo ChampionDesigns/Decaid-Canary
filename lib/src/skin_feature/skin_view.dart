@@ -89,6 +89,7 @@ class SkinView extends StatefulWidget {
     this.webView,
     required this.port,
     this.cameraTarget,
+    this.checkCompatibility = WebViewCompatibilityChecker.checkCompatibility,
   });
 
   final SettingsController settingsController;
@@ -99,6 +100,7 @@ class SkinView extends StatefulWidget {
   final Widget? webView;
   final int port;
   final SkinCameraTarget? Function()? cameraTarget;
+  final Future<CompatibilityResult> Function() checkCompatibility;
 
   static const routeName = '/skin';
 
@@ -122,6 +124,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
   static bool _globalTimersPaused = false;
 
   InAppWebViewController? _webViewController;
+  Object _webViewAttempt = Object();
   final _skinExitCoordinator = SkinExitCoordinator();
   Uri? _mainFrameUri;
   late final _camera = SkinCameraWebViewAccess(
@@ -141,6 +144,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    simulatedWebViewDevice.addListener(_resetWebView);
     if (Platform.isAndroid || Platform.isIOS) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     }
@@ -159,6 +163,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
       unawaited(_resumeWebViewTimers(controller, 'dispose'));
     }
     WidgetsBinding.instance.removeObserver(this);
+    simulatedWebViewDevice.removeListener(_resetWebView);
     if (Platform.isAndroid) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
@@ -244,7 +249,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
       }
     }
 
-    final result = await WebViewCompatibilityChecker.checkCompatibility();
+    final result = await widget.checkCompatibility();
     if (!mounted) return;
 
     setState(() {
@@ -479,13 +484,9 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
     _log.info('Opening WebUI in external browser: $url');
 
     try {
-      final canLaunch = await canLaunchUrl(url);
-      if (canLaunch) {
-        await launchUrl(url, mode: LaunchMode.externalApplication);
-
-        if (mounted) {
-          _exitToDashboard();
-        }
+      if (await canLaunchUrl(url) &&
+          await launchUrl(url, mode: LaunchMode.externalApplication)) {
+        if (mounted) _exitToDashboard();
       } else {
         _log.warning('Cannot launch URL: $url');
         if (mounted) {
@@ -588,6 +589,8 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
 
   Widget _buildWebView(SimulatedWebViewDevice? simulatedDevice, bool texture) {
     if (widget.webView != null) return widget.webView!;
+    final attempt = _webViewAttempt;
+    bool isCurrentView() => mounted && identical(attempt, _webViewAttempt);
     return InAppWebView(
       key: ValueKey(simulatedDevice?.id ?? 'native-webview'),
       initialUrlRequest: URLRequest(url: WebUri(_skinUrl)),
@@ -608,7 +611,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
           : null,
       onShowFileChooser: Platform.isAndroid ? _camera.onShowFileChooser : null,
       onWebViewCreated: (controller) {
-        if (!mounted) return;
+        if (!isCurrentView()) return;
         if (supportsSkinCamera) _camera.invalidate();
         _log.info('InAppWebView created');
         setState(() => _webViewController = controller);
@@ -618,7 +621,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
         unawaited(_resumeWebViewTimers(controller, 'onWebViewCreated'));
       },
       onLoadStart: (controller, url) {
-        if (!mounted) return;
+        if (!isCurrentView()) return;
         if (supportsSkinCamera) _camera.invalidate();
         _log.info('Page started loading: $url');
         _mainFrameUri = url;
@@ -630,7 +633,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
         });
       },
       onLoadStop: (controller, url) async {
-        if (!mounted) return;
+        if (!isCurrentView()) return;
         _log.info('Page finished loading: $url');
         setState(() {
           _isLoading = false;
@@ -653,7 +656,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
           'WebView error - Code: ${error.type}, Description: ${error.description}',
         );
         if (!shouldShowSkinLoadError(request.isForMainFrame)) return;
-        if (!mounted) return;
+        if (!isCurrentView()) return;
         setState(() {
           _isLoading = false;
           _errorMessage = 'Failed to load skin: ${error.description}';
@@ -705,6 +708,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
           ? (controller) => _camera.invalidate()
           : null,
       onRenderProcessGone: (controller, detail) {
+        if (!isCurrentView()) return;
         if (supportsSkinCamera) _camera.invalidate();
         if (Platform.isAndroid) {
           widget.webViewLogService.log(
@@ -730,7 +734,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
           _rendererCrashed = true;
         });
         Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted) {
+          if (isCurrentView()) {
             setState(() {
               _rendererCrashed = false;
             });
@@ -739,6 +743,15 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
       },
     );
   }
+
+  void _resetWebView() => setState(() {
+    _webViewAttempt = Object();
+    _webViewController = null;
+    _isLoading = true;
+    _errorMessage = null;
+    _mainFrameUri = null;
+    _rendererCrashed = false;
+  });
 
   Future<void> _logRenderingDiagnostics(
     InAppWebViewController controller,
