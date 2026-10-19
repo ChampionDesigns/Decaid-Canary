@@ -147,6 +147,8 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
   }
 
   Future<void> _loadPlugins() async {
+    if (!mounted) return;
+
     setState(() {
       _isLoading = true;
       _loadError = null;

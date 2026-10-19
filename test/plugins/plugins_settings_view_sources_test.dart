@@ -29,12 +29,14 @@ class _FakeLoader extends Fake implements PluginLoaderService {
   _FakeLoader(this.plugins);
 
   final List<PluginManifest> plugins;
+  Future<void>? initialization;
   int initializeCalls = 0;
   int autoLoadChanges = 0;
 
   @override
   Future<void> initialize() async {
     initializeCalls++;
+    if (initialization != null) await initialization;
   }
 
   @override
@@ -410,6 +412,72 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'late update-check refresh after disposal does not reload plugins',
+    (tester) async {
+      final completion = Completer<void>();
+      final sourceService = _FakeSourceService(
+        _FakeLoader(const []),
+        updateCompletion: completion.future,
+      );
+      await pumpView(tester, sourceService: sourceService);
+      final view = tester.widget<PluginsSettingsView>(
+        find.byType(PluginsSettingsView),
+      );
+      final loader = view.pluginLoaderService as _FakeLoader;
+      final menu = tester.widget<PageActionMenu>(find.byType(PageActionMenu));
+      final refresh = menu.onUpdatesChecked!;
+      final check = menu.onCheckForUpdates!();
+      expect(sourceService.updateCalls, 1);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      completion.complete();
+      await check;
+      refresh();
+      await tester.pump();
+
+      expect(loader.initializeCalls, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  for (final fails in [false, true]) {
+    testWidgets(
+      'plugin refresh ${fails ? 'failure' : 'completion'} after update check and disposal is safe',
+      (tester) async {
+        final completion = Completer<void>();
+        final initialization = Completer<void>();
+        final sourceService = _FakeSourceService(
+          _FakeLoader(const []),
+          updateCompletion: completion.future,
+        );
+        await pumpView(tester, sourceService: sourceService);
+        final view = tester.widget<PluginsSettingsView>(
+          find.byType(PluginsSettingsView),
+        );
+        final loader = view.pluginLoaderService as _FakeLoader;
+        loader.initialization = initialization.future;
+        final menu = tester.widget<PageActionMenu>(find.byType(PageActionMenu));
+        final check = menu.onCheckForUpdates!();
+        completion.complete();
+        await check;
+        await tester.pump();
+        expect(loader.initializeCalls, 2);
+        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        if (fails) {
+          initialization.completeError(StateError('scan failed'));
+        } else {
+          initialization.complete();
+        }
+        await tester.pump();
+
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 
   testWidgets('reopening plugins observes the existing update check', (
     tester,
