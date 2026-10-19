@@ -64,6 +64,13 @@ backgrounded. After ten minutes in the background, it unloads the page and
 reloads the selected skin when the app returns. Skin state that must survive
 this reload should be persisted through the Decaid API or browser storage.
 
+On Windows, an embedded skin that has not finished its initial load within
+30 seconds shows an error with **Open in Browser** and **Go to Dashboard**
+instead of an indefinite spinner. The log distinguishes browser creation from
+page loading. The pending WebView remains mounted and can recover if loading
+finishes later. This does not move or clear browser storage, retry downloads,
+or identify the native cause of a startup failure.
+
 ### Live Camera Access on Android, iOS and macOS
 
 An installed skin in the embedded Android, iOS or macOS WebView can request a

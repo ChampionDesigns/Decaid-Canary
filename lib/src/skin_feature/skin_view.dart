@@ -23,6 +23,7 @@ import 'package:reaprime/src/skin_feature/skin_exit_instructions.dart';
 import 'package:reaprime/src/skin_feature/skin_user_scripts.dart';
 import 'package:reaprime/src/skin_feature/skin_webview_composition.dart';
 import 'package:reaprime/src/skin_feature/skin_webview_diagnostics.dart';
+import 'package:reaprime/src/skin_feature/skin_webview_startup.dart';
 import 'package:reaprime/src/webui_support/webui_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -244,6 +245,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
     }
 
     final result = await WebViewCompatibilityChecker.checkCompatibility();
+    if (!mounted) return;
 
     setState(() {
       _compatibilityResult = result;
@@ -532,31 +534,12 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
     }
 
     if (_errorMessage != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            spacing: 16,
-            children: [
-              const Icon(Icons.error_outline, size: 64, color: Colors.red),
-              Text(
-                'WebView Error',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              Text(
-                _errorMessage!,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _exitToDashboard,
-                child: const Text('Go to Dashboard'),
-              ),
-            ],
-          ),
-        ),
+      return SkinWebViewError(
+        message: _errorMessage!,
+        onOpenInBrowser: defaultTargetPlatform == TargetPlatform.windows
+            ? _openInExternalBrowser
+            : null,
+        onDashboard: _exitToDashboard,
       );
     }
 
@@ -587,17 +570,16 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
           ValueListenableBuilder<SimulatedWebViewDevice?>(
             valueListenable: simulatedWebViewDevice,
             builder: (context, simulatedDevice, _) {
-              return Stack(
-                clipBehavior: Platform.isAndroid ? Clip.none : Clip.hardEdge,
-                children: [
-                  Positioned.fill(
-                    right: Platform.isAndroid ? -1 : 0,
-                    bottom: Platform.isAndroid ? -1 : 0,
-                    child: _buildWebView(simulatedDevice, texture),
-                  ),
-                  if (_isLoading)
-                    const Center(child: CircularProgressIndicator()),
-                ],
+              return SkinWebViewStartup(
+                key: ValueKey(simulatedDevice?.id ?? 'native-webview'),
+                platform: defaultTargetPlatform,
+                isLoading: _isLoading,
+                isCreated: _webViewController != null,
+                skinId: widget.settingsController.defaultSkinId,
+                port: widget.port,
+                onOpenInBrowser: _openInExternalBrowser,
+                onDashboard: _exitToDashboard,
+                child: _buildWebView(simulatedDevice, texture),
               );
             },
           ),
@@ -626,15 +608,17 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
           : null,
       onShowFileChooser: Platform.isAndroid ? _camera.onShowFileChooser : null,
       onWebViewCreated: (controller) {
+        if (!mounted) return;
         if (supportsSkinCamera) _camera.invalidate();
         _log.info('InAppWebView created');
-        _webViewController = controller;
+        setState(() => _webViewController = controller);
         if (Platform.isAndroid) {
           unawaited(_logRenderingDiagnostics(controller, texture));
         }
         unawaited(_resumeWebViewTimers(controller, 'onWebViewCreated'));
       },
       onLoadStart: (controller, url) {
+        if (!mounted) return;
         if (supportsSkinCamera) _camera.invalidate();
         _log.info('Page started loading: $url');
         _mainFrameUri = url;
@@ -646,6 +630,7 @@ class _SkinViewState extends State<SkinView> with WidgetsBindingObserver {
         });
       },
       onLoadStop: (controller, url) async {
+        if (!mounted) return;
         _log.info('Page finished loading: $url');
         setState(() {
           _isLoading = false;

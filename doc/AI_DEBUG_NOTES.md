@@ -107,6 +107,40 @@ not infer renderer health from page DOM shape or deliberately crash the renderer
 custom skins have no common ready signal and Apple WebViews use a different
 termination callback.
 
+## Windows embedded skin never reaches creation
+
+Windows compatibility checking detects an installed WebView2 version; it does
+not prove environment or composition-controller creation succeeds. The pinned
+Windows plugin awaits `createInAppWebView` before calling `onWebViewCreated`.
+Native creation failures can bypass page-error callbacks, and native HRESULT
+debug logging is compiled out of release builds. Immediate controller-creation
+HRESULT failures are only logged in the pinned plugin and can leave the Dart
+creation call unresolved; asynchronous creation failures lose the HRESULT in
+the generic platform exception.
+
+Issue #953 contains separate GitHub 403s and intermittent scale `Unreachable`
+failures. An embedded page finishes loading after the first 403. Later sessions
+stop before `onWebViewCreated`, but both Decaid and WebView2 versions changed.
+The report does not establish rate limiting, permissions, or a runtime regression
+as the spinner's cause. Upstream flutter_inappwebview #2626 documents a default
+profile-directory permission failure; #2840 describes a process crash after
+creation, not this still-running app. Neither identifies this report's trigger.
+
+`SkinWebViewStartup` bounds Windows initial loading to 30 seconds, logs the
+last reached stage, and offers browser/dashboard recovery without destroying
+the pending view. A late load clears the error. Its `SkinView` logger emits
+JSON records with `event: windowsSkinStartup` for `started`, `created`, `loaded`,
+`timeout`, `recovered`, and `aborted`. Match `attemptId` to follow an attempt;
+`stage`, `elapsedMs`, `skinId`, `port`, `webViewCreated`, and `timedOut` describe
+its progress. A timeout is a warning; other transitions are informational.
+Completion stops startup logging, so subsequent navigation is not a new attempt.
+The records exclude page URLs, query strings, and profile paths; combine them
+with existing app, Windows, and WebView2 version logs. These Dart-side records
+cannot recover native HRESULTs discarded by the plugin.
+
+Do not change profile locations, delete browser data, or disable security checks
+based on this report alone.
+
 # Scale Frame And Feed Failures
 
 See [`device-notes/scales.md`](device-notes/scales.md#acaia).
