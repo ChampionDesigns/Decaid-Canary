@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -468,9 +469,19 @@ void main() {
         ];
         const total = 100;
 
+        Stream<List<int>> responseChunks() async* {
+          yield chunks.first;
+          final partial = tmp.listSync().whereType<File>().single;
+          expect(await partial.readAsBytes(), chunks.first);
+          expect(File('${tmp.path}/update_1.2.3.apk').existsSync(), isFalse);
+          yield chunks[1];
+          expect(await partial.length(), 80);
+          yield chunks[2];
+        }
+
         final client = MockClient.streaming((request, body) async {
           return http.StreamedResponse(
-            Stream.fromIterable(chunks),
+            responseChunks(),
             200,
             contentLength: total,
           );
@@ -498,8 +509,222 @@ void main() {
         final file = File(path);
         expect(file.existsSync(), isTrue);
         expect(file.lengthSync(), total);
+        expect(await file.readAsBytes(), chunks.expand((chunk) => chunk));
+        expect(tmp.listSync().map((entry) => entry.path), [path]);
       },
     );
+
+    test('isolates overlapping downloads of the same version', () async {
+      final firstWritten = [Completer<void>(), Completer<void>()];
+      final resume = [Completer<void>(), Completer<void>()];
+      final payloads = [
+        [1, 2, 3, 4, 5, 6],
+        [7, 8, 9, 10, 11, 12],
+      ];
+      final finalPath = '${tmp.path}/update_1.2.3.apk';
+      var requests = 0;
+
+      Stream<List<int>> responseChunks(int index) async* {
+        yield payloads[index].sublist(0, 3);
+        await resume[index].future;
+        yield payloads[index].sublist(3);
+        if (index == 1) {
+          expect(await File(finalPath).readAsBytes(), payloads.first);
+        }
+      }
+
+      final updater = AndroidUpdater(
+        owner: 'tadelv',
+        repo: 'reaprime',
+        httpClient: MockClient.streaming((request, body) async {
+          return http.StreamedResponse(
+            responseChunks(requests++),
+            200,
+            contentLength: 6,
+          );
+        }),
+      );
+      addTearDown(updater.dispose);
+      final downloads = List.generate(2, (index) {
+        return updater.downloadUpdate(
+          info(),
+          cacheDir: tmp,
+          onProgress: (progress) {
+            if (progress == 0.5) firstWritten[index].complete();
+          },
+        );
+      });
+      final allDownloads = Future.wait(downloads);
+
+      try {
+        await Future.wait(firstWritten.map((written) => written.future));
+        final partials = tmp.listSync().whereType<File>().toList();
+        expect(partials, hasLength(2));
+        expect(partials.map((file) => file.path).toSet(), hasLength(2));
+        expect(partials.every((file) => file.path.endsWith('.part')), isTrue);
+        expect(
+          partials.map((file) => file.readAsBytesSync()),
+          unorderedEquals(payloads.map((payload) => payload.sublist(0, 3))),
+        );
+        expect(File(finalPath).existsSync(), isFalse);
+
+        resume.first.complete();
+        expect(await downloads.first, finalPath);
+        expect(await File(finalPath).readAsBytes(), payloads.first);
+        expect(
+          tmp.listSync().where((entry) => entry.path.endsWith('.part')),
+          hasLength(1),
+        );
+
+        resume.last.complete();
+        expect(await downloads.last, finalPath);
+        expect(await File(finalPath).readAsBytes(), payloads.last);
+        expect(await allDownloads, [finalPath, finalPath]);
+        expect(tmp.listSync().map((entry) => entry.path), [finalPath]);
+      } finally {
+        for (final release in resume) {
+          if (!release.isCompleted) release.complete();
+        }
+        try {
+          await allDownloads;
+        } catch (_) {}
+      }
+    });
+
+    test('streams a real HTTP response to the final APK', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final firstWritten = Completer<void>();
+      final client = http.Client();
+      addTearDown(() async {
+        client.close();
+        await server.close(force: true);
+      });
+      final serving = server.first.then((request) async {
+        request.response.contentLength = 6;
+        request.response.bufferOutput = false;
+        request.response.add([1, 2, 3]);
+        await request.response.flush();
+        await firstWritten.future;
+        request.response.add([4, 5, 6]);
+        await request.response.close();
+      });
+      final updater = AndroidUpdater(
+        owner: 'tadelv',
+        repo: 'reaprime',
+        httpClient: client,
+      );
+      final update = UpdateInfo(
+        version: '1.2.3',
+        downloadUrl: 'http://${server.address.address}:${server.port}/app.apk',
+        releaseNotes: '',
+        isPrerelease: false,
+        tagName: 'v1.2.3',
+      );
+      final progress = <double>[];
+      final path = await updater.downloadUpdate(
+        update,
+        cacheDir: tmp,
+        onProgress: (value) {
+          progress.add(value);
+          if (value >= 0.5 && !firstWritten.isCompleted) {
+            expect(tmp.listSync().whereType<File>().single.readAsBytesSync(), [
+              1,
+              2,
+              3,
+            ]);
+            firstWritten.complete();
+          }
+        },
+      );
+      await serving;
+      expect(path, '${tmp.path}/update_1.2.3.apk');
+      expect(await File(path).readAsBytes(), [1, 2, 3, 4, 5, 6]);
+      expect(progress.last, 1.0);
+      for (var i = 1; i < progress.length; i++) {
+        expect(progress[i], greaterThanOrEqualTo(progress[i - 1]));
+      }
+      expect(tmp.listSync().map((entry) => entry.path), [path]);
+    });
+
+    test('removes partial data after a response stream error', () async {
+      final failure = const HttpException('connection cancelled');
+      Stream<List<int>> responseChunks() async* {
+        yield [1, 2, 3];
+        expect(await tmp.listSync().whereType<File>().single.readAsBytes(), [
+          1,
+          2,
+          3,
+        ]);
+        throw failure;
+      }
+
+      final updater = AndroidUpdater(
+        owner: 'tadelv',
+        repo: 'reaprime',
+        httpClient: MockClient.streaming((request, body) async {
+          return http.StreamedResponse(responseChunks(), 200, contentLength: 6);
+        }),
+      );
+      await expectLater(
+        updater.downloadUpdate(info(), cacheDir: tmp),
+        throwsA(same(failure)),
+      );
+      expect(tmp.listSync(), isEmpty);
+    });
+
+    test('cleans up when a progress callback aborts the download', () async {
+      final failure = StateError('cancelled');
+      final updater = AndroidUpdater(
+        owner: 'tadelv',
+        repo: 'reaprime',
+        httpClient: MockClient.streaming((request, body) async {
+          return http.StreamedResponse(
+            Stream.fromIterable([
+              [1, 2, 3],
+              [4, 5, 6],
+            ]),
+            200,
+            contentLength: 6,
+          );
+        }),
+      );
+      await expectLater(
+        updater.downloadUpdate(
+          info(),
+          cacheDir: tmp,
+          onProgress: (_) => throw failure,
+        ),
+        throwsA(same(failure)),
+      );
+      expect(tmp.listSync(), isEmpty);
+    });
+
+    for (final total in [2, 6]) {
+      test('rejects a response whose length differs from $total', () async {
+        final finalFile = File('${tmp.path}/update_1.2.3.apk');
+        await finalFile.writeAsBytes([9]);
+        final updater = AndroidUpdater(
+          owner: 'tadelv',
+          repo: 'reaprime',
+          httpClient: MockClient.streaming((request, body) async {
+            return http.StreamedResponse(
+              Stream.fromIterable([
+                [1],
+                [2, 3],
+              ]),
+              200,
+              contentLength: total,
+            );
+          }),
+        );
+        await expectLater(
+          updater.downloadUpdate(info(), cacheDir: tmp),
+          throwsA(isA<HttpException>()),
+        );
+        expect(await finalFile.readAsBytes(), [9]);
+        expect(tmp.listSync().map((entry) => entry.path), [finalFile.path]);
+      });
+    }
 
     test('throws on non-200 response', () async {
       final client = MockClient.streaming((request, body) async {
@@ -511,10 +736,15 @@ void main() {
         httpClient: client,
       );
 
-      expect(
-        () => updater.downloadUpdate(info(), cacheDir: tmp),
-        throwsA(isA<Exception>()),
+      await expectLater(
+        updater.downloadUpdate(info(), cacheDir: tmp),
+        throwsA(
+          predicate(
+            (error) => '$error'.contains('Failed to download update: 404'),
+          ),
+        ),
       );
+      expect(tmp.listSync(), isEmpty);
     });
 
     test('omits progress when Content-Length is unknown', () async {

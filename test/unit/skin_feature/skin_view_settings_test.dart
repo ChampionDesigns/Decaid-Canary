@@ -1,16 +1,21 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:reaprime/src/skin_feature/skin_view.dart';
+import 'package:reaprime/src/skin_feature/skin_webview_composition.dart';
 
 void main() {
   group('skin WebView settings', () {
-    test('pins text zoom so the system font size cannot rescale a skin', () {
-      expect(createSkinWebViewSettings().textZoom, 100);
-    });
-
-    test('leaves zoom controls off so a skin keeps its own scaling', () {
-      final settings = createSkinWebViewSettings();
-      expect(settings.supportZoom, isFalse);
-      expect(settings.builtInZoomControls, isFalse);
-    });
+    for (final platform in TargetPlatform.values) {
+      for (final texture in [false, true]) {
+        test('preserves skin scaling for $platform, texture: $texture', () {
+          final settings = createSkinWebViewSettings(
+            platform: platform,
+            textureComposition: texture,
+          );
+          expect(settings.textZoom, 100);
+          expect(settings.supportZoom, isFalse);
+          expect(settings.builtInZoomControls, isFalse);
+        });
+      }
+    }
   });
 }

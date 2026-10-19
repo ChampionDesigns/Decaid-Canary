@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pub_semver/pub_semver.dart';
+import 'package:uuid/uuid.dart';
 import 'package:reaprime/src/services/apk_installer.dart';
 import 'package:reaprime/src/services/github_rate_limit.dart';
 import 'package:reaprime/src/util/remote_error.dart';
@@ -222,21 +223,36 @@ class AndroidUpdater {
       }
 
       final total = response.contentLength;
-      final bytes = <int>[];
-      var received = 0;
-      await for (final chunk in response.stream) {
-        bytes.addAll(chunk);
-        received += chunk.length;
-        if (onProgress != null && total != null && total > 0) {
-          onProgress(received / total);
-        }
-      }
-
       final dir = cacheDir ?? await getTemporaryDirectory();
       final apkPath = '${dir.path}/update_${updateInfo.version}.apk';
-      final apkFile = File(apkPath);
+      final partialFile = File('$apkPath.${const Uuid().v4()}.part');
 
-      await apkFile.writeAsBytes(bytes);
+      try {
+        final output = await partialFile.open(mode: FileMode.write);
+        try {
+          var received = 0;
+          await for (final chunk in response.stream) {
+            if (total != null && received + chunk.length > total) {
+              throw const HttpException('APK download exceeds Content-Length');
+            }
+            await output.writeFrom(chunk);
+            received += chunk.length;
+            if (onProgress != null && total != null && total > 0) {
+              onProgress(received / total);
+            }
+          }
+          if (total != null && received != total) {
+            throw const HttpException('Incomplete APK download');
+          }
+        } finally {
+          await output.close();
+        }
+        await partialFile.rename(apkPath);
+      } finally {
+        if (await partialFile.exists()) {
+          await partialFile.delete();
+        }
+      }
 
       _log.info('Downloaded update to $apkPath');
       return apkPath;
