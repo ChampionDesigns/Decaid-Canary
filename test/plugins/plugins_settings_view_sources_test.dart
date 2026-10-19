@@ -14,15 +14,22 @@ import 'package:reaprime/src/widgets/page_action_menu.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 class _FolderPicker extends FilePickerPlatform {
+  _FolderPicker({this.selected});
+
+  final String? selected;
+
   @override
   Future<String?> getDirectoryPath({
     String? dialogTitle,
     bool lockParentWindow = false,
     String? initialDirectory,
-  }) async => throw const FileSystemException(
-    'private folder diagnostics',
-    '/private/plugin.reaplugin',
-  );
+  }) async {
+    if (selected != null) return selected;
+    throw const FileSystemException(
+      'private folder diagnostics',
+      '/private/plugin.reaplugin',
+    );
+  }
 }
 
 class _FakeLoader extends Fake implements PluginLoaderService {
@@ -195,6 +202,39 @@ void main() {
     );
     expect(find.textContaining('private'), findsNothing);
     expect(find.textContaining('FileSystemException'), findsNothing);
+  });
+
+  testWidgets('invalid plugin folder selection keeps actionable guidance', (
+    tester,
+  ) async {
+    final picker = FilePickerPlatform.instance;
+    FilePickerPlatform.instance = _FolderPicker(
+      selected: '/private/not-a-plugin',
+    );
+    addTearDown(() => FilePickerPlatform.instance = picker);
+    await pumpView(
+      tester,
+      sourceService: _FakeSourceService(_FakeLoader(const [])),
+    );
+    final install = tester
+        .widget<PageActionMenu>(find.byType(PageActionMenu))
+        .onInstall!;
+    await tester.runAsync(() async {
+      final failure = Logger('PluginsSettingsView').onRecord.firstWhere(
+        (record) => record.message == 'Failed to install plugin',
+      );
+      install('folder');
+      await failure.timeout(const Duration(seconds: 10));
+    });
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        "Couldn't install the plugin. Select a folder ending in .reaplugin.",
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('private'), findsNothing);
   });
 
   testWidgets('plugin removal failure hides filesystem diagnostics', (

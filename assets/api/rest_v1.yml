@@ -3389,6 +3389,7 @@ paths:
         remain in application logs. Clients may retry with the same options.
         Malformed downloaded data and package manifests return HTTP 400 with
         plain-language validation errors, without parser diagnostics or source snippets.
+        This includes missing or incorrectly typed release fields and asset entries.
       tags: [Plugins]
       requestBody:
         required: true
@@ -3443,6 +3444,8 @@ paths:
         version does not change.
         Download failures use plain-language error messages rather than raw
         transport exceptions.
+        Invalid GitHub commit response structures return HTTP 400 with
+        plain-language validation guidance and no response-body snippets.
       tags: [Plugins]
       requestBody:
         required: true

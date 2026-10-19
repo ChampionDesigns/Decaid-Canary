@@ -20,6 +20,7 @@ class _RecordingUpdater extends AndroidUpdater {
   _RecordingUpdater() : super(owner: 'tadelv', repo: 'reaprime');
   int checkCalls = 0;
   Object? checkError;
+  UpdateInfo? updateInfo;
 
   @override
   Future<UpdateInfo?> checkForUpdate(
@@ -28,7 +29,7 @@ class _RecordingUpdater extends AndroidUpdater {
   }) async {
     checkCalls++;
     if (checkError != null) throw checkError!;
-    return null;
+    return updateInfo;
   }
 
   @override
@@ -38,8 +39,14 @@ class _RecordingUpdater extends AndroidUpdater {
 class _OfflineContentStorage extends WebUIStorage {
   _OfflineContentStorage(super.settingsController);
 
+  Object? downloadError;
+  int downloadCalls = 0;
+
   @override
-  Future<void> downloadRemoteSkins() async {}
+  Future<void> downloadRemoteSkins() async {
+    downloadCalls++;
+    if (downloadError != null) throw downloadError!;
+  }
 }
 
 const _channel = MethodChannel('net.tadel.reaprime/macos_updater');
@@ -122,6 +129,46 @@ Future<(UpdateCheckService, _RecordingUpdater)> _pumpSettingsView(
 
 void main() {
   group('SettingsView updates', () {
+    testWidgets('skin Retry remains accessible after the app-update dialog', (
+      tester,
+    ) async {
+      final (_, updater) = await _pumpSettingsView(tester, [], macos: false);
+      updater.updateInfo = UpdateInfo(
+        version: '99.0.0',
+        downloadUrl: 'https://example.test/update.apk',
+        releaseNotes: '',
+        isPrerelease: false,
+        tagName: 'v99.0.0',
+      );
+      final storage =
+          tester.widget<SettingsView>(find.byType(SettingsView)).webUIStorage!
+              as _OfflineContentStorage;
+      storage.downloadError = const SocketException('private host lookup');
+
+      await tester.tap(find.text('Check for updates'));
+      await tester.pumpAndSettle();
+      expect(find.text('Update Available'), findsOneWidget);
+      expect(storage.downloadCalls, 0);
+      await tester.pump(const Duration(seconds: 10));
+      await tester.tap(find.text('Later'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(
+          "Couldn't download the skins. Check your internet connection and try again.",
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Retry').hitTestable(), findsOneWidget);
+      expect(storage.downloadCalls, 1);
+      storage.downloadError = null;
+      await tester.tap(find.text('Retry'));
+      await tester.pumpAndSettle();
+      expect(storage.downloadCalls, 2);
+      expect(updater.checkCalls, 1);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('shows device management entry', (tester) async {
       final calls = <MethodCall>[];
       await _pumpSettingsView(tester, calls, macos: false);

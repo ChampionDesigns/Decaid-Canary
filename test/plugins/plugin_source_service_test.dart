@@ -796,6 +796,57 @@ function createPlugin() {
       expect(service.sourceFor('other.reaplugin')!.lastError, isNull);
     });
 
+    test(
+      'diagnostic metadata failure does not stop the remaining updates',
+      () async {
+        await http.runWithClient(
+          () => service.installFromGitHubBranch('broken/plugin'),
+          () => gitHubClient(commit: 'first'),
+        );
+        await http.runWithClient(
+          () => service.installFromGitHubBranch('good/plugin'),
+          () => gitHubClient(
+            commit: 'first',
+            branchArchive: pluginArchive(pluginId: 'other.reaplugin'),
+          ),
+        );
+
+        await expectLater(
+          http.runWithClient(
+            () => service.updateAllPlugins(),
+            () => MockClient((request) async {
+              if (request.url.toString().contains('broken/plugin')) {
+                final metadata = sourceFile(id);
+                metadata.deleteSync();
+                Directory(metadata.path).createSync();
+                return http.Response('private upstream diagnostics', 500);
+              }
+              if (request.url.path.contains('/commits/')) {
+                return http.Response(jsonEncode({'sha': 'second'}), 200);
+              }
+              return http.Response.bytes(
+                pluginArchive(pluginId: 'other.reaplugin'),
+                200,
+              );
+            }),
+          ),
+          throwsA(
+            isA<RemoteUpdateException>()
+                .having((error) => error.attemptedCount, 'attemptedCount', 2)
+                .having(
+                  (error) => error.failures.map((failure) => failure.item),
+                  'failed items',
+                  [id],
+                ),
+          ),
+        );
+
+        expect(service.sourceFor('other.reaplugin')!.commit, 'second');
+        expect(service.sourceFor('other.reaplugin')!.lastError, isNull);
+        expect(service.updateCheck.value, isNull);
+      },
+    );
+
     test('a local zip install is a snapshot that never auto-updates', () async {
       final zip = File('${tempDir.path}/plugin.zip')
         ..writeAsBytesSync(pluginArchive(prefix: 'wrapper/'));

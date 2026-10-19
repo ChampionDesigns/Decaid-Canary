@@ -197,6 +197,39 @@ void main() {
       );
     });
 
+    for (final (name, endpoint, payload) in <(String, String, Object?)>[
+      ('missing release fields', 'github-release', {}),
+      ('wrong release shape', 'github-release', ['https://private.example']),
+      (
+        'invalid release asset',
+        'github-release',
+        {
+          'tag_name': 'v1.0.0',
+          'assets': [
+            {'name': 'private-example.zip'},
+          ],
+        },
+      ),
+      ('wrong commit shape', 'github-branch', ['https://private.example']),
+      ('invalid commit field', 'github-branch', {'sha': 123}),
+    ]) {
+      test('$name returns HTTP 400 without response diagnostics', () async {
+        final response = await http.runWithClient(
+          () => post('/api/v1/plugins/install/$endpoint', {
+            'repo': 'acme/plugin',
+          }),
+          () =>
+              MockClient((_) async => http.Response(jsonEncode(payload), 200)),
+        );
+        expect(response.statusCode, 400);
+        final error =
+            jsonDecode(await response.readAsString())['error'] as String;
+        expect(error, startsWith("Couldn't install the plugin. GitHub"));
+        expect(error, isNot(contains('private')));
+        expect(service.getPluginManifest(id), isNull);
+      });
+    }
+
     test(
       'offline installation and update checks report friendly errors',
       () async {

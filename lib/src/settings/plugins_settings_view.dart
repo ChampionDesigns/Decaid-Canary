@@ -825,22 +825,29 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
         );
         if (selected == null) return;
         if (!selected.name.endsWith('.reaplugin')) {
-          throw Exception('selection is not a .reaplugin');
+          throw const UserFacingFormatException(
+            'Select a folder ending in .reaplugin.',
+          );
         }
         await copyPluginDirectoryFromSaf(selected.uri, tempDir);
       } else {
         final selected = await FilePicker.getDirectoryPath();
         if (selected == null) return;
         if (!selected.endsWith('.reaplugin')) {
-          throw Exception('selection is not a .reaplugin');
+          throw const UserFacingFormatException(
+            'Select a folder ending in .reaplugin.',
+          );
         }
         if (Platform.isIOS) {
           final accessed = await SecurityScopedFileService.startAccessing(
             selected,
           );
           if (!accessed) {
-            throw Exception(
+            logger.warning(
               'iOS denied read access to picked folder: $selected',
+            );
+            throw const UserFacingFormatException(
+              'Access to the selected folder was denied. Select it again and allow file access.',
             );
           }
         }

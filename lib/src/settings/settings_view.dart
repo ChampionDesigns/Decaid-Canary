@@ -485,7 +485,7 @@ class SettingsView extends StatelessWidget {
         if (Platform.isAndroid) {
           final updater = AndroidUpdater(owner: 'tadelv', repo: 'reaprime');
           final releaseUrl = updateCheckService?.getReleaseUrl(updateInfo);
-          showDialog(
+          await showDialog(
             context: context,
             builder: (context) => UpdateDialog(
               updateInfo: updateInfo,
@@ -500,7 +500,7 @@ class SettingsView extends StatelessWidget {
           );
         } else {
           final releaseUrl = updateCheckService?.getReleaseUrl(updateInfo);
-          showDialog(
+          await showDialog(
             context: context,
             builder: (context) => AlertDialog(
               title: const Text('Update Available'),
@@ -537,6 +537,7 @@ class SettingsView extends StatelessWidget {
         );
       }
 
+      if (!context.mounted) return;
       await _downloadRemoteSkins(context);
     } catch (e, stackTrace) {
       log.severe('Error checking for updates', e, stackTrace);

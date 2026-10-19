@@ -233,13 +233,21 @@ class PluginSourceService {
       } catch (e, st) {
         _log.warning('Failed to update plugin "${manifest.id}"', e, st);
         failures = [...failures, (item: manifest.id, error: e)];
-        _writeSource(
-          manifest.id,
-          source.copyWith(
-            lastChecked: DateTime.now(),
-            lastError: remoteErrorMessage(e, action: 'update the plugin'),
-          ),
-        );
+        try {
+          _writeSource(
+            manifest.id,
+            source.copyWith(
+              lastChecked: DateTime.now(),
+              lastError: remoteErrorMessage(e, action: 'update the plugin'),
+            ),
+          );
+        } catch (metadataError, metadataStackTrace) {
+          _log.warning(
+            'Failed to record update error for plugin "${manifest.id}"',
+            metadataError,
+            metadataStackTrace,
+          );
+        }
       }
     }
 

@@ -3550,6 +3550,8 @@ Online failures use plain-language guidance; technical details stay in logs.
 **Retry** retains repository, branch, and asset options. Concurrent remote downloads
 share one batch, including Settings Retry. Batches attempt all items and retain
 successes; complete or partial failures show warnings and return HTTP 500.
+In native Settings, skin downloading waits for an available app-update dialog
+to close so a skin failure's Retry action is not hidden behind its modal barrier.
 Startup/periodic failures stay quiet. Installed skins and local ZIP installation
 remain usable offline.
 Local ZIP installation failures use the same guidance, with filesystem and parser

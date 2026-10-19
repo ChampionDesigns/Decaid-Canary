@@ -701,10 +701,14 @@ connection failures return plain-language guidance. Transport/parser details sta
 in logs. Timeouts and secure-connection failures have distinct messages; connection
 errors never assert Wi-Fi is off. JSON fields and upstream passthrough are unchanged.
 Plugin validation and downgrade failures retain HTTP 400 and 409, respectively.
+Missing or incorrectly typed GitHub release, asset, or commit fields are
+validation failures (HTTP 400), including when the response is valid JSON.
 
 Skin/plugin batches attempt all items and retain successes. Any failure returns
 HTTP 500 with an `error` describing complete or partial failure. Background checks
 stay quiet; retries are manual.
+Failure to persist a plugin's diagnostic `lastError` is logged without stopping
+the remaining updates or replacing the original failure in the aggregate.
 
 Feedback verifies the stored Decent credentials before uploading attachments,
 creating an issue, or contacting Support. Missing, rejected, or unverifiable

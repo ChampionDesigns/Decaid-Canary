@@ -24,3 +24,9 @@ these catches: a folder install's temporary staging directory has been removed.
 
 Keep the `remote_error.dart` import in `webserver_service.dart`: its `part` files
 share that library's imports and call `remoteErrorMessage`.
+
+Await app-update dialog dismissal before downloading skins so Retry remains
+accessible. Validate GitHub response structures before field access, not only
+JSON syntax. Preserve explicit folder-selection and iOS-access guidance without
+exposing paths. A diagnostic metadata write must not mask the original update
+failure or prevent later plugins from being attempted.
