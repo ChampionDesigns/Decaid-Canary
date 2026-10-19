@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:reaprime/src/services/android_updater.dart';
+import 'package:reaprime/src/util/remote_error.dart';
 
 void main() {
   group('AndroidUpdater.checkForUpdate', () {
@@ -250,7 +251,15 @@ void main() {
       test('skips the network until the reset time', () async {
         await expectLater(
           updater.checkForUpdate('0.7.14'),
-          throwsA(isA<UpdateCheckException>()),
+          throwsA(
+            isA<UpdateCheckException>()
+                .having((e) => e.statusCode, 'statusCode', 403)
+                .having(
+                  (e) => e.userMessage,
+                  'userMessage',
+                  'The service is receiving too many requests. Try again later.',
+                ),
+          ),
         );
         expect(requests, 1);
 
@@ -259,7 +268,12 @@ void main() {
           throwsA(
             isA<UpdateCheckException>()
                 .having((e) => e.rateLimited, 'rateLimited', isTrue)
-                .having((e) => e.resetAt, 'resetAt', resetAt),
+                .having((e) => e.resetAt, 'resetAt', resetAt)
+                .having(
+                  (e) => e.userMessage,
+                  'userMessage',
+                  'The service is receiving too many requests. Try again later.',
+                ),
           ),
         );
         expect(requests, 1);
@@ -497,7 +511,7 @@ void main() {
         expect(file.existsSync(), isTrue);
         expect(file.lengthSync(), total);
         expect(await file.readAsBytes(), chunks.expand((chunk) => chunk));
-        expect(tmp.listSync().map((entry) => entry.path), [path]);
+        expect(tmp.listSync().map((entry) => entry.uri), [file.uri]);
       },
     );
 
@@ -567,7 +581,7 @@ void main() {
         expect(await downloads.last, finalPath);
         expect(await File(finalPath).readAsBytes(), payloads.last);
         expect(await allDownloads, [finalPath, finalPath]);
-        expect(tmp.listSync().map((entry) => entry.path), [finalPath]);
+        expect(tmp.listSync().map((entry) => entry.uri), [File(finalPath).uri]);
       } finally {
         for (final release in resume) {
           if (!release.isCompleted) release.complete();
@@ -630,7 +644,7 @@ void main() {
       for (var i = 1; i < progress.length; i++) {
         expect(progress[i], greaterThanOrEqualTo(progress[i - 1]));
       }
-      expect(tmp.listSync().map((entry) => entry.path), [path]);
+      expect(tmp.listSync().map((entry) => entry.uri), [File(path).uri]);
     });
 
     test('removes partial data after a response stream error', () async {
@@ -709,7 +723,7 @@ void main() {
           throwsA(isA<HttpException>()),
         );
         expect(await finalFile.readAsBytes(), [9]);
-        expect(tmp.listSync().map((entry) => entry.path), [finalFile.path]);
+        expect(tmp.listSync().map((entry) => entry.uri), [finalFile.uri]);
       });
     }
 
@@ -726,9 +740,13 @@ void main() {
       await expectLater(
         updater.downloadUpdate(info(), cacheDir: tmp),
         throwsA(
-          predicate(
-            (error) => '$error'.contains('Failed to download update: 404'),
-          ),
+          isA<RemoteServiceException>()
+              .having((error) => error.statusCode, 'statusCode', 404)
+              .having(
+                (error) => error.userMessage,
+                'userMessage',
+                'The repository, release, or download was not found. Check the address and try again.',
+              ),
         ),
       );
       expect(tmp.listSync(), isEmpty);
