@@ -10,6 +10,13 @@ import 'package:reaprime/src/models/device/led_strip.dart';
 
 import '../../../../../../helpers/fake_ble_transport.dart';
 
+class _RawWriteBengle extends Bengle {
+  _RawWriteBengle({required super.transport});
+
+  Future<void> rawWrite(BengleMmr register, int rgb) =>
+      writeMmrInt(register, rgb);
+}
+
 class _BlockingPreviewTransport extends FakeBleTransport {
   final int blockedAddress;
   final writeStarted = Completer<void>();
@@ -43,6 +50,41 @@ class _BlockingPreviewTransport extends FakeBleTransport {
       withResponse: withResponse,
       timeout: timeout,
     );
+  }
+}
+
+class _UncertainPreviewTransport extends FakeBleTransport {
+  final live = <int, int>{};
+  int? failAfterWriteAddress;
+
+  @override
+  Future<void> write(
+    String serviceUUID,
+    String characteristicUUID,
+    Uint8List data, {
+    bool withResponse = true,
+    Duration? timeout,
+  }) async {
+    await super.write(
+      serviceUUID,
+      characteristicUUID,
+      data,
+      withResponse: withResponse,
+      timeout: timeout,
+    );
+    if (characteristicUUID == Endpoint.writeToMMR.uuid && data.length >= 8) {
+      final address = (data[1] << 16) | (data[2] << 8) | data[3];
+      if (address == 0x00803890 || address == 0x00803894) {
+        live[address] = ByteData.sublistView(
+          data,
+          4,
+          8,
+        ).getUint32(0, Endian.little);
+        if (address == failAfterWriteAddress) {
+          throw TimeoutException('live write applied but acknowledgement lost');
+        }
+      }
+    }
   }
 }
 
@@ -80,22 +122,29 @@ class _PaletteTransport extends FakeBleTransport {
 void main() {
   group('LedStripCapability', () {
     late FakeBleTransport transport;
-    late Bengle bengle;
+    late _RawWriteBengle bengle;
+
+    void queueStoredPalette() {
+      transport.queueMmrResponseInt(BengleMmr.frontLedAwake, 0xFF8000);
+      transport.queueMmrResponseInt(BengleMmr.frontLedSleep, 0x302010);
+      transport.queueMmrResponseInt(BengleMmr.rearLedAwake, 0x00FF00);
+      transport.queueMmrResponseInt(BengleMmr.rearLedSleep, 0x0000FF);
+    }
 
     Future<void> connect({
       bool queuePalette = true,
       FakeBleTransport? deviceTransport,
     }) async {
       transport = deviceTransport ?? FakeBleTransport();
-      bengle = Bengle(transport: transport);
+      bengle = _RawWriteBengle(transport: transport);
       transport.queueOnConnectResponses(v13Model: 128);
       if (queuePalette) {
-        transport.queueMmrResponseInt(BengleMmr.frontLedAwake, 0xFF8000);
-        transport.queueMmrResponseInt(BengleMmr.frontLedSleep, 0x302010);
-        transport.queueMmrResponseInt(BengleMmr.rearLedAwake, 0x00FF00);
-        transport.queueMmrResponseInt(BengleMmr.rearLedSleep, 0x0000FF);
+        queueStoredPalette();
       }
       await bengle.onConnect();
+      if (queuePalette) {
+        queueStoredPalette();
+      }
     }
 
     tearDown(() async {
@@ -132,7 +181,7 @@ void main() {
       'a black front strip derives product-default switch colours',
       () async {
         transport = FakeBleTransport();
-        bengle = Bengle(transport: transport);
+        bengle = _RawWriteBengle(transport: transport);
         transport.queueOnConnectResponses(v13Model: 128);
         transport.queueMmrResponseInt(BengleMmr.frontLedAwake, 0x000000);
         transport.queueMmrResponseInt(BengleMmr.frontLedSleep, 0x000000);
@@ -153,7 +202,7 @@ void main() {
       'failed hydration leaves the state null (no fabricated black)',
       () async {
         transport = FakeBleTransport();
-        bengle = Bengle(transport: transport);
+        bengle = _RawWriteBengle(transport: transport);
         transport.queueOnConnectResponses(v13Model: 128);
         transport.failMmrReadsForAddresses.addAll([
           BengleMmr.frontLedAwake.address,
@@ -266,6 +315,134 @@ void main() {
         );
       },
     );
+
+    test('clear refreshes a cached palette after raw stored writes', () async {
+      await connect();
+      await bengle.previewLedStrip(
+        front: const Color16(0x1100, 0x2200, 0x3300),
+      );
+      await bengle.rawWrite(BengleMmr.frontLedSleep, 0x123456);
+      await bengle.rawWrite(BengleMmr.rearLedSleep, 0xABCDEF);
+      transport.queueMmrResponseInt(BengleMmr.frontLedSleep, 0x123456);
+      transport.queueMmrResponseInt(BengleMmr.rearLedSleep, 0xABCDEF);
+      transport.writes.clear();
+
+      await bengle.clearLedStripPreview();
+
+      expect(
+        mmrWrites().map(
+          (w) => ByteData.sublistView(w.data, 4, 8).getUint32(0, Endian.little),
+        ),
+        [0x123456, 0xABCDEF],
+      );
+      expect(
+        (await bengle.getLedStripState())!.frontStrip.sleeping,
+        const Color16(0x1200, 0x3400, 0x5600),
+      );
+    });
+
+    test(
+      'clear writes both live registers despite a stale preview cache',
+      () async {
+        await connect();
+        await bengle.previewLedStrip(
+          front: const Color16(0x3000, 0x2000, 0x1000),
+          back: const Color16(0, 0, 0xFF00),
+        );
+        await bengle.rawWrite(BengleMmr.frontLedColor, 0x123456);
+        await bengle.rawWrite(BengleMmr.rearLedColor, 0xABCDEF);
+        transport.writes.clear();
+
+        await bengle.clearLedStripPreview();
+
+        expect(
+          mmrWrites().map(
+            (w) => (
+              (w.data[1] << 16) | (w.data[2] << 8) | w.data[3],
+              ByteData.sublistView(w.data, 4, 8).getUint32(0, Endian.little),
+            ),
+          ),
+          [(0x00803890, 0x302010), (0x00803894, 0x0000FF)],
+        );
+      },
+    );
+
+    for (final blockedAddress in [0x00803890, 0x00803894]) {
+      for (final phases in [(0x02, 0x00), (0x00, 0x02)]) {
+        test('clear reconciles phase ${phases.$1} to ${phases.$2} during '
+            'write $blockedAddress', () async {
+          final blocking = _BlockingPreviewTransport(blockedAddress);
+          await connect(deviceTransport: blocking);
+          transport.emitNotification(Endpoint.stateInfo, [phases.$1, 0]);
+          await pumpEventQueue();
+          transport.writes.clear();
+
+          final clear = bengle.clearLedStripPreview();
+          await blocking.writeStarted.future;
+          transport.emitNotification(Endpoint.stateInfo, [phases.$2, 0]);
+          await pumpEventQueue();
+          blocking.releaseWrite.complete();
+          await clear;
+
+          final asleep = phases.$2 == 0x00;
+          expect(
+            mmrWrites().map(
+              (w) => ByteData.sublistView(
+                w.data,
+                4,
+                8,
+              ).getUint32(0, Endian.little),
+            ),
+            [
+              asleep ? 0xFF8000 : 0x302010,
+              asleep ? 0x00FF00 : 0x0000FF,
+              asleep ? 0x302010 : 0xFF8000,
+              asleep ? 0x0000FF : 0x00FF00,
+            ],
+          );
+        });
+      }
+    }
+
+    test('clear rejects failed refresh even with a cached palette', () async {
+      await connect();
+      transport.failMmrReadsForAddresses.add(BengleMmr.frontLedAwake.address);
+      transport.writes.clear();
+
+      await expectLater(
+        bengle.clearLedStripPreview(),
+        throwsA(isA<LedStripStateUnavailableException>()),
+      );
+
+      expect(mmrWrites(), isEmpty);
+      expect(await bengle.getLedStripState(), isNull);
+    });
+
+    for (final front in [true, false]) {
+      test('uncertain ${front ? 'front' : 'rear'} preview failure invalidates '
+          'the previous colour', () async {
+        final uncertain = _UncertainPreviewTransport();
+        await connect(deviceTransport: uncertain);
+        const original = Color16(0x1100, 0x2200, 0x3300);
+        const changed = Color16(0x4400, 0x5500, 0x6600);
+        Future<void> preview(Color16 color) => bengle.previewLedStrip(
+          front: front ? color : null,
+          back: front ? null : color,
+        );
+        final address = front ? 0x00803890 : 0x00803894;
+        await preview(original);
+        uncertain.failAfterWriteAddress = address;
+
+        await expectLater(preview(changed), throwsA(isA<TimeoutException>()));
+        expect(uncertain.live[address], 0x445566);
+        uncertain.failAfterWriteAddress = null;
+        transport.writes.clear();
+        await preview(original);
+
+        expect(mmrWrites(), hasLength(1));
+        expect(uncertain.live[address], 0x112233);
+      });
+    }
 
     test('clear rehydrates a missing palette before restoring it', () async {
       final failing = FakeBleTransport();

@@ -679,9 +679,11 @@ paths:
         stored write is kept and not lit, because the firmware applies a stored
         colour only when the machine is already in the state it belongs to.
 
-        Name at least one strip. Colours use the same spelling as
-        `GET /machine/ledStrip`. Returns 404 when the connected machine is not
-        a Bengle.
+        Name at least one strip. Each supplied colour must be a string of
+        exactly 12 hexadecimal characters (16-bit RRRRGGGGBBBB, case-insensitive).
+        Null, invalid characters, and shorter or longer strings return 400 before
+        reserving a machine-write queue entry. Returns 404 when the connected
+        machine is not a Bengle.
       tags: [Machine]
       requestBody:
         required: true
@@ -689,19 +691,28 @@ paths:
           application/json:
             schema:
               type: object
+              anyOf:
+                - required: [frontStrip]
+                - required: [backStrip]
               properties:
                 frontStrip:
                   type: string
+                  minLength: 12
+                  maxLength: 12
+                  pattern: '^[0-9a-fA-F]{12}$'
                   description: 16-bit RRRRGGGGBBBB
                 backStrip:
                   type: string
+                  minLength: 12
+                  maxLength: 12
+                  pattern: '^[0-9a-fA-F]{12}$'
                   description: 16-bit RRRRGGGGBBBB
               example: { frontStrip: "FF00D900A000" }
       responses:
         "202":
           description: Preview accepted
         "400":
-          description: Body was not JSON, or named neither strip
+          description: Body is not a JSON object, names neither strip, or a supplied colour is not a string of exactly 12 hexadecimal characters
         "404":
           description: Machine connected but does not support LED strip
         "503":
@@ -713,8 +724,10 @@ paths:
     post:
       summary: End a preview and restore the stored palette
       description: |
-        Puts the strips back to the stored colours for the state the machine is
-        in, writing only the live pair without mutating the stored palette.
+        Refreshes the stored palette from the machine, then unconditionally writes
+        both live registers for its current awake/sleep phase without mutating the
+        stored palette. If the phase changes during restoration, restores again
+        for the new phase before returning success.
         A preview otherwise stands until the next sleep or wake transition,
         which may be hours away. Returns 404 when the connected machine is not
         a Bengle.

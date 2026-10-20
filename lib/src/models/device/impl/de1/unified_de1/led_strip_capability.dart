@@ -62,7 +62,12 @@ mixin LedStripCapability on UnifiedDe1 {
       final rgb = _toFirmwareRgb(front);
       if (rgb != _shownFront) {
         final generation = _ledStripPreviewGeneration;
-        await writeMmrInt(BengleMmr.frontLedColor, rgb);
+        try {
+          await writeMmrInt(BengleMmr.frontLedColor, rgb);
+        } catch (_) {
+          _shownFront = null;
+          rethrow;
+        }
         if (generation == _ledStripPreviewGeneration) {
           _shownFront = rgb;
         }
@@ -72,7 +77,12 @@ mixin LedStripCapability on UnifiedDe1 {
       final rgb = _toFirmwareRgb(back);
       if (rgb != _shownBack) {
         final generation = _ledStripPreviewGeneration;
-        await writeMmrInt(BengleMmr.rearLedColor, rgb);
+        try {
+          await writeMmrInt(BengleMmr.rearLedColor, rgb);
+        } catch (_) {
+          _shownBack = null;
+          rethrow;
+        }
         if (generation == _ledStripPreviewGeneration) {
           _shownBack = rgb;
         }
@@ -97,27 +107,40 @@ mixin LedStripCapability on UnifiedDe1 {
   /// A preview otherwise stands until the next sleep or wake transition, which may
   /// be hours away, so leaving a picker has to end it explicitly.
   Future<void> clearLedStripPreview() async {
-    var state = _ledStripState.value;
-    if (state == null) {
-      await _hydrateLedStrip();
-      state = _ledStripState.value;
-    }
+    _forgetLedStripPreview();
+    await _hydrateLedStrip();
+    final state = _ledStripState.value;
     if (state == null) {
       throw LedStripStateUnavailableException(
         'ledStrip state unavailable (hydration failed or not yet complete)',
       );
     }
-    final machineState = latestMachineState;
-    if (machineState == null) {
-      throw LedStripStateUnavailableException(
-        'machine state unavailable (stateInfo not yet received)',
+    while (true) {
+      final machineState = latestMachineState;
+      if (machineState == null) {
+        throw LedStripStateUnavailableException(
+          'machine state unavailable (stateInfo not yet received)',
+        );
+      }
+      final asleep = machineState == MachineState.sleeping;
+      await writeMmrInt(
+        BengleMmr.frontLedColor,
+        _toFirmwareRgb(
+          asleep ? state.frontStrip.sleeping : state.frontStrip.awake,
+        ),
       );
+      await writeMmrInt(
+        BengleMmr.rearLedColor,
+        _toFirmwareRgb(
+          asleep ? state.backStrip.sleeping : state.backStrip.awake,
+        ),
+      );
+      final restoredState = latestMachineState;
+      if (restoredState != null &&
+          (restoredState == MachineState.sleeping) == asleep) {
+        return;
+      }
     }
-    final asleep = machineState == MachineState.sleeping;
-    await previewLedStrip(
-      front: asleep ? state.frontStrip.sleeping : state.frontStrip.awake,
-      back: asleep ? state.backStrip.sleeping : state.backStrip.awake,
-    );
   }
 
   Future<void> commitLedStrip() async {}

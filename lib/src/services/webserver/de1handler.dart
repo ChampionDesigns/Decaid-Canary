@@ -282,16 +282,29 @@ class De1Handler {
           'error': 'name at least one of frontStrip or backStrip',
         });
       }
+      for (final field in ['frontStrip', 'backStrip']) {
+        if (!map.containsKey(field)) continue;
+        final value = map[field];
+        if (value is! String ||
+            value.length != 12 ||
+            !RegExp(r'^[0-9a-fA-F]{12}$').hasMatch(value)) {
+          return jsonBadRequest({
+            'error': '$field must be exactly 12 hexadecimal characters',
+          });
+        }
+      }
+      final front = map.containsKey('frontStrip')
+          ? Color16.fromJson(map['frontStrip'])
+          : null;
+      final back = map.containsKey('backStrip')
+          ? Color16.fromJson(map['backStrip'])
+          : null;
       return withQueuedDe1((de1) async {
         final gate = _bengleFirmwareGate(de1, 'ledStrip');
         if (gate != null) return gate;
         await (de1 as BengleInterface).previewLedStrip(
-          front: map.containsKey('frontStrip')
-              ? Color16.fromJson(map['frontStrip'])
-              : null,
-          back: map.containsKey('backStrip')
-              ? Color16.fromJson(map['backStrip'])
-              : null,
+          front: front,
+          back: back,
         );
         return jsonAccepted();
       });

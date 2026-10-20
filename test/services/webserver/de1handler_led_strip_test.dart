@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -318,6 +319,10 @@ void main() {
       transport.queueMmrResponseInt(BengleMmr.rearLedAwake, 0x00FF00);
       transport.queueMmrResponseInt(BengleMmr.rearLedSleep, 0x0000FF);
       await wireWith(Bengle(transport: transport));
+      transport.queueMmrResponseInt(BengleMmr.frontLedAwake, 0xFF8000);
+      transport.queueMmrResponseInt(BengleMmr.frontLedSleep, 0x302010);
+      transport.queueMmrResponseInt(BengleMmr.rearLedAwake, 0x00FF00);
+      transport.queueMmrResponseInt(BengleMmr.rearLedSleep, 0x0000FF);
       addTearDown(() async {
         await controller.dispose();
         await transport.dispose();
@@ -352,6 +357,77 @@ void main() {
           anyElement(isIn([0x00803898, 0x0080389C, 0x008038A0, 0x008038A4])),
         ),
       );
+    });
+
+    for (final field in ['frontStrip', 'backStrip']) {
+      for (final value in <Object?>[
+        null,
+        '',
+        'GGGGGGGGGGGG',
+        '123456789AB',
+        '123456789ABCD',
+        '123456789ABC\n',
+        123456789012,
+        true,
+        <String, dynamic>{},
+      ]) {
+        test(
+          'preview rejects $field=${jsonEncode(value)} before writing',
+          () async {
+            await connectBengle();
+
+            final res = await post(previewPath, {
+              'frontStrip': '123456789ABC',
+              'backStrip': 'abcdef012345',
+              field: value,
+            });
+
+            expect(res.statusCode, 400);
+            expect(mmrWrites(), isEmpty);
+          },
+        );
+      }
+    }
+
+    test('invalid preview bypasses a saturated machine-write queue', () async {
+      await connectBengle();
+      final started = Completer<void>();
+      final release = Completer<void>();
+      final active = controller.runDeviceWrite((_) async {
+        started.complete();
+        await release.future;
+      });
+      await started.future;
+      final pending = List.generate(
+        controller.maxPendingDeviceWrites,
+        (_) => controller.runDeviceWrite((_) async {}),
+      );
+      try {
+        for (final field in ['frontStrip', 'backStrip']) {
+          final res = await post(previewPath, {field: null});
+          expect(res.statusCode, 400);
+        }
+        expect(mmrWrites(), isEmpty);
+      } finally {
+        release.complete();
+        await active;
+        await Future.wait(pending);
+      }
+    });
+
+    test('preview accepts either strip alone and mixed-case hex', () async {
+      await connectBengle();
+
+      expect(
+        (await post(previewPath, {'frontStrip': 'aBcD12345678'})).statusCode,
+        202,
+      );
+      expect(
+        (await post(previewPath, {'backStrip': '12aB34cD56eF'})).statusCode,
+        202,
+      );
+
+      expect(mmrWrites(), [(0x00803890, 0xAB1256), (0x00803894, 0x123456)]);
     });
 
     test('GET remains stored-palette-only during a preview', () async {
