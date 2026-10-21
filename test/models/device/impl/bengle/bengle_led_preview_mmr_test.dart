@@ -1,18 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle_mmr.dart';
 
-/// The firmware keeps the LIVE strip colour apart from the stored palette.
-///
-/// `F_LEDStripColor` lights the strip the moment `FrontLEDColor` / `RearLEDColor`
-/// are written, and `applyLEDsForGivenState` recomputes them from the stored
-/// awake/sleep pair at the next sleep or wake transition. `F_LEDStoreColor`, on the
-/// stored registers, applies a colour only when the machine is already in the state
-/// that colour belongs to — which is why an asleep colour cannot be shown to someone
-/// editing it on an awake machine without the live pair.
-///
-/// These are the firmware's own addresses. A preview written to a stored register
-/// would decide the palette instead of showing a colour, so the two must not be
-/// confused.
 void main() {
   group('Bengle LED registers', () {
     test('the live pair carries the firmware addresses', () {

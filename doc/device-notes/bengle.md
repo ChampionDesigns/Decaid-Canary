@@ -97,6 +97,9 @@ endpoints 404 only on non-Bengle machines.
   volatile (PERM_RW), not persisted snapshots. The four stored rows above
   remain PERM_RWD and persist. The firmware rewrites the live pair from the
   stored palette at boot and on every sleep/wake transition.
+- Writing the live pair applies the colour immediately (APIView.cpp
+  F_LEDStripColor); writing a preview to a stored register would instead change
+  the persisted palette.
 - `previewLedStrip` writes only the live pair, never the four stored rows.
   Firmware #114 guarantees that a preview is volatile display state and
   cannot become a stored decision by accident; choosing the live addresses

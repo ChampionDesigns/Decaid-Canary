@@ -25,9 +25,6 @@ enum BengleMmr implements MmrAddress {
     writeScale: 10.0,
   ),
 
-  /// The LIVE front strip colour. Writing it lights the strip at once, and the
-  /// firmware recomputes it from the stored awake/sleep pair at the next sleep or
-  /// wake transition — so it shows a colour without deciding one.
   frontLedColor(
     0x00803890,
     4,
@@ -37,7 +34,6 @@ enum BengleMmr implements MmrAddress {
     max: 0xFFFFFF,
   ),
 
-  /// The live rear strip colour. See [frontLedColor].
   rearLedColor(
     0x00803894,
     4,
