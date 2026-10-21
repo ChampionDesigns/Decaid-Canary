@@ -727,7 +727,8 @@ paths:
         Refreshes the stored palette from the machine, then unconditionally writes
         both live registers for its current awake/sleep phase without mutating the
         stored palette. If the phase changes during restoration, restores again
-        for the new phase before returning success.
+        for the new phase before returning success, up to five restore passes.
+        Returns 503 if the phase did not settle within those passes.
         A preview otherwise stands until the next sleep or wake transition,
         which may be hours away. Returns 404 when the connected machine is not
         a Bengle.
@@ -738,7 +739,7 @@ paths:
         "404":
           description: Machine connected but does not support LED strip
         "503":
-          description: Machine write queue is full, or the stored palette or machine state is not available yet (hydration failed or has not completed); retrying after hydration may succeed
+          description: Machine write queue is full, the stored palette or machine state is not available yet (hydration failed or has not completed), or the awake/sleep phase did not settle after five restore passes; retrying after hydration or when the phase settles may succeed
         "500":
           description: No machine was connected, the machine changed during the write, or the write failed
 

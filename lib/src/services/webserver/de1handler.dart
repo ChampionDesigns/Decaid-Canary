@@ -249,15 +249,6 @@ class De1Handler {
       });
     });
 
-    /// Show colours on the strips without storing them.
-    ///
-    /// The firmware keeps the live colour apart from the stored palette, so this is
-    /// how a picker shows a colour — including an ASLEEP colour on an awake machine,
-    /// which a stored write cannot do: the firmware applies a stored colour only when
-    /// the machine is already in the state it belongs to.
-    ///
-    /// Body: `{"frontStrip": "<12 hex>", "backStrip": "<12 hex>"}`, either optional,
-    /// in the same colour spelling `GET /machine/ledStrip` uses.
     app.post('/api/v1/machine/ledStrip/preview', (Request r) async {
       final dynamic json;
       try {
@@ -310,8 +301,6 @@ class De1Handler {
       });
     });
 
-    /// End a preview: the strips go back to the stored palette for the state the
-    /// machine is in. A preview otherwise stands until the next sleep or wake.
     app.post('/api/v1/machine/ledStrip/preview/clear', (Request _) async {
       return withQueuedDe1((de1) async {
         final gate = _bengleFirmwareGate(de1, 'ledStrip');

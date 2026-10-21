@@ -53,6 +53,43 @@ class _BlockingPreviewTransport extends FakeBleTransport {
   }
 }
 
+class _FlappingPhaseTransport extends FakeBleTransport {
+  int restorePasses = 0;
+  bool _asleep = true;
+
+  @override
+  Future<void> write(
+    String serviceUUID,
+    String characteristicUUID,
+    Uint8List data, {
+    bool withResponse = true,
+    Duration? timeout,
+  }) async {
+    final address = data.length >= 4
+        ? (data[1] << 16) | (data[2] << 8) | data[3]
+        : null;
+    if (characteristicUUID == Endpoint.writeToMMR.uuid &&
+        address == BengleMmr.frontLedColor.address &&
+        restorePasses >= 5) {
+      throw StateError('restore exceeded five write pairs');
+    }
+    await super.write(
+      serviceUUID,
+      characteristicUUID,
+      data,
+      withResponse: withResponse,
+      timeout: timeout,
+    );
+    if (characteristicUUID == Endpoint.writeToMMR.uuid &&
+        address == BengleMmr.rearLedColor.address) {
+      restorePasses++;
+      _asleep = !_asleep;
+      emitNotification(Endpoint.stateInfo, [_asleep ? 0x00 : 0x02, 0]);
+      await pumpEventQueue();
+    }
+  }
+}
+
 class _UncertainPreviewTransport extends FakeBleTransport {
   final live = <int, int>{};
   int? failAfterWriteAddress;
@@ -403,6 +440,51 @@ void main() {
         });
       }
     }
+
+    test(
+      'clear fails after five passes when the phase never settles',
+      () async {
+        final flapping = _FlappingPhaseTransport();
+        await connect(deviceTransport: flapping);
+        transport.emitNotification(Endpoint.stateInfo, [0x00, 0]);
+        await pumpEventQueue();
+        transport.writes.clear();
+
+        await expectLater(
+          bengle.clearLedStripPreview(),
+          throwsA(
+            isA<LedStripStateUnavailableException>().having(
+              (error) => error.message,
+              'message',
+              contains('phase did not settle'),
+            ),
+          ),
+        );
+
+        expect(flapping.restorePasses, 5);
+        expect(
+          mmrWrites().map(
+            (w) => (
+              (w.data[1] << 16) | (w.data[2] << 8) | w.data[3],
+              ByteData.sublistView(w.data, 4, 8).getUint32(0, Endian.little),
+            ),
+          ),
+          List.generate(
+            5,
+            (pass) => [
+              (
+                BengleMmr.frontLedColor.address,
+                pass.isEven ? 0x302010 : 0xFF8000,
+              ),
+              (
+                BengleMmr.rearLedColor.address,
+                pass.isEven ? 0x0000FF : 0x00FF00,
+              ),
+            ],
+          ).expand((pair) => pair),
+        );
+      },
+    );
 
     test('clear rejects failed refresh even with a cached palette', () async {
       await connect();

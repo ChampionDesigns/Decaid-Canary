@@ -131,6 +131,21 @@ endpoints 404 only on non-Bengle machines.
   persisted write) and returns null on failure even if an older cached
   state exists.
 
+### Preview restoration
+
+The live `FrontLEDColor` / `RearLEDColor` pair is volatile (PERM_RW on
+firmware #114); the four stored awake/sleep registers remain PERM_RWD.
+Firmware re-applies the stored colours on every sleep/wake transition.
+Writing the live pair therefore lets a picker show a sleep colour on an awake
+machine without changing its stored palette. A preview otherwise remains until
+the next transition, so leaving the picker must explicitly clear it.
+
+Clear refreshes the stored palette, restores both live registers for the current
+phase, then re-checks the phase after writing. A transition during either write
+requires another restore pass. Clear holds the exclusive machine-write queue
+slot, so it stops after five passes and reports that the phase did not settle
+rather than blocking other writes indefinitely or claiming success.
+
 ## Cup warmer (rows 50, 58-61)
 
 - Manual mode requires CupWarmerMode=1 AND machine Idle AND
