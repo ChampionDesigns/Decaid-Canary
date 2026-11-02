@@ -63,11 +63,6 @@ class MachineSnapshot {
     required this.steamTemperature,
   });
 
-  // Derived hydraulic channels R / Z / W, computed on read from the raw
-  // [pressure] and [flow] fields — never stored — so already-recorded history
-  // shots gain these channels with zero migration ([fromJson] does not read
-  // them; [toJson] recomputes them).
-
   /// Shared gate for the derived channels: returns [value] only when
   /// `flow >= 0.3 mL/s && pressure >= 0.3 bar` (below that the ratios are
   /// numerically meaningless noise) and inputs and result are finite. The
@@ -78,24 +73,6 @@ class MachineSnapshot {
     if (!flow.isFinite || !pressure.isFinite || !value.isFinite) return null;
     return value;
   }
-
-  // Each of the three has a MEASURED counterpart on the Bengle puck-estimator
-  // sensor (`/api/v1/sensors/<machine>-puckestimator`, live stream at
-  // `ws/v1/sensors/<id>/snapshot`). Same quantity, same units; the difference is
-  // which flow it is computed from. These use reported group flow (Q_in) — the
-  // only flow every machine has. The firmware uses Q_puck, the flow actually
-  // passing through the puck, taken from the pair its resistance fit consumes.
-  // They agree in steady state and diverge during compliance transients.
-  //
-  // PREFER THE MEASURED VALUE WHEN THE MACHINE OFFERS IT. These exist because
-  // they work everywhere — every machine, including a plain DE1, and every
-  // historical shot, since they are recomputed on read.
-  //
-  // The two also go null at DIFFERENT times, so a client switching between them
-  // sees gaps in different places rather than a continuous trace: these gate on
-  // `flow >= 0.3 && pressure >= 0.3`, while the measured ones follow the
-  // firmware's own QOUT_GATE and its not-yet-observed sentinel. Switching source
-  // mid-shot will look like a glitch unless the client expects it.
 
   /// Puck hydraulic resistance **R = P / F²** in bar·s²/mL², DERIVED.
   ///
@@ -172,9 +149,6 @@ class MachineSnapshot {
       'targetGroupTemperature': targetGroupTemperature,
       'profileFrame': profileFrame,
       'steamTemperature': steamTemperature,
-      // Derived channels. Keys are OMITTED (not null) when gated — old skins
-      // never see them, and consumers can rely on key presence as the
-      // validity signal.
       if (puckResistanceDerived != null)
         'puckResistanceDerived': puckResistanceDerived,
       if (loadImpedanceDerived != null)
