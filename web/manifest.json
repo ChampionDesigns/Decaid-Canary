@@ -1,11 +1,11 @@
 {
-    "name": "Decaid-Canary",
-    "short_name": "Decaid-Canary",
+    "name": "Decide",
+    "short_name": "Decide",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#hexcode",
     "theme_color": "#hexcode",
-    "description": "Decaid-Canary - Gateway for Decent Espresso Machines",
+    "description": "Decide - Gateway for Decent Espresso Machines",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
