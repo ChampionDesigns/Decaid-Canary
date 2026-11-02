@@ -108,25 +108,11 @@ those runtime paths.
 
 See [`device-notes/bengle.md`](device-notes/bengle.md#ebus-tap).
 
-## Footgun #3: `codesign --deep` destroys Sparkle's Installer XPC
+## Mac App Store: Sparkle entitlements
 
-**Symptom:** After a signed/notarized update, Sparkle's "Update failed" alert or a silent failure to relaunch. The app builds and notarizes fine.
+`com.apple.security.temporary-exception.mach-lookup.global-name` is not permitted in Mac App Store builds. Any future `APP_STORE=true` macOS build must drop the Sparkle keys/entitlements and keep self-update disabled.
 
-**Root cause:** `codesign --deep --force --entitlements <host.plist>` re-signs every nested binary (Sparkle.framework, Installer.xpc, Updater.app, Autoupdate) with the HOST's entitlements. The sandboxed Installer XPC service needs its own embedded entitlements; clobbering them breaks the sandbox escape that replaces the app in `/Applications`. Sparkle explicitly warns against `--deep`.
-
-**Fix:** `scripts/sign_macos_deepest_first.sh` signs Sparkle's nested helpers deepest-first (`Installer.xpc` → `Downloader.xpc` → `Updater.app` → `Autoupdate` → framework → host), each without `--entitlements` so existing embedded entitlements survive; only the host app gets `Release.entitlements`. Gates in `scripts/verify_macos_signature.sh` (Team ID, Hardened Runtime, mach-lookup names, no `get-task-allow`) run before and after notarization.
-
-## Footgun #4: `codesign` does not expand `$(PRODUCT_BUNDLE_IDENTIFIER)`
-
-**Symptom:** The signed app's entitlements contain the literal string `$(PRODUCT_BUNDLE_IDENTIFIER)-spks`, so Sparkle's XPC lookup fails (the XPC registers as `net.tadel.reaprime-spks`).
-
-**Root cause:** `codesign --entitlements` takes the file as-is; Xcode build-variable expansion happens only in Xcode's own signing step. The signing script sed-expands the bundle id before signing (see `scripts/sign_macos_deepest_first.sh`).
-
-**Fix:** Never hand `Release.entitlements` to `codesign` unexpanded. The verification script also greps for the unexpanded variable.
-
-**Note (App Store):** `com.apple.security.temporary-exception.mach-lookup.global-name` is not permitted in Mac App Store builds. Any future `APP_STORE=true` macOS build must drop the Sparkle keys/entitlements and keep self-update disabled.
-
-## Footgun #5: iOS file picker returns unreadable security-scoped folders
+## Footgun #3: iOS file picker returns unreadable security-scoped folders
 
 **Symptom:** On iOS, installing a plugin (or importing a de1app folder, skin live-edit, data restore) via the file picker fails with `PathAccessException: Directory listing failed ... (OS Error: Operation not permitted, errno = 1)`. The picked path lives under `Mobile Documents/com~apple~CloudDocs/...` (iCloud Drive) or another app's sandbox — outside our container.
 
@@ -136,7 +122,7 @@ See [`device-notes/bengle.md`](device-notes/bengle.md#ebus-tap).
 
 **Impact:** iOS only; the channel is a no-op elsewhere (`Platform.isIOS` guard). Do not add new `FilePicker.getDirectoryPath()` consumers without routing them through `SecurityScopedFileService`.
 
-## Footgun #6: macOS App Sandbox grants only the selected save URL, not its siblings
+## Footgun #4: macOS App Sandbox grants only the selected save URL, not its siblings
 
 **Symptom:** an export that stages a temporary file next to the user's chosen
 save path works on Linux, Docker and CI, then fails in the signed macOS build
@@ -157,7 +143,7 @@ a plain `File.rename` as the final step either: it does not overwrite an
 existing destination on Windows, and it crosses directories that the sandbox may
 not permit.
 
-## Footgun #7: A fresh git worktree cannot build Android
+## Footgun #5: A fresh git worktree cannot build Android
 
 **Symptom:** `scripts/sb-dev.sh start --platform <serial>` inside a linked git
 worktree fails with
