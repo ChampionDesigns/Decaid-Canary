@@ -27,7 +27,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Decaid connects to your DE1 espresso machine and scales over Bluetooth to control shots and read live data.</string>
+	<string>Decide connects to your DE1 espresso machine and scales over Bluetooth to control shots and read live data.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Needed for local storage</string>
 	<key>NSDownloadsFolderUsageDescription</key>
@@ -35,7 +35,7 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2025-2026 Decent Espresso. Licensed under GPL v3.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Decaid uses your local network to reach your espresso machine and scales, and to find nearby wireless scales.</string>
+	<string>Decide uses your local network to reach your espresso machine and scales, and to find nearby wireless scales.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_decentscale._tcp</string>
