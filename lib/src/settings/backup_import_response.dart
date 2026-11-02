@@ -14,7 +14,7 @@ class BackupImportException implements Exception {
   bool get isInvalidBackup => statusCode == 400;
 
   String get userMessage => reason == 'too_many_entries'
-      ? 'The selected file does not appear to be a normal Decaid backup. '
+      ? 'The selected file does not appear to be a normal Decide backup. '
             'If it is De1App data, extract the archive, use Import from De1App, '
             'and select the de1plus folder.'
       : message;

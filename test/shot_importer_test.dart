@@ -484,7 +484,10 @@ void main() {
             isA<UserFacingFormatException>().having(
               (e) => e.message,
               'message',
-              contains('Import from De1App'),
+              allOf(
+                startsWith('Not a Decide shot export'),
+                contains('Import from De1App'),
+              ),
             ),
           ),
         );

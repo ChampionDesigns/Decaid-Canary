@@ -75,18 +75,18 @@ class _WebServerPortConflictScreenState
                   children: [
                     ShadAlert.destructive(
                       icon: const Icon(LucideIcons.triangleAlert, size: 16),
-                      title: const Text('Another Decaid app is running'),
+                      title: const Text('Another Decide app is running'),
                       description: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         spacing: 12,
                         children: [
                           Text(
                             'Port ${widget.port} is already in use. Only one '
-                            'Decaid app can run at a time, because they share '
+                            'Decide app can run at a time, because they share '
                             'the same port.',
                           ),
                           const Text(
-                            'Close the other Decaid app, then open this one '
+                            'Close the other Decide app, then open this one '
                             'again.',
                           ),
                         ],

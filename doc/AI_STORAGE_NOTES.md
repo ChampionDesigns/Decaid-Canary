@@ -75,7 +75,7 @@ the selected path, so no predictable path (`<destination>.part`) is ever opened
 for writing. A predictable path is itself a hazard: `FileMode.write` follows an
 existing symlink and truncates its target. Staging must not happen beside the
 user-selected destination, because the macOS App Sandbox grants only the
-selected URL (see `AI_BUILD_NOTES.md` Footgun #6).
+selected URL (see `AI_BUILD_NOTES.md` Footgun #4).
 
 `DatabaseReset.run()` also reclaims `<target>.reset-*` quarantine left by an
 earlier attempt before it touches the live targets, so a retry cannot report

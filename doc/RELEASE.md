@@ -39,9 +39,9 @@ Each tagged release attaches these files:
 
 | Platform | Artifact | Install |
 | --- | --- | --- |
-| macOS (Intel + Apple Silicon) | `decaid-canary-macos-<version>.dmg` | Open the DMG and drag Decaid-Canary to Applications. Unsigned; right-click > Open on first launch. |
-| macOS (portable) | `decaid-canary-macos-<version>.zip` | Extract and run `Decaid-Canary.app`. |
-| Windows x64 | `decaid-canary-windows-x64-<version>.zip` | Extract the whole ZIP and run `Decaid-Canary.exe`. Portable and unsigned; the VC++ runtime is bundled. |
+| macOS (Intel + Apple Silicon) | `decaid-canary-macos-<version>.dmg` | Open the DMG and drag Decide to Applications. Unsigned; right-click > Open on first launch. |
+| macOS (portable) | `decaid-canary-macos-<version>.zip` | Extract and run `Decide.app`. |
+| Windows x64 | `decaid-canary-windows-x64-<version>.zip` | Extract the whole ZIP and run `Decide.exe`. Portable and unsigned; the VC++ runtime is bundled. |
 | Linux x86_64 | `decaid-canary-linux-x86_64-<version>.AppImage` | `chmod +x` and run. No installation needed. |
 | Linux ARM64 | `decaid-canary-linux-aarch64-<version>.AppImage` | `chmod +x` and run. No installation needed. |
 | Linux portable | `decaid-canary-linux-x64-<version>.tar.gz`, `decaid-canary-linux-arm64-<version>.tar.gz` | Extract and run `decaid-canary` from the bundle directory. |
@@ -80,7 +80,7 @@ Get-FileHash decaid-canary-windows-x64-<version>.zip -Algorithm SHA256
 
 ### Windows notes
 
-The Windows build is unsigned, so a clean machine may show an unknown-publisher warning when `Decaid-Canary.exe` is first launched. There is no installer; the ZIP is portable. Decaid-Canary stores user data and logs under `%APPDATA%`, not in the extraction folder, so deleting the extracted folder does not remove them.
+The Windows build is unsigned, so a clean machine may show an unknown-publisher warning when `Decide.exe` is first launched. There is no installer; the ZIP is portable. Decide stores user data and logs under `%APPDATA%`, not in the extraction folder, so deleting the extracted folder does not remove them.
 
 ### macOS notes
 
