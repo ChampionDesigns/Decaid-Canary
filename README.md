@@ -302,7 +302,7 @@ The original name **REA** stood for "Reasonable Espresso App" — a tongue-in-ch
 
 - **Internal identifiers** remain unchanged where they do not identify the installed application (`reaprime` Dart package, `streamline_bridge` database, and `.reaplugin` extension) to avoid breaking integrations.
 - **Platform identifiers** are fork-owned so canary builds coexist with upstream Decaid: Android `com.decentespresso.decaid.canary`, Apple/Linux `com.decentespresso.decaid-canary`.
-- **Display name** is **Decaid-Canary** on all platforms. On macOS, Finder displays the application bundle as **Decaid-Canary.app**; use **Decaid-Canary** in prose.
+- **Display name** is **Decide** on all platforms. On macOS, Finder displays the application bundle as **Decide.app**; use **Decide** in prose.
 
 ## Credits
 
