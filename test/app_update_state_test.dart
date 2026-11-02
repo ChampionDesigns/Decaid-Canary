@@ -10,7 +10,7 @@ void main() {
         latestVersion: '0.6.2',
         releaseNotes: 'notes',
         releaseUrl:
-            'https://github.com/decentespresso/decaid/releases/tag/v0.6.2',
+            'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/v0.6.2',
         installable: true,
         progress: null,
         error: null,
@@ -22,7 +22,7 @@ void main() {
         'latestVersion': '0.6.2',
         'releaseNotes': 'notes',
         'releaseUrl':
-            'https://github.com/decentespresso/decaid/releases/tag/v0.6.2',
+            'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/v0.6.2',
         'installable': true,
         'progress': null,
         'error': null,
@@ -33,7 +33,7 @@ void main() {
       const state = AppUpdateState(
         phase: AppUpdatePhase.idle,
         currentVersion: '0.6.1',
-        releaseUrl: 'https://github.com/decentespresso/decaid/releases',
+        releaseUrl: 'https://github.com/ChampionDesigns/Decaid-Canary/releases',
         installable: false,
       );
 

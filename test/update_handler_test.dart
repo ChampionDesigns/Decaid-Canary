@@ -11,7 +11,7 @@ import 'package:shelf_plus/shelf_plus.dart';
 import 'helpers/mock_settings_service.dart';
 
 class _NoopUpdater extends AndroidUpdater {
-  _NoopUpdater() : super(owner: 'tadelv', repo: 'reaprime');
+  _NoopUpdater() : super(owner: 'ChampionDesigns', repo: 'Decaid-Canary');
   @override
   Future<UpdateInfo?> checkForUpdate(
     String v, {

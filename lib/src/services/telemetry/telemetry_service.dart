@@ -1,6 +1,3 @@
-import 'dart:io';
-import 'package:flutter/foundation.dart';
-import 'package:reaprime/src/services/telemetry/firebase_crashlytics_telemetry_service.dart';
 import 'package:reaprime/src/services/telemetry/noop_telemetry_service.dart';
 import 'package:reaprime/src/services/telemetry/log_buffer.dart';
 
@@ -23,15 +20,8 @@ abstract class TelemetryService {
 
   String getLogBuffer();
 
+  // Decaid-Canary fork: no upstream Firebase project; telemetry is disabled.
   static TelemetryService create({required LogBuffer logBuffer}) {
-    final isDebugMode = kDebugMode;
-    final isSimulateMode = const bool.hasEnvironment('simulate');
-    final isLinuxOrWindows = Platform.isLinux || Platform.isWindows;
-
-    if (isDebugMode || isSimulateMode || isLinuxOrWindows) {
-      return NoOpTelemetryService();
-    }
-
-    return FirebaseCrashlyticsTelemetryService(logBuffer);
+    return NoOpTelemetryService();
   }
 }
