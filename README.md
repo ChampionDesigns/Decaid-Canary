@@ -49,7 +49,7 @@ complexity of machine communication and device connectivity.
 
 To browse the complete API documentation:
 
-1. Start Decaid-Canary
+1. Start Decide
 2. Navigate to [http://localhost:4001](http://localhost:4001)
 
 Or:  
