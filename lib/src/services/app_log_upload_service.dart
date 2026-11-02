@@ -175,7 +175,7 @@ final class AppLogUploadService extends ChangeNotifier {
     } catch (error, stackTrace) {
       _log.warning('App log upload failed', error, stackTrace);
       try {
-        await _setLastResult('Upload failed; Decaid will retry later');
+        await _setLastResult('Upload failed; Decide will retry later');
       } catch (storageError, storageStackTrace) {
         _log.warning(
           'Failed to save app log upload result',

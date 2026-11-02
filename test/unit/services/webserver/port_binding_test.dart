@@ -63,7 +63,7 @@ void main() {
     });
 
     test('reports the port when it is already bound', () async {
-      // Hold a real port, the way the other Decaid app would.
+      // Hold a real port, the way the other Decide app would.
       final holder = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => holder.close());
 
