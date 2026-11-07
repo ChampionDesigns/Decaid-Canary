@@ -1,0 +1,527 @@
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:reaprime/src/models/device/impl/bengle/bengle_mmr.dart'
+    show BengleMmr, BengleSteamMmr;
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart'
+    show MMRItem;
+import 'package:reaprime/src/models/device/impl/de1/mmr_address.dart'
+    show MmrAddress, MmrValueKind;
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart'
+    show BengleScaleMmr;
+import 'package:yaml/yaml.dart';
+
+import 'bengle_mmr_firmware_rows.dart';
+
+const String _contractPath = 'assets/api/bengle_hw_v1.yml';
+
+/// The contract_version this registration table was written against.
+/// Bump deliberately, together with the enum updates the new contract needs.
+const int _expectedContractVersion = 3;
+
+const int _expectedRegisterCount = 61;
+
+/// One app-declared register under test: the app enum entry and the FIRMWARE
+/// register name of its row in bengle_hw_v1.yml.
+class ContractEntry {
+  const ContractEntry(this.register, this.contractName);
+
+  final MmrAddress register;
+
+  /// Firmware register name (the `name:` field of the contract row).
+  final String contractName;
+
+  String get label => '${register.runtimeType}.${register.name}';
+}
+
+const List<ContractEntry> entriesUnderTest = <ContractEntry>[
+  ContractEntry(MMRItem.externalFlash, 'ExternalFlash'),
+  ContractEntry(MMRItem.hwConfig, 'HWConfig'),
+  ContractEntry(MMRItem.model, 'Model'),
+  ContractEntry(MMRItem.cpuBoardModel, 'CPUBoardModel'),
+  ContractEntry(MMRItem.v13Model, 'v13Model'),
+  ContractEntry(MMRItem.cpuFirmwareBuild, 'CPUFirmwareBuild'),
+  ContractEntry(MMRItem.debugLen, 'DebugLen'),
+  ContractEntry(MMRItem.debugBuffer, 'DebugBuffer'),
+  ContractEntry(MMRItem.debugConfig, 'DebugConfig'),
+  ContractEntry(MMRItem.fanThreshold, 'FanThreshold'),
+  ContractEntry(MMRItem.tankTemp, 'TankTemp'),
+  ContractEntry(MMRItem.heaterUp1Flow, 'HeaterUp1Flow'),
+  ContractEntry(MMRItem.heaterUp2Flow, 'HeaterUp2Flow'),
+  ContractEntry(MMRItem.waterHeaterIdleTemp, 'WaterHeaterIdleTemp'),
+  ContractEntry(MMRItem.ghcInfo, 'GHCInfo'),
+  ContractEntry(MMRItem.targetSteamFlow, 'TargetSteamFlow'),
+  ContractEntry(MMRItem.steamStartSecs, 'SteamStartSecs'),
+  ContractEntry(MMRItem.serialN, 'SerialN'),
+  ContractEntry(MMRItem.heaterV, 'HeaterV'),
+  ContractEntry(MMRItem.heaterUp2Timeout, 'HeaterUp2Timeout'),
+  ContractEntry(MMRItem.calFlowEst, 'CalFlowEst'),
+  ContractEntry(MMRItem.flushFlowRate, 'FlushFlowRate'),
+  ContractEntry(MMRItem.flushTemp, 'FlushTemp'),
+  ContractEntry(MMRItem.flushTimeout, 'FlushTimeout'),
+  ContractEntry(MMRItem.hotWaterFlowRate, 'HotWaterFlowRate'),
+  ContractEntry(MMRItem.steamPurgeMode, 'SteamPurgeMode'),
+  ContractEntry(MMRItem.allowUSBCharging, 'AllowUSBCharging'),
+  ContractEntry(MMRItem.appFeatureFlags, 'AppFeatureFlags'),
+  ContractEntry(MMRItem.refillKitPresent, 'RefillKitPresent'),
+  ContractEntry(MMRItem.userPresent, 'UserPresent'),
+  ContractEntry(BengleScaleMmr.endOfShotWeight, 'EndOfShotWeight'),
+  ContractEntry(BengleScaleMmr.scaleTare, 'ScaleTare'),
+  ContractEntry(BengleMmr.matSetPoint, 'MatSetPoint'),
+  ContractEntry(BengleMmr.scaleCalCmd, 'ScaleCalCmd'),
+  ContractEntry(BengleMmr.scaleCalState, 'ScaleCalState'),
+  ContractEntry(BengleMmr.scaleCalWeight, 'ScaleCalWeight'),
+  ContractEntry(BengleMmr.frontLedColor, 'FrontLEDColor'),
+  ContractEntry(BengleMmr.rearLedColor, 'RearLEDColor'),
+  ContractEntry(BengleMmr.frontLedAwake, 'FrontLEDAwake'),
+  ContractEntry(BengleMmr.rearLedAwake, 'RearLEDAwake'),
+  ContractEntry(BengleMmr.frontLedSleep, 'FrontLEDSleep'),
+  ContractEntry(BengleMmr.rearLedSleep, 'RearLEDSleep'),
+  ContractEntry(BengleMmr.cupWarmerMode, 'CupWarmerMode'),
+  ContractEntry(BengleMmr.inactivitySleepTimeout, 'InactivitySleepTimeout'),
+  ContractEntry(BengleMmr.setLocalTimeOfWeek, 'SetLocalTimeOfWeek'),
+  ContractEntry(BengleMmr.scheduleEntry, 'ScheduleEntry'),
+  ContractEntry(BengleMmr.scheduleControl, 'ScheduleControl'),
+  ContractEntry(BengleMmr.matCurrentTemp, 'MatCurrentTemp'),
+  ContractEntry(BengleMmr.matPreheatEnable, 'MatPreheatEnable'),
+  ContractEntry(BengleMmr.matPreheatLeadMin, 'MatPreheatLeadMin'),
+  ContractEntry(BengleMmr.matPreheatActive, 'MatPreheatActive'),
+  ContractEntry(BengleSteamMmr.targetMilkTemp, 'TargetMilkTemp'),
+];
+
+class ContractRegister {
+  const ContractRegister({
+    required this.name,
+    required this.fwRow,
+    required this.address,
+    required this.length,
+    required this.perms,
+    required this.mult,
+    required this.valueKind,
+    required this.unit,
+    required this.min,
+    required this.max,
+    required this.appAlias,
+  });
+
+  final String name;
+  final int? fwRow;
+  final int address;
+  final int length;
+  final String perms;
+  final int mult;
+  final String valueKind;
+  final String? unit;
+  final int? min;
+  final int? max;
+  final String? appAlias;
+}
+
+class HwContract {
+  const HwContract({
+    required this.contractVersion,
+    required this.firmwareCommit,
+    required this.rows,
+    required this.registers,
+  });
+
+  final int contractVersion;
+  final String firmwareCommit;
+
+  final List<ContractRegister> rows;
+
+  /// Keyed by firmware register name.
+  final Map<String, ContractRegister> registers;
+}
+
+int? _intOrNull(Object? value) {
+  if (value == null) return null;
+  if (value is int) return value;
+  final t = value.toString().trim();
+  if (t.startsWith('0x') || t.startsWith('0X')) {
+    return int.parse(t.substring(2), radix: 16);
+  }
+  return int.parse(t);
+}
+
+ContractRegister _register(YamlMap fields) {
+  final name =
+      fields['name'] as String? ??
+      (throw const FormatException('register row without a name'));
+  return ContractRegister(
+    name: name,
+    fwRow: _intOrNull(fields['fw_row']),
+    address:
+        _intOrNull(fields['address']) ??
+        (throw FormatException('register $name has no address')),
+    length:
+        _intOrNull(fields['length']) ??
+        (throw FormatException('register $name has no length')),
+    perms: fields['perms']?.toString() ?? '',
+    mult:
+        _intOrNull(fields['mult']) ??
+        (throw FormatException('register $name has no mult')),
+    valueKind: fields['value_kind']?.toString() ?? '',
+    unit: fields['unit']?.toString(),
+    min: _intOrNull(fields['min']),
+    max: _intOrNull(fields['max']),
+    appAlias: fields['app_alias']?.toString(),
+  );
+}
+
+HwContract parseBengleHwContract(String text) {
+  final doc = loadYaml(text);
+  if (doc is! YamlMap) {
+    throw const FormatException('the contract is not a YAML mapping');
+  }
+  final version = _intOrNull(doc['contract_version']);
+  if (version == null) {
+    throw const FormatException('contract_version missing from contract');
+  }
+  final firmware = doc['firmware'];
+  final commit = firmware is YamlMap ? firmware['commit']?.toString() : null;
+  if (commit == null) {
+    throw const FormatException('firmware.commit missing from contract');
+  }
+  final rows = doc['registers'];
+  if (rows is! YamlList || rows.isEmpty) {
+    throw const FormatException('no registers parsed from contract');
+  }
+  final physical = [for (final row in rows) _register(row as YamlMap)];
+  final registers = <String, ContractRegister>{};
+  for (final register in physical) {
+    if (registers.containsKey(register.name)) {
+      throw FormatException('duplicate register name ${register.name}');
+    }
+    registers[register.name] = register;
+  }
+  return HwContract(
+    contractVersion: version,
+    firmwareCommit: commit,
+    rows: List.unmodifiable(physical),
+    registers: registers,
+  );
+}
+
+HwContract? _cached;
+HwContract _contract() =>
+    _cached ??= parseBengleHwContract(File(_contractPath).readAsStringSync());
+
+String _hex(int value) =>
+    '0x${value.toRadixString(16).toUpperCase().padLeft(8, '0')}';
+
+bool _appKindReads(MmrValueKind app, String contract) =>
+    app.name == contract ||
+    (app == MmrValueKind.int32 && contract == MmrValueKind.boolean.name);
+
+void main() {
+  group('bengle_hw_v1.yml', () {
+    test('parses, pins a firmware commit, and matches the checker version', () {
+      final c = _contract();
+      expect(
+        c.contractVersion,
+        _expectedContractVersion,
+        reason:
+            'contract_version drift: the contract file is '
+            'v${c.contractVersion} but this registration table was written '
+            'against v$_expectedContractVersion. Update the enums against the '
+            'new contract, then bump _expectedContractVersion deliberately.',
+      );
+      expect(
+        c.firmwareCommit,
+        hasLength(40),
+        reason: 'firmware.commit must pin a full 40-char firmware SHA',
+      );
+      stdout.writeln(
+        '  contract v${c.contractVersion}, firmware pin ${c.firmwareCommit}, '
+        '${c.registers.length} contract rows, '
+        '${entriesUnderTest.length} app registers under test',
+      );
+    });
+
+    test('refuses a duplicated register name', () {
+      const twice = '''
+contract_version: 1
+firmware:
+  commit: "0000000000000000000000000000000000000000"
+registers:
+  - name: A
+    address: "0x00800000"
+    length: 4
+    mult: 1
+  - name: A
+    address: "0x00800004"
+    length: 4
+    mult: 1
+''';
+      expect(
+        () => parseBengleHwContract(twice),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('duplicate register name A'),
+          ),
+        ),
+      );
+    });
+
+    test('every registered app enum value is under test', () {
+      final declared = <MmrAddress>{
+        ...MMRItem.values,
+        ...BengleMmr.values,
+        ...BengleSteamMmr.values,
+        ...BengleScaleMmr.values,
+      };
+      final registered = entriesUnderTest.map((e) => e.register).toSet();
+      String labels(Iterable<MmrAddress> values) =>
+          values.map((v) => '${v.runtimeType}.${(v as Enum).name}').join(', ');
+      expect(
+        labels(declared.difference(registered)),
+        isEmpty,
+        reason: 'declared MMR registers missing from entriesUnderTest',
+      );
+      expect(
+        labels(registered.difference(declared)),
+        isEmpty,
+        reason: 'entriesUnderTest holds a register outside the four enums',
+      );
+    });
+
+    test('every app register maps to a distinct contract row', () {
+      final names = entriesUnderTest.map((e) => e.contractName).toList();
+      expect(
+        names.toSet().length,
+        names.length,
+        reason: 'two registration entries claim the same contract row',
+      );
+      final registers = entriesUnderTest.map((e) => e.register).toList();
+      expect(
+        registers.toSet().length,
+        registers.length,
+        reason: 'an app register is registered twice',
+      );
+    });
+  });
+
+  group('contract_version 3 refresh', () {
+    test('holds every reachable firmware row', () {
+      final c = _contract();
+      expect(
+        c.rows.length,
+        _expectedRegisterCount,
+        reason:
+            'REGISTER COUNT drift: the contract has ${c.rows.length} '
+            'rows, expected $_expectedRegisterCount',
+      );
+    });
+
+    test('gives every row its own address', () {
+      final seen = <int, String>{};
+      final clashes = <String>[];
+      for (final row in _contract().rows) {
+        final other = seen[row.address];
+        if (other != null) {
+          clashes.add('${_hex(row.address)}: $other and ${row.name}');
+        }
+        seen[row.address] = row.name;
+      }
+      expect(clashes, isEmpty, reason: 'ADDRESS clash in $_contractPath');
+    });
+  });
+
+  group('contract rows match the firmware fixture', () {
+    test('pins the firmware commit of the fixture', () {
+      expect(_contract().firmwareCommit, firmwareRowsCommit);
+    });
+
+    test('holds the same row names as the fixture', () {
+      final contractNames = _contract().rows.map((r) => r.name).toSet();
+      final fixtureNames = firmwareRows.map((r) => r.name).toSet();
+      expect(
+        contractNames.difference(fixtureNames),
+        isEmpty,
+        reason: 'contract rows absent from the firmware fixture',
+      );
+      expect(
+        fixtureNames.difference(contractNames),
+        isEmpty,
+        reason: 'firmware fixture rows absent from the contract',
+      );
+    });
+
+    for (final fw in firmwareRows) {
+      test('${fw.name} matches firmware row ${fw.fwRow}', () {
+        final row = _contract().registers[fw.name];
+        expect(row, isNotNull, reason: 'row ${fw.name} is missing');
+        expect(row!.fwRow, fw.fwRow, reason: 'FW_ROW drift on ${fw.name}');
+        expect(
+          _hex(row.address),
+          _hex(fw.address),
+          reason: 'ADDRESS drift on contract row ${fw.name}',
+        );
+        expect(
+          row.length,
+          fw.length,
+          reason: 'LENGTH drift on contract row ${fw.name}',
+        );
+        expect(
+          row.perms,
+          fw.perms,
+          reason: 'PERMS drift on contract row ${fw.name}',
+        );
+        expect(
+          row.mult,
+          fw.mult,
+          reason: 'MULT drift on contract row ${fw.name}',
+        );
+        expect(
+          row.valueKind,
+          fw.valueKind,
+          reason: 'VALUE_KIND drift on contract row ${fw.name}',
+        );
+        expect(
+          row.unit,
+          fw.unit,
+          reason: 'UNIT drift on contract row ${fw.name}',
+        );
+        expect(
+          (row.min ?? 0) < 0,
+          fw.signed,
+          reason: 'SIGN drift on contract row ${fw.name}: min ${row.min}',
+        );
+      });
+    }
+  });
+
+  group('app register matches contract (address/length/scale/range)', () {
+    for (final entry in entriesUnderTest) {
+      test('${entry.label} <-> ${entry.contractName}', () {
+        final row = _contract().registers[entry.contractName];
+        expect(
+          row,
+          isNotNull,
+          reason:
+              'app register ${entry.label} is missing from the contract: '
+              'no row named "${entry.contractName}" in $_contractPath. Every '
+              'app-declared register must exist in the contract.',
+        );
+        final contract = row!;
+        final app = entry.register;
+
+        expect(
+          _hex(app.address),
+          _hex(contract.address),
+          reason:
+              'ADDRESS drift on ${entry.label}: app ${_hex(app.address)} '
+              'vs contract ${_hex(contract.address)}',
+        );
+        expect(
+          app.length,
+          contract.length,
+          reason:
+              'LENGTH drift on ${entry.label}: app ${app.length} vs '
+              'contract ${contract.length}',
+        );
+
+        expect(
+          _appKindReads(app.kind, contract.valueKind),
+          isTrue,
+          reason:
+              'VALUE_KIND drift on ${entry.label}: app ${app.kind.name} vs '
+              'contract ${contract.valueKind}',
+        );
+
+        expect(
+          app.writeScale,
+          contract.mult.toDouble(),
+          reason:
+              'SCALE drift on ${entry.label}: app writeScale '
+              '${app.writeScale} vs contract mult ${contract.mult} '
+              '(wire value = engineering value x mult)',
+        );
+        expect(
+          app.readScale,
+          closeTo(1.0 / contract.mult, 1e-9),
+          reason:
+              'SCALE drift on ${entry.label}: app readScale '
+              '${app.readScale} vs contract 1/mult '
+              '(${1.0 / contract.mult})',
+        );
+
+        final appMin = app.min;
+        final appMax = app.max;
+        if (appMin != null && contract.min != null) {
+          expect(
+            appMin >= contract.min!,
+            isTrue,
+            reason:
+                'RANGE drift on ${entry.label}: app min $appMin lies '
+                'below contract min ${contract.min} (app range must be a '
+                'subset of the contract range)',
+          );
+        }
+        if (appMax != null && contract.max != null) {
+          expect(
+            appMax <= contract.max!,
+            isTrue,
+            reason:
+                'RANGE drift on ${entry.label}: app max $appMax lies '
+                'above contract max ${contract.max} (app range must be a '
+                'subset of the contract range)',
+          );
+        }
+      });
+    }
+  });
+
+  group('contract coverage (informational, never fails)', () {
+    test('contract rows not yet consumed by the app', () {
+      final covered = entriesUnderTest.map((e) => e.contractName).toSet();
+      final unconsumed =
+          _contract().registers.values
+              .where((r) => !covered.contains(r.name))
+              .toList()
+            ..sort((a, b) => (a.fwRow ?? -1).compareTo(b.fwRow ?? -1));
+      stdout.writeln(
+        '  ${unconsumed.length} contract rows have no app entry '
+        '(legal -- the app grows into the contract):',
+      );
+      for (final r in unconsumed) {
+        stdout.writeln(
+          '    row ${r.fwRow} ${r.name} @ ${_hex(r.address)} '
+          '(${r.perms}, mult ${r.mult})',
+        );
+      }
+    });
+
+    test('contract rows carrying an app_alias (desc differs from FW name)', () {
+      for (final r in _contract().registers.values) {
+        if (r.appAlias != null) {
+          stdout.writeln(
+            '    ${r.name}: app declares desc "${r.appAlias}" (documented '
+            'alias, not drift)',
+          );
+        }
+      }
+    });
+
+    test('app ranges strictly narrower than the contract (legal)', () {
+      for (final entry in entriesUnderTest) {
+        final row = _contract().registers[entry.contractName];
+        if (row == null) continue;
+        final app = entry.register;
+        final narrowerMin =
+            app.min != null && row.min != null && app.min! > row.min!;
+        final narrowerMax =
+            app.max != null && row.max != null && app.max! < row.max!;
+        if (narrowerMin || narrowerMax) {
+          stdout.writeln(
+            '    ${entry.label}: app [${app.min}..${app.max}] inside '
+            'contract [${row.min}..${row.max}]',
+          );
+        }
+      }
+    });
+  });
+}

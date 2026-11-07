@@ -125,7 +125,7 @@ enum BengleMmr implements MmrAddress {
     MmrValueKind.scaledFloat,
     'MatCurrentTemp',
     min: 0,
-    max: 16000,
+    max: 1600,
     readScale: 0.1,
     writeScale: 10.0,
   ),

@@ -58,6 +58,34 @@ void main() {
         expect(state.isTerminal, isFalse);
       });
 
+      test('decodes literal firmware words for both detected cells', () {
+        final latchA = ScaleCalibrationState.decode(0x02100F03);
+        expect(latchA.step, ScaleCalibrationStep.calLatch);
+        expect(latchA.detectedCell, ScaleCalibrationCell.a);
+        expect(latchA.subState, ScaleCalibrationSubState.settling);
+        expect(latchA.secondsRemaining, 15);
+        expect(latchA.status, ScaleCalibrationStatus.notSettled);
+
+        final completeB = ScaleCalibrationState.decode(0x05220000);
+        expect(completeB.step, ScaleCalibrationStep.complete);
+        expect(completeB.detectedCell, ScaleCalibrationCell.b);
+        expect(completeB.subState, ScaleCalibrationSubState.done);
+        expect(completeB.status, ScaleCalibrationStatus.ok);
+
+        final errorB = ScaleCalibrationState.decode(0x06230005);
+        expect(errorB.step, ScaleCalibrationStep.error);
+        expect(errorB.detectedCell, ScaleCalibrationCell.b);
+        expect(errorB.subState, ScaleCalibrationSubState.error);
+        expect(errorB.status, ScaleCalibrationStatus.badDelta);
+
+        final retiredCommand = ScaleCalibrationState.decode(0x06030004);
+        expect(retiredCommand.step, ScaleCalibrationStep.error);
+        expect(retiredCommand.detectedCell, ScaleCalibrationCell.none);
+        expect(retiredCommand.subState, ScaleCalibrationSubState.error);
+        expect(retiredCommand.status, ScaleCalibrationStatus.badWeight);
+        expect(retiredCommand.isTerminal, isTrue);
+      });
+
       test('decodes idle/complete/error and cell B', () {
         final idle = ScaleCalibrationState.decode(0);
         expect(idle.step, ScaleCalibrationStep.idle);
