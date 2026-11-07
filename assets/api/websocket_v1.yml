@@ -913,7 +913,8 @@ components:
         (s), `collapseEventCount`, `collapseLastEventT` (s),
         `collapseLastEventMagnitude`, `collapseLastEventConcavity` and
         `hydraulicPowerMeasured` (W, firmware rev 3 and later). Every channel
-        except `timestamp` is a number.
+        except `timestamp` is a number. The frame is the channel map itself:
+        each channel is a top-level key of the frame.
         A channel the firmware does not report is omitted, never sent as null.
       required:
         - values

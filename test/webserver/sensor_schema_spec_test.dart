@@ -39,6 +39,12 @@ void main() {
       expect(value['nullable'], isTrue);
     });
 
+    test('gives a puck-estimator example', () {
+      final example = sensors['example'] as YamlMap;
+      expect(example.keys.single, endsWith('-puckestimator'));
+      expect((example.values.single as YamlMap)['timestamp'], isA<String>());
+    });
+
     test('states when the property is omitted', () {
       expect(
         sensors['description'].toString().replaceAll(RegExp(r'\s+'), ' '),
@@ -72,7 +78,13 @@ void main() {
       for (final name in names) {
         test('$path $name names the puckestimator id and channels', () {
           final text = _sensorSchemaText(_load(path), name);
+          final flat = text.replaceAll(RegExp(r'\s+'), ' ');
           expect(text, contains('-puckestimator'));
+          expect(flat, contains('`timestamp` (string)'));
+          expect(
+            flat,
+            contains('Every channel except `timestamp` is a number'),
+          );
           for (final key in channels) {
             expect(text, contains(RegExp('\\b$key\\b')), reason: key);
           }
