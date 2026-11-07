@@ -14,7 +14,35 @@ const String _contractPath = 'assets/api/bengle_hw_v1.yml';
 
 /// The contract_version this registration table was written against.
 /// Bump deliberately, together with the enum updates the new contract needs.
-const int _expectedContractVersion = 2;
+const int _expectedContractVersion = 3;
+
+const int _expectedRegisterCount = 61;
+
+/// A contract row whose address, perms and mult are pinned to fixed values
+/// because the firmware refresh changed or added it.
+class PinnedRow {
+  const PinnedRow(this.name, this.address, this.perms, this.mult);
+
+  final String name;
+  final int address;
+  final String perms;
+  final int mult;
+}
+
+const List<PinnedRow> pinnedRows = <PinnedRow>[
+  PinnedRow('v13Model', 0x0080000C, 'R', 1),
+  PinnedRow('FrontLEDColor', 0x00803890, 'RW', 1),
+  PinnedRow('RearLEDColor', 0x00803894, 'RW', 1),
+  PinnedRow('LastTARE', 0x00803868, 'R', 100),
+  PinnedRow('SetLCZero', 0x0080386C, 'RWT', 1000),
+  PinnedRow('SetLCCalPoint1', 0x00803870, 'RWT', 1000),
+  PinnedRow('SetLCCalPoint2', 0x00803878, 'RWT', 1000),
+  PinnedRow('LCCalStatus', 0x0080387C, 'R', 1),
+  PinnedRow('V24CurrentBudget', 0x008038B0, 'RWD', 10),
+  PinnedRow('MatHeaterDrivePct', 0x008038B4, 'R', 1),
+  PinnedRow('MatTempFault', 0x008038B8, 'R', 1),
+  PinnedRow('ProfileModeCaps', 0x008038DC, 'R', 1),
+];
 
 /// One app-declared register under test: the app enum entry and the FIRMWARE
 /// register name of its row in bengle_hw_v1.yml.
@@ -299,6 +327,45 @@ void main() {
         reason: 'an app register is registered twice',
       );
     });
+  });
+
+  group('contract_version 3 refresh', () {
+    test('holds every reachable firmware row', () {
+      final c = _contract();
+      expect(
+        c.registers.length,
+        _expectedRegisterCount,
+        reason:
+            'REGISTER COUNT drift: the contract has ${c.registers.length} '
+            'rows, expected $_expectedRegisterCount',
+      );
+    });
+
+    for (final pinned in pinnedRows) {
+      test('${pinned.name} is pinned', () {
+        final row = _contract().registers[pinned.name];
+        expect(
+          row,
+          isNotNull,
+          reason: 'row ${pinned.name} is missing from $_contractPath',
+        );
+        expect(
+          _hex(row!.address),
+          _hex(pinned.address),
+          reason: 'ADDRESS drift on contract row ${pinned.name}',
+        );
+        expect(
+          row.perms,
+          pinned.perms,
+          reason: 'PERMS drift on contract row ${pinned.name}',
+        );
+        expect(
+          row.mult,
+          pinned.mult,
+          reason: 'MULT drift on contract row ${pinned.name}',
+        );
+      });
+    }
   });
 
   group('app register matches contract (address/length/scale/range)', () {

@@ -1,20 +1,16 @@
 # =============================================================================
 # Bengle firmware <-> app hardware contract (bengle_hw_v1.yml)
 # =============================================================================
-# contract_version: 2
+# contract_version: 3
 #
-# Generated from firmware the firmware register table at:
+# Generated from the firmware register table at firmware commit
+# ebb12ab36a571dd248319e946e89d09d41d366b7 (rev-list count 711).
 #
-# MatPreheatActive, contract_version 2) do NOT exist at the base pin above.
-#           pre-warm commit)
-#           ENTRY lines for 59/60/61)
-#
-# <sha>:.../the firmware register table on both branches):
-#     (ScaleCal*, ScaleTare, the six LED rows, TargetMilkTemp) and NO row 58
-#     (MatCurrentTemp) -- all of which the app consumes today and the flashed
-#     and break the app<->contract checker (direction: app SUBSET of contract).
-#     contract that the app deliberately does not target (the contract change protocol:
-#
+# contract_version 3 (refresh to that pin): adds rows 33-35, 37, 38, 51-53
+# and 62; FrontLEDColor and RearLEDColor are RW (live, not persisted); the
+# 0xA013 Weight field is signed S16P4 and Flags carries bits 0-3. Rows 12 and
+# 13 stay omitted (see below). Rows 59-61 (contract_version 2) exist at this
+# pin.
 #
 # Change protocol: firmware changes a register -> regenerate this file from the
 # new the firmware register table -> bump contract_version -> update the app enums (BengleMmr /
@@ -55,8 +51,9 @@
 #     AUTHORITATIVE: the firmware register table's own header comment block disagrees with it on
 #     row 33 (comment "RW" vs ENTRY PERM_READ) and rows 34/35/37 (comment "W"
 #     vs ENTRY PERM_RWT); the firmware write macro verifiably enforces the
-#     ENTRY perms. App enums carry no perms today, so the checker must NOT
-#     assert perms in v1.
+#     ENTRY perms. App enums carry no perms, so the checker does not compare
+#     perms with the app; since contract_version 3 it pins the perms of named
+#     rows against fixed expected values.
 #   * `app_alias` is present only where the app's declared description string
 #     differs from the firmware register name (TargetMilkTemp is the only
 #     case). Rows are keyed by FIRMWARE name, so the alias records the
@@ -68,13 +65,13 @@
 #     addresses is discarded).
 # =============================================================================
 
-contract_version: 2
+contract_version: 3
 firmware:
-  commit: 0381e7ab58eb5b5ee36c14b0bef123ea3cfe4f2e
+  commit: ebb12ab36a571dd248319e946e89d09d41d366b7
   build: 90
   source: the firmware register table
 generated: 2026-07-11
-updated: 2026-07-14 # contract_version 2: scheduled cup-warmer pre-warm (rows 59-61)
+updated: 2026-10-30 # contract_version 3: refresh to firmware ebb12ab3 (rows 33-35, 37, 38, 51-53, 62; LED live perms; 0xA013 Weight and Flags)
 
 # -----------------------------------------------------------------------------
 # MMR register table
@@ -467,6 +464,42 @@ registers:
     unit: "g x 100"
     semantics: "Stop-at-weight target: firmware ends the shot autonomously at this weight; 0 = disabled. App writes round(grams x 100) -- rounding, not truncation. Read-back is whole grams only (firmware truncates before scaling: floor(g) x 100)."
 
+  - name: LastTARE
+    fw_row: 33
+    address: "0x00803868"
+    length: 4
+    perms: R
+    mult: 100
+    value_kind: scaledFloat
+    min: -1000 # the firmware register table -10.0 g (post-divide)
+    max: 1000000 # the firmware register table 10000.0 g (post-divide)
+    unit: "g x 100"
+    semantics: "Weight at which the firmware last tared; read-only. 0xA013 Weight is already net of it. Read-back is whole grams only (firmware truncates before scaling: floor(g) x 100), and a negative stored value saturates to 0, so the -1000 minimum never appears on the wire."
+
+  - name: SetLCZero
+    fw_row: 34
+    address: "0x0080386C"
+    length: 4
+    perms: RWT
+    mult: 1000
+    value_kind: int32
+    min: 0
+    max: 4294967295 # 0xFFFFFFFF
+    unit: trigger
+    semantics: "Zero the load cells (empty platform). The written value is ignored. The app uses ScaleCalCmd instead."
+
+  - name: SetLCCalPoint1
+    fw_row: 35
+    address: "0x00803870"
+    length: 4
+    perms: RWT
+    mult: 1000
+    value_kind: int32
+    min: 0
+    max: 4294967295 # 0xFFFFFFFF
+    unit: trigger
+    semantics: "Retired (superseded by ScaleCalCmd); inert. Never write it."
+
   - name: MatSetPoint
     fw_row: 36
     address: "0x00803874"
@@ -478,6 +511,30 @@ registers:
     max: 4294967295 # the firmware register table column is unbounded (0..0xFFFFFFFF); firmware never clamps -- the app is the sole guard, clamping 0..80 degC.
     unit: degC
     semantics: "Cup-warmer target in whole degC; 0 = off. Inert unless CupWarmerMode=1; app re-sends both on every connect."
+
+  - name: SetLCCalPoint2
+    fw_row: 37
+    address: "0x00803878"
+    length: 4
+    perms: RWT
+    mult: 1000
+    value_kind: int32
+    min: 0
+    max: 4294967295 # 0xFFFFFFFF
+    unit: trigger
+    semantics: "Retired (superseded by ScaleCalCmd); inert. Never write it."
+
+  - name: LCCalStatus
+    fw_row: 38
+    address: "0x0080387C"
+    length: 4
+    perms: R
+    mult: 1
+    value_kind: int32
+    min: 0
+    max: 4294967295 # 0xFFFFFFFF
+    unit: enum
+    semantics: "Status of the last load-cell calibration attempt: 0=Ok (solved and applied) 1=Incomplete 2=NoZero 3=NotSettled 4=BadWeight 5=BadDelta 6=IllConditioned 7=OutOfRange."
 
   - name: ScaleCalCmd
     fw_row: 39
@@ -535,7 +592,7 @@ registers:
     fw_row: 43
     address: "0x00803890"
     length: 4
-    perms: RWD
+    perms: RW
     mult: 1
     value_kind: int32
     min: 0
@@ -547,7 +604,7 @@ registers:
     fw_row: 44
     address: "0x00803894"
     length: 4
-    perms: RWD
+    perms: RW
     mult: 1
     value_kind: int32
     min: 0
@@ -629,6 +686,42 @@ registers:
     max: 1
     unit: bool
     semantics: "Cup-warmer enable 0=Off 1=On; RAM-only by design. App writes 1 iff target > 0 and re-asserts (with MatSetPoint) on reconnect."
+
+  - name: V24CurrentBudget
+    fw_row: 51
+    address: "0x008038B0"
+    length: 4
+    perms: RWD
+    mult: 10
+    value_kind: scaledFloat
+    min: 0
+    max: 70 # the firmware register table 7.0 A (post-divide)
+    unit: "A x 10"
+    semantics: "24 V supply current budget; firmware default 6.0 A (60 raw), PSU cap about 6.67 A. Read-back is whole amps only (firmware truncates before scaling: floor(A) x 10)."
+
+  - name: MatHeaterDrivePct
+    fw_row: 52
+    address: "0x008038B4"
+    length: 4
+    perms: R
+    mult: 1
+    value_kind: int32
+    min: 0
+    max: 100
+    unit: percent
+    semantics: "Cup-warmer heater drive, 0-100 %. Read-only status."
+
+  - name: MatTempFault
+    fw_row: 53
+    address: "0x008038B8"
+    length: 4
+    perms: R
+    mult: 1
+    value_kind: boolean
+    min: 0
+    max: 1
+    unit: bool
+    semantics: "Cup-warmer NTC fault flag: 0 = OK, 1 = open or short. Read-only status."
 
   - name: InactivitySleepTimeout
     fw_row: 54
@@ -748,6 +841,19 @@ registers:
     requires_firmware: "newer firmware (contract_version 2); absent on the v1 baseline -- reads fail and the app degrades to null"
     semantics: "1 = the wake SCHEDULE is driving the mat right now (not CupWarmerMode, not the user). Exists so the UI can explain a cup warmer that came on by itself; without it a scheduled pre-warm reads as a bug. App surface: read-only cupWarmer.prewarmActive; null (unknown) on firmware without the register -- never a fabricated false."
 
+  # --- Pump extended-mode capabilities (contract_version 3) -------------------
+  - name: ProfileModeCaps
+    fw_row: 62
+    address: "0x008038DC"
+    length: 4
+    perms: R
+    mult: 1
+    value_kind: int32
+    min: 0
+    max: 15 # 0xF
+    unit: bitmask
+    semantics: "Pump extended-mode capabilities: bit0 constant-power steps, bit1 lever steps, bit2 hold transitions, bit3 cross-variable power-exit steps. Read-only; 0xF at this pin."
+
 # -----------------------------------------------------------------------------
 # 0xA013 BengleShotSample -- the sole shot/telemetry source on a Bengle
 # -----------------------------------------------------------------------------
@@ -765,10 +871,10 @@ registers:
 # beyond 28 are ignored.
 #
 # Golden frame (hand-computed, cross-checked vs firmware + de1plus):
-#   03E8 0384 0258 00FA 00C8 00B4 2422 2260 2454 2328 0490 07 34BC 0000 00
+#   03E8 0384 0258 00FA 00C8 00B4 2422 2260 2454 2328 0248 07 34BC 0000 00
 #   -> time 1000, pressure 9.00, setPressure 6.00, flow 2.50, setFlow 2.00,
 #      gFlow 1.80, mix 92.50, head 88.00, setMix 93.00, setHead 90.00,
-#      weight 1168/32 = 36.5 g, frame 7, steam 135.00, milk 0.00, flags 0
+#      weight 584/16 = 36.5 g, frame 7, steam 135.00, milk 0.00, flags 0
 packet_0xA013:
   size_bytes: 28
   endianness: big
@@ -788,11 +894,11 @@ packet_0xA013:
     - { offset: 14, size: 2, name: HeadTemp,         type: u16, scale: 0.01, unit: degC, semantics: "Showerhead water temperature (u16/100 here; 0xA00D used 3-byte U24P16 -- layout differs)." }
     - { offset: 16, size: 2, name: SetMixTemp,       type: u16, scale: 0.01, unit: degC, semantics: "Mix temperature target; 0 if no target." }
     - { offset: 18, size: 2, name: SetHeadTemp,      type: u16, scale: 0.01, unit: degC, semantics: "Showerhead temperature target; 0 if no target." }
-    - { offset: 20, size: 2, name: Weight,           type: u16, scale: 0.03125, unit: g, semantics: "Integrated-scale weight, U16P5 (u16 / 32 -- NOT / 100): max 2048 g, step 0.03125 g. ALREADY net of tare (firmware serializes CurrW - LastTARE, the exact stop-at-weight control expression). A negative net weight (platform unloaded after a tare) clamps to 0 on the wire -- U16P5 has no sign bit." }
+    - { offset: 20, size: 2, name: Weight,           type: s16, scale: 0.0625, unit: g, semantics: "Integrated-scale weight, S16P4 (signed s16 / 16 -- NOT / 100): range -2048 to +2047.9375 g, step 0.0625 g. ALREADY net of tare (firmware serializes CurrW - LastTARE, the exact stop-at-weight control expression), so a weight below the tare point is negative." }
     - { offset: 22, size: 1, name: FrameNumber,      type: u8,  scale: 1,    unit: index, semantics: "Profile frame currently executing." }
     - { offset: 23, size: 2, name: SteamTemp,        type: u16, scale: 0.01, unit: degC, semantics: "Steam metal temperature (unaligned offset -- the struct is packed)." }
     - { offset: 25, size: 2, name: MilkTemp,         type: u16, scale: 0.01, unit: degC, semantics: "Milk-probe temperature (u16 / 100). 0 = no probe / no fresh reading: at this firmware pin the value is a refreshed only while the probe reports live data." }
-    - { offset: 27, size: 1, name: Flags,            type: u8,  scale: 1,    unit: bitmask, semantics: "Newer FW (this pin): bit0 = LastTARE != 0.0f; app must never gate on it. (Older firmware wrote 0 unconditionally; it is a value proxy, not a tare event.)" }
+    - { offset: 27, size: 1, name: Flags,            type: u8,  scale: 1,    unit: bitmask, semantics: "bit0 = tared (LastTARE != 0.0f; a value proxy, not a tare event -- the app must never gate on it); bits 2:1 = pump control mode (00 legacy/pressure/flow, 01 Power, 10 Lever, 11 reserved); bit3 = scale stream stale; bits 4-7 reserved. (Older firmware wrote 0 unconditionally.)" }
 
 # -----------------------------------------------------------------------------
 # Serial (USB) ASCII view -- shared with the firmware BLE module
