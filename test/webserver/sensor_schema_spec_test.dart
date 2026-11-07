@@ -45,6 +45,24 @@ void main() {
       expect((example.values.single as YamlMap)['timestamp'], isA<String>());
     });
 
+    test('types each channel by its manifest entry', () {
+      final text = sensors['description'].toString().replaceAll(
+        RegExp(r'\s+'),
+        ' ',
+      );
+      expect(text, isNot(contains('other channels listed there are numbers')));
+      for (final type in [
+        'number',
+        'integer',
+        'string',
+        'boolean',
+        'object',
+        'array',
+      ]) {
+        expect(text, contains(type), reason: type);
+      }
+    });
+
     test('states when the property is omitted', () {
       expect(
         sensors['description'].toString().replaceAll(RegExp(r'\s+'), ' '),

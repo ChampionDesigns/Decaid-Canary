@@ -7825,12 +7825,13 @@ components:
           description: |
             The latest frame of each attached sensor at this sample, keyed by
             sensor device id (for example `<machine id>-puckestimator`). Each
-            value is that sensor's channel map. Its keys and value types follow
-            the dataChannels of the sensor's manifest (`GET /api/v1/sensors/{id}`):
-            the puck estimator's `timestamp` is a string, the EBus tap's `bytes`
-            is a string, and the other channels listed there are numbers. Any
-            value may be null: a value that is not a finite number is stored as
-            null. A channel the sensor did not report is absent. Omitted when
+            value is that sensor's channel map. Its keys are the keys of the
+            dataChannels of the sensor's manifest (`GET /api/v1/sensors/{id}`),
+            and each channel's value has the type its dataChannels entry names
+            (number, integer, string, boolean, object or array). For example,
+            the puck estimator's `timestamp` is a string and the EBus tap's
+            `bytes` is a string. Any value may be null: a value that is not a
+            finite number is stored as null. A channel the sensor did not report is absent. Omitted when
             the sample holds no sensor frame.
           additionalProperties:
             type: object
