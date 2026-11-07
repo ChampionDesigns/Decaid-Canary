@@ -6,10 +6,12 @@ import 'package:reaprime/src/models/device/impl/bengle/bengle_mmr.dart'
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart'
     show MMRItem;
 import 'package:reaprime/src/models/device/impl/de1/mmr_address.dart'
-    show MmrAddress;
+    show MmrAddress, MmrValueKind;
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart'
     show BengleScaleMmr;
 import 'package:yaml/yaml.dart';
+
+import 'bengle_mmr_firmware_rows.dart';
 
 const String _contractPath = 'assets/api/bengle_hw_v1.yml';
 
@@ -18,32 +20,6 @@ const String _contractPath = 'assets/api/bengle_hw_v1.yml';
 const int _expectedContractVersion = 3;
 
 const int _expectedRegisterCount = 61;
-
-/// A contract row whose address, perms and mult are pinned to fixed values
-/// because the firmware refresh changed or added it.
-class PinnedRow {
-  const PinnedRow(this.name, this.address, this.perms, this.mult);
-
-  final String name;
-  final int address;
-  final String perms;
-  final int mult;
-}
-
-const List<PinnedRow> pinnedRows = <PinnedRow>[
-  PinnedRow('v13Model', 0x0080000C, 'R', 1),
-  PinnedRow('FrontLEDColor', 0x00803890, 'RW', 1),
-  PinnedRow('RearLEDColor', 0x00803894, 'RW', 1),
-  PinnedRow('LastTARE', 0x00803868, 'R', 100),
-  PinnedRow('SetLCZero', 0x0080386C, 'RWT', 1000),
-  PinnedRow('SetLCCalPoint1', 0x00803870, 'RWT', 1000),
-  PinnedRow('SetLCCalPoint2', 0x00803878, 'RWT', 1000),
-  PinnedRow('LCCalStatus', 0x0080387C, 'R', 1),
-  PinnedRow('V24CurrentBudget', 0x008038B0, 'RWD', 10),
-  PinnedRow('MatHeaterDrivePct', 0x008038B4, 'R', 1),
-  PinnedRow('MatTempFault', 0x008038B8, 'R', 1),
-  PinnedRow('ProfileModeCaps', 0x008038DC, 'R', 1),
-];
 
 /// One app-declared register under test: the app enum entry and the FIRMWARE
 /// register name of its row in bengle_hw_v1.yml.
@@ -122,6 +98,7 @@ class ContractRegister {
     required this.perms,
     required this.mult,
     required this.valueKind,
+    required this.unit,
     required this.min,
     required this.max,
     required this.appAlias,
@@ -134,6 +111,7 @@ class ContractRegister {
   final String perms;
   final int mult;
   final String valueKind;
+  final String? unit;
   final int? min;
   final int? max;
   final String? appAlias;
@@ -184,6 +162,7 @@ ContractRegister _register(YamlMap fields) {
         _intOrNull(fields['mult']) ??
         (throw FormatException('register $name has no mult')),
     valueKind: fields['value_kind']?.toString() ?? '',
+    unit: fields['unit']?.toString(),
     min: _intOrNull(fields['min']),
     max: _intOrNull(fields['max']),
     appAlias: fields['app_alias']?.toString(),
@@ -230,6 +209,10 @@ HwContract _contract() =>
 
 String _hex(int value) =>
     '0x${value.toRadixString(16).toUpperCase().padLeft(8, '0')}';
+
+bool _appKindReads(MmrValueKind app, String contract) =>
+    app.name == contract ||
+    (app == MmrValueKind.int32 && contract == MmrValueKind.boolean.name);
 
 void main() {
   group('bengle_hw_v1.yml', () {
@@ -345,29 +328,67 @@ registers:
       }
       expect(clashes, isEmpty, reason: 'ADDRESS clash in $_contractPath');
     });
+  });
 
-    for (final pinned in pinnedRows) {
-      test('${pinned.name} is pinned', () {
-        final row = _contract().registers[pinned.name];
+  group('contract rows match the firmware fixture', () {
+    test('pins the firmware commit of the fixture', () {
+      expect(_contract().firmwareCommit, firmwareRowsCommit);
+    });
+
+    test('holds the same row names as the fixture', () {
+      final contractNames = _contract().rows.map((r) => r.name).toSet();
+      final fixtureNames = firmwareRows.map((r) => r.name).toSet();
+      expect(
+        contractNames.difference(fixtureNames),
+        isEmpty,
+        reason: 'contract rows absent from the firmware fixture',
+      );
+      expect(
+        fixtureNames.difference(contractNames),
+        isEmpty,
+        reason: 'firmware fixture rows absent from the contract',
+      );
+    });
+
+    for (final fw in firmwareRows) {
+      test('${fw.name} matches firmware row ${fw.fwRow}', () {
+        final row = _contract().registers[fw.name];
+        expect(row, isNotNull, reason: 'row ${fw.name} is missing');
+        expect(row!.fwRow, fw.fwRow, reason: 'FW_ROW drift on ${fw.name}');
         expect(
-          row,
-          isNotNull,
-          reason: 'row ${pinned.name} is missing from $_contractPath',
+          _hex(row.address),
+          _hex(fw.address),
+          reason: 'ADDRESS drift on contract row ${fw.name}',
         );
         expect(
-          _hex(row!.address),
-          _hex(pinned.address),
-          reason: 'ADDRESS drift on contract row ${pinned.name}',
+          row.length,
+          fw.length,
+          reason: 'LENGTH drift on contract row ${fw.name}',
         );
         expect(
           row.perms,
-          pinned.perms,
-          reason: 'PERMS drift on contract row ${pinned.name}',
+          fw.perms,
+          reason: 'PERMS drift on contract row ${fw.name}',
         );
         expect(
           row.mult,
-          pinned.mult,
-          reason: 'MULT drift on contract row ${pinned.name}',
+          fw.mult,
+          reason: 'MULT drift on contract row ${fw.name}',
+        );
+        expect(
+          row.valueKind,
+          fw.valueKind,
+          reason: 'VALUE_KIND drift on contract row ${fw.name}',
+        );
+        expect(
+          row.unit,
+          fw.unit,
+          reason: 'UNIT drift on contract row ${fw.name}',
+        );
+        expect(
+          (row.min ?? 0) < 0,
+          fw.signed,
+          reason: 'SIGN drift on contract row ${fw.name}: min ${row.min}',
         );
       });
     }
@@ -401,6 +422,14 @@ registers:
           reason:
               'LENGTH drift on ${entry.label}: app ${app.length} vs '
               'contract ${contract.length}',
+        );
+
+        expect(
+          _appKindReads(app.kind, contract.valueKind),
+          isTrue,
+          reason:
+              'VALUE_KIND drift on ${entry.label}: app ${app.kind.name} vs '
+              'contract ${contract.valueKind}',
         );
 
         expect(
