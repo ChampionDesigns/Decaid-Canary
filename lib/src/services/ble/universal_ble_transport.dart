@@ -432,7 +432,7 @@ class UniversalBleTransport extends BLETransport {
     return operation;
   }
 
-  /// serviceUUID (lowercase) -> characteristic UUIDs (lowercase), captured at
+  /// serviceUUID -> characteristic UUIDs, both in 128-bit lowercase form, captured at
   /// discovery. Replaced wholesale on each discovery so a reconnect can never
   /// leave a stale characteristic looking present.
   Map<String, List<String>> _characteristicsByService = const {};
@@ -440,15 +440,15 @@ class UniversalBleTransport extends BLETransport {
   void _cacheCharacteristics(List<BleService> services) {
     _characteristicsByService = {
       for (final service in services)
-        service.uuid.toLowerCase(): [
-          for (final c in service.characteristics) c.uuid.toLowerCase(),
+        BleUuidParser.string(service.uuid): [
+          for (final c in service.characteristics) BleUuidParser.string(c.uuid),
         ],
     };
   }
 
   @override
   Future<List<String>> discoverCharacteristics(String serviceUUID) async =>
-      _characteristicsByService[serviceUUID.toLowerCase()] ?? const [];
+      _characteristicsByService[BleUuidParser.string(serviceUUID)] ?? const [];
 
   Future<void> _cancelNotificationListeners() async {
     final listeners = _subscriptions.values.toList(growable: false);

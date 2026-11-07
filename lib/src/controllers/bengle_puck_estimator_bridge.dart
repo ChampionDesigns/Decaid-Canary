@@ -12,9 +12,10 @@ import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sampl
 /// machine actually produces estimator data.
 ///
 /// Registration is driven by the first decoded frame rather than by connection,
-/// because `0xA014` is serial/CDC only. A BLE-connected Bengle, a firmware
-/// without the observer, or a plain DE1 never emits `[T]`, and none of them
-/// should advertise an estimator sensor that would only ever report nothing.
+/// because not every machine emits `0xA014`. A firmware without the observer,
+/// a BLE-connected Bengle whose firmware does not register the characteristic,
+/// or a plain DE1 never emits it, and none of them should advertise an
+/// estimator sensor that would only ever report nothing.
 class BenglePuckEstimatorBridge {
   BenglePuckEstimatorBridge({
     required De1Controller de1Controller,

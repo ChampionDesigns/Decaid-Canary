@@ -68,8 +68,8 @@ class UnifiedDe1Transport {
   Stream<ByteData> get mmr => _mmrSubject.asBroadcastStream();
   Stream<ByteData> get fwMapRequest => _fwMapRequestSubject.asBroadcastStream();
   // Bengle 0xA014 fused puck-estimator sample (16 bytes, +5-byte Rev-2 tail).
-  // Serial/CDC only — fed by the `[T]` dispatch (subscribed via the `<+T>` in
-  // `_serialConnect`), never over BLE. Seeded with a ZERO-LENGTH frame on
+  // Fed by the `[T]` dispatch on serial (subscribed via the `<+T>` in
+  // `_serialConnect`) and by [subscribeEstimator] on BLE. Seeded with a ZERO-LENGTH frame on
   // purpose: `parseBengleEstSample` drops anything under 16 bytes, so before
   // any real `[T]` arrives the snapshot merge sees "no estimator data" and
   // every fused key stays absent. A 16-zero seed would instead decode to fused
@@ -215,11 +215,9 @@ class UnifiedDe1Transport {
 
     // Normalise BOTH sides: this is a safety gate, so it must not depend on a
     // transport honouring a casing convention.
-    final present = (await t.discoverCharacteristics(
-      de1ServiceUUID,
-    )).map((c) => c.toLowerCase()).toSet();
-    final wanted = Endpoint.estimator.uuid.toLowerCase();
-    if (!present.contains(wanted)) {
+    final present = await t.discoverCharacteristics(de1ServiceUUID);
+    final wanted = BleServiceIdentifier.parse(Endpoint.estimator.uuid);
+    if (!wanted.matchesAny(present)) {
       _log.info(
         'BengleEstSample characteristic not present on this machine; '
         'skipping the estimator subscribe (firmware predates it, or the '
