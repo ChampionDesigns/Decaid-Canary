@@ -32,15 +32,13 @@
 #     identical to "no constraint"); ScaleTare alone is normalized to
 #     null/null because its written value is ignored entirely (pure trigger).
 #     Deliberate, not drift -- a subset checker passes either encoding.
-#   * Read-back resolution on FLOAT-backed rows (EndOfShotWeight, LastTARE,
+#   * Read-back on FLOAT-backed rows (EndOfShotWeight, LastTARE,
 #     ScaleCalWeight, TargetMilkTemp, V24CurrentBudget, MatCurrentTemp): the
-#     firmware macro read path truncates BEFORE scaling
-#     (the firmware the firmware read path),
-#     so wire READS return floor(engineering) x mult -- whole engineering
-#     units -- while writes keep full x-mult resolution. The same U32(float)
-#     cast saturates a negative stored value to 0 on Cortex-M, so these rows
-#     can never read back negative. Affected rows carry a "Read-back" note.
-#     (MatSetPoint is float-backed too but exact: mult 1, whole-degC writes.)
+#     firmware macro read path scales BEFORE narrowing and rounds to nearest
+#     (scaleForRead: round(engineering x mult)), so reads keep the full x-mult
+#     resolution and a written value reads back unchanged. A stored value at
+#     or below 0 reads as 0, so these rows can never read back negative.
+#     (MatSetPoint is float-backed too: mult 1, whole-degC writes.)
 #   * The firmware does NOT enforce min/max on Bengle macro-path writes
 #     the firmware write path never range-checks): bounds here are documentation and the app
 #     is the sole guard. Checker semantics: app range must be a SUBSET of the
@@ -462,7 +460,7 @@ registers:
     # gives EOSW a model range of 0..3000 g -- targets above 3000 g are
     # wire-legal but outside the firmware's model range.
     unit: "g x 100"
-    semantics: "Stop-at-weight target: firmware ends the shot autonomously at this weight; 0 = disabled. App writes round(grams x 100) -- rounding, not truncation. Read-back is whole grams only (firmware truncates before scaling: floor(g) x 100)."
+    semantics: "Stop-at-weight target: firmware ends the shot autonomously at this weight; 0 = disabled. App writes round(grams x 100) -- rounding, not truncation. Reads return round(g x 100), so read-back keeps 0.01 g."
 
   - name: LastTARE
     fw_row: 33
@@ -474,7 +472,7 @@ registers:
     min: -1000 # the firmware register table -10.0 g (post-divide)
     max: 1000000 # the firmware register table 10000.0 g (post-divide)
     unit: "g x 100"
-    semantics: "Weight at which the firmware last tared; read-only. 0xA013 Weight is already net of it. Read-back is whole grams only (firmware truncates before scaling: floor(g) x 100), and a negative stored value saturates to 0, so the -1000 minimum never appears on the wire."
+    semantics: "Weight at which the firmware last tared; read-only. 0xA013 Weight is already net of it. Reads return round(g x 100), and a stored value at or below 0 reads as 0, so the -1000 minimum never appears on the wire."
 
   - name: SetLCZero
     fw_row: 34
@@ -534,7 +532,7 @@ registers:
     min: 0
     max: 4294967295 # 0xFFFFFFFF
     unit: enum
-    semantics: "Status of the last load-cell calibration attempt: 0=Ok (solved and applied) 1=Incomplete 2=NoZero 3=NotSettled 4=BadWeight 5=BadDelta 6=IllConditioned 7=OutOfRange."
+    semantics: "Status of the last load-cell calibration attempt: 0=Ok (solved and applied) 1=Incomplete 2=NoZero 3=NotSettled 4=BadWeight 5=BadDelta 6=IllConditioned 7=OutOfRange 8=NotIsolated (no dominant cell: platform still fitted or the mass bridges both cells). 0xFF = no result (a step is running, or none has run)."
 
   - name: ScaleCalCmd
     fw_row: 39
@@ -546,7 +544,7 @@ registers:
     min: 0
     max: 5
     unit: enum
-    semantics: "Start a non-blocking cal step: 0=abort 1=zero 3=tare 4=latch point 1 (LEFT half) 5=latch point 2 (RIGHT half); 2 = retired auto-detect (errors, never send). Non-zero cmd while busy OR during Espresso is ignored (a cal step would move the mass reference the running shot's stop-at-weight gate depends on; the step stays Idle)."
+    semantics: "Start a non-blocking cal step: 0=abort 1=precision zero 2=isolated-cell gain latch (platform off, the ScaleCalWeight mass on one cell; the firmware detects which cell; run once per cell, the second latch solves) 3=quick tare. 4 and 5 are retired: each sets Step=Error, Phase=error and CalStatus=BadWeight. Other values are ignored. Non-zero cmd while busy OR during Espresso is ignored (a cal step would move the mass reference the running shot's stop-at-weight gate depends on; the step stays Idle)."
 
   - name: ScaleCalState
     fw_row: 40
@@ -558,7 +556,7 @@ registers:
     min: 0
     max: 4294967295 # 0xFFFFFFFF
     unit: packed
-    semantics: "Packed cal state: Step[31:24] SubState[23:16] Remaining[15:8] CalStatus[7:0]. SubState: 0=settling 1=averaging 2=done 3=error. Step at THIS pin (two-point cal): Idle=0 Zeroing=1 CalPoint1=2 CalPoint2=3 Taring=4 Complete=5 Error=6; the FIELD single-point variant numbers Complete=4 / Error=5 (colliding with two-point Taring/Complete). Terminal detection MUST therefore key off SubState (done=2 / error=3), never Step."
+    semantics: "Packed cal state: Step[31:24] DetectedCell[23:20] Phase[19:16] Remaining[15:8] CalStatus[7:0]. Phase: 0=settling 1=averaging 2=done 3=error. DetectedCell (set by a ScaleCalCmd 2 latch): 0=none 1=cell A 2=cell B. Step at THIS pin: Idle=0 Zeroing=1 CalLatch=2 Taring=4 Complete=5 Error=6 (3 is unused); the FIELD single-point variant numbers Complete=4 / Error=5 (colliding with Taring/Complete here). Terminal detection MUST therefore key off Phase (done=2 / error=3), never Step."
 
   - name: ScaleCalWeight
     fw_row: 41
@@ -570,7 +568,7 @@ registers:
     min: 0
     max: 100000 # the firmware register table 10000 g (post-divide)
     unit: "g x 10"
-    semantics: "Known reference calibration mass; write and read-back-confirm (within 0.1 g) before ScaleCalCmd 4/5. Read-back is whole grams only (firmware truncates before scaling: floor(g) x 10), so the 0.1 g confirm round-trips ONLY integer-gram references -- use whole-gram masses."
+    semantics: "Known reference calibration mass in grams; write and read-back-confirm (within 0.1 g) before ScaleCalCmd 2. Reads return round(g x 10), so a mass with one decimal reads back unchanged."
 
   - name: ScaleTare
     fw_row: 42
@@ -671,7 +669,7 @@ registers:
     min: 0
     max: 850 # ALREADY RAW (= 85.0 degC): the firmware register table lists 850 in violation of its own post-divide convention (desc says "Range 0-85").
     unit: "degC x 10"
-    semantics: "Milk-probe steam auto-stop target; 0 = disabled. App clamps 0..85 degC before scaling; live probe reading rides 0xA013 MilkTemp, not an MMR. Read-back resolution is whole degC (floor(degC) x 10) -- writes keep deci-degC."
+    semantics: "Milk-probe steam auto-stop target; 0 = disabled. App clamps 0..85 degC before scaling; live probe reading rides 0xA013 MilkTemp, not an MMR. Reads return round(degC x 10), so read-back keeps 0.1 degC."
     app_alias: StopAtTemperatureTarget # app desc string differs from the FW name (BengleSteamMmr.stopAtTemperatureTarget)
 
   # --- Cup warmer mode + status (app: BengleMmr.cupWarmerMode + thermal reads) -
@@ -697,7 +695,7 @@ registers:
     min: 0
     max: 70 # the firmware register table 7.0 A (post-divide)
     unit: "A x 10"
-    semantics: "24 V supply current budget; firmware default 6.0 A (60 raw), PSU cap about 6.67 A. Read-back is whole amps only (firmware truncates before scaling: floor(A) x 10)."
+    semantics: "24 V supply current budget; firmware default 6.0 A (60 raw), PSU cap about 6.67 A. Reads return round(A x 10), so read-back keeps 0.1 A."
 
   - name: MatHeaterDrivePct
     fw_row: 52
@@ -781,7 +779,7 @@ registers:
     min: 0
     max: 1600 # ALREADY RAW (= 160.0 degC): second the firmware register table post-divide convention violation, like TargetMilkTemp.
     unit: "degC x 10"
-    semantics: "Cup-warmer current mat temperature; 0 = no valid reading (NTC open/short) -- app maps 0 to null ('no reading'), never fake data. Read resolution is whole degC despite the x10 unit (firmware truncates before scaling) -- wire values are always multiples of 10."
+    semantics: "Cup-warmer current mat temperature; 0 = no valid reading (NTC open/short) -- app maps 0 to null ('no reading'), never fake data. Reads return round(degC x 10), so the value keeps 0.1 degC."
 
   # --- Scheduled cup-warmer pre-warm (contract_version 2) ---------------------
   # Rows 59-61 are ABSENT from the base firmware pin (the validated firmware build, flashed on the
