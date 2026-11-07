@@ -18,6 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:reaprime/src/account/account_consent_prompter.dart';
 import 'package:reaprime/src/controllers/battery_controller.dart';
 import 'package:reaprime/src/controllers/bengle_probe_bridge.dart';
+import 'package:reaprime/src/controllers/bengle_puck_estimator_bridge.dart';
 import 'package:reaprime/src/controllers/bengle_saw_bridge.dart';
 import 'package:reaprime/src/controllers/bengle_steam_stop_bridge.dart';
 import 'package:reaprime/src/controllers/hot_water_sequencer.dart';
@@ -473,6 +474,12 @@ void main(List<String> args) async {
   );
 
   // ignore: unused_local_variable
+  final benglePuckEstimatorBridge = BenglePuckEstimatorBridge(
+    de1Controller: de1Controller,
+    sensorController: sensorController,
+  );
+
+  // ignore: unused_local_variable
   final steamSequencer = SteamSequencer(
     de1Controller: de1Controller,
     sensorController: sensorController,
@@ -817,6 +824,7 @@ void main(List<String> args) async {
         profileStorageService: profileStorage,
         connectionManager: connectionManager,
         scanStateGuardian: scanStateGuardian,
+        sensorController: sensorController,
         decentAccountService: decentAccountService,
         accountTokensController: accountTokensController,
         appLogUploadService: appLogUploadService,
@@ -1048,6 +1056,7 @@ class AppRoot extends StatefulWidget {
   final ProfileStorageService? profileStorageService;
   final ConnectionManager connectionManager;
   final ScanStateGuardian scanStateGuardian;
+  final SensorController? sensorController;
   final DecentAccountService? decentAccountService;
   final AccountTokensController? accountTokensController;
   final AppLogUploadService? appLogUploadService;
@@ -1071,6 +1080,7 @@ class AppRoot extends StatefulWidget {
     required this.presenceController,
     required this.connectionManager,
     required this.scanStateGuardian,
+    this.sensorController,
     this.updateCheckService,
     this.macosUpdater,
     this.beanStorage,
@@ -1168,6 +1178,7 @@ class _AppRootState extends State<AppRoot> {
         profileStorageService: widget.profileStorageService,
         connectionManager: widget.connectionManager,
         scanStateGuardian: widget.scanStateGuardian,
+        sensorController: widget.sensorController,
         decentAccountService: widget.decentAccountService,
         accountTokensController: widget.accountTokensController,
         appLogUploadService: widget.appLogUploadService,
