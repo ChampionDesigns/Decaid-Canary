@@ -143,11 +143,14 @@ class HwContract {
   const HwContract({
     required this.contractVersion,
     required this.firmwareCommit,
+    required this.rows,
     required this.registers,
   });
 
   final int contractVersion;
   final String firmwareCommit;
+
+  final List<ContractRegister> rows;
 
   /// Keyed by firmware register name.
   final Map<String, ContractRegister> registers;
@@ -205,14 +208,18 @@ HwContract parseBengleHwContract(String text) {
   if (rows is! YamlList || rows.isEmpty) {
     throw const FormatException('no registers parsed from contract');
   }
+  final physical = [for (final row in rows) _register(row as YamlMap)];
   final registers = <String, ContractRegister>{};
-  for (final row in rows) {
-    final register = _register(row as YamlMap);
+  for (final register in physical) {
+    if (registers.containsKey(register.name)) {
+      throw FormatException('duplicate register name ${register.name}');
+    }
     registers[register.name] = register;
   }
   return HwContract(
     contractVersion: version,
     firmwareCommit: commit,
+    rows: List.unmodifiable(physical),
     registers: registers,
   );
 }
@@ -249,6 +256,55 @@ void main() {
       );
     });
 
+    test('refuses a duplicated register name', () {
+      const twice = '''
+contract_version: 1
+firmware:
+  commit: "0000000000000000000000000000000000000000"
+registers:
+  - name: A
+    address: "0x00800000"
+    length: 4
+    mult: 1
+  - name: A
+    address: "0x00800004"
+    length: 4
+    mult: 1
+''';
+      expect(
+        () => parseBengleHwContract(twice),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('duplicate register name A'),
+          ),
+        ),
+      );
+    });
+
+    test('every registered app enum value is under test', () {
+      final declared = <MmrAddress>{
+        ...MMRItem.values,
+        ...BengleMmr.values,
+        ...BengleSteamMmr.values,
+        ...BengleScaleMmr.values,
+      };
+      final registered = entriesUnderTest.map((e) => e.register).toSet();
+      String labels(Iterable<MmrAddress> values) =>
+          values.map((v) => '${v.runtimeType}.${(v as Enum).name}').join(', ');
+      expect(
+        labels(declared.difference(registered)),
+        isEmpty,
+        reason: 'declared MMR registers missing from entriesUnderTest',
+      );
+      expect(
+        labels(registered.difference(declared)),
+        isEmpty,
+        reason: 'entriesUnderTest holds a register outside the four enums',
+      );
+    });
+
     test('every app register maps to a distinct contract row', () {
       final names = entriesUnderTest.map((e) => e.contractName).toList();
       expect(
@@ -269,12 +325,25 @@ void main() {
     test('holds every reachable firmware row', () {
       final c = _contract();
       expect(
-        c.registers.length,
+        c.rows.length,
         _expectedRegisterCount,
         reason:
-            'REGISTER COUNT drift: the contract has ${c.registers.length} '
+            'REGISTER COUNT drift: the contract has ${c.rows.length} '
             'rows, expected $_expectedRegisterCount',
       );
+    });
+
+    test('gives every row its own address', () {
+      final seen = <int, String>{};
+      final clashes = <String>[];
+      for (final row in _contract().rows) {
+        final other = seen[row.address];
+        if (other != null) {
+          clashes.add('${_hex(row.address)}: $other and ${row.name}');
+        }
+        seen[row.address] = row.name;
+      }
+      expect(clashes, isEmpty, reason: 'ADDRESS clash in $_contractPath');
     });
 
     for (final pinned in pinnedRows) {
