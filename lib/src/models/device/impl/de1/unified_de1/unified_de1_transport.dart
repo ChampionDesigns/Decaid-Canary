@@ -59,6 +59,7 @@ class UnifiedDe1Transport {
   ReplaySubject<ByteData> _bengleShotSampleSubject = ReplaySubject(maxSize: 1);
   PublishSubject<ByteData> _calibrationSubject = PublishSubject();
   bool _bengleShotSampleEnabled = false;
+  bool _estimatorEnabled = false;
 
   Stream<ByteData> get state => _stateSubject.asBroadcastStream();
   ByteData? get latestStateInfo => _stateSubject.valueOrNull;
@@ -218,6 +219,7 @@ class UnifiedDe1Transport {
     final present = await t.discoverCharacteristics(de1ServiceUUID);
     final wanted = BleServiceIdentifier.parse(Endpoint.estimator.uuid);
     if (!wanted.matchesAny(present)) {
+      _estimatorEnabled = false;
       _log.info(
         'BengleEstSample characteristic not present on this machine; '
         'skipping the estimator subscribe (firmware predates it, or the '
@@ -233,6 +235,7 @@ class UnifiedDe1Transport {
         ByteData.sublistView(Uint8List.fromList(data)),
       ),
     );
+    _estimatorEnabled = true;
     return true;
   }
 
@@ -402,6 +405,7 @@ class UnifiedDe1Transport {
     _bengleShotSampleSubject = ReplaySubject(maxSize: 1);
     _calibrationSubject = PublishSubject();
     _bengleShotSampleEnabled = false;
+    _estimatorEnabled = false;
     _estimatorSubject.close();
     _estimatorSubject = BehaviorSubject.seeded(ByteData(0));
   }
@@ -922,12 +926,16 @@ class UnifiedDe1Transport {
     _log.warning('BLE write timed out, attempting reconnect');
     _recovering = true;
     final restoreBengleShotSample = _bengleShotSampleEnabled;
+    final restoreEstimator = _estimatorEnabled;
     try {
       await _transport.disconnect();
       await _transport.connect();
       await _bleConnect();
       if (restoreBengleShotSample) {
         await subscribeBengleShotSample();
+      }
+      if (restoreEstimator) {
+        await subscribeEstimator();
       }
       _log.info('BLE reconnect successful after timeout');
       return true;

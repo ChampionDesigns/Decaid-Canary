@@ -7343,6 +7343,17 @@ components:
 
     SensorManifest:
       type: object
+      description: |
+        A sensor and its channels. A Bengle that streams BengleEstSample frames
+        is listed as the sensor `Bengle Puck Estimator` with id
+        `<machine id>-puckestimator` and no commands. Its dataChannels are
+        `timestamp` (string), `rev`, `flags`, `r1` (bar·s/mL), `r2`
+        (bar·s²/mL²), `compliance` (mL/bar), `confidence`, `lag` (s),
+        `lagConfidence`, `sigmaQ` (mL/s), `absorbedVolume` (mL), `lastPauseTau`
+        (s), `collapseEventCount`, `collapseLastEventT` (s),
+        `collapseLastEventMagnitude`, `collapseLastEventConcavity` and
+        `hydraulicPowerMeasured` (W, firmware rev 3 and later). Every channel
+        except `timestamp` is a number.
       required:
         - id
         - dataChannels
@@ -7422,6 +7433,18 @@ components:
 
     SensorSnapshot:
       type: object
+      description: |
+        One frame of a sensor. A frame of the puck-estimator sensor (id
+        `<machine id>-puckestimator`) holds the channels
+        `timestamp` (string), `rev`, `flags`, `r1` (bar·s/mL), `r2`
+        (bar·s²/mL²), `compliance` (mL/bar), `confidence`, `lag` (s),
+        `lagConfidence`, `sigmaQ` (mL/s), `absorbedVolume` (mL), `lastPauseTau`
+        (s), `collapseEventCount`, `collapseLastEventT` (s),
+        `collapseLastEventMagnitude`, `collapseLastEventConcavity` and
+        `hydraulicPowerMeasured` (W, firmware rev 3 and later). Every channel
+        except `timestamp` is a number. The frame is the channel map itself:
+        each channel is a top-level key of the frame.
+        A channel the firmware does not report is omitted, never sent as null.
       required:
         - values
 
@@ -7797,6 +7820,35 @@ components:
           format: double
           nullable: true
           description: Accumulated volume in milliliters (ml) since shot start, calculated by integrating machine flow over time. Only counted from profile frame specified in targetVolumeCountStart.
+        sensors:
+          type: object
+          description: |
+            The latest frame of each attached sensor at this sample, keyed by
+            sensor device id (for example `<machine id>-puckestimator`). Each
+            value is that sensor's channel map. Its keys are the keys of the
+            dataChannels of the sensor's manifest (`GET /api/v1/sensors/{id}`),
+            and each channel's value has the type its dataChannels entry names
+            (number, integer, string, boolean, object or array). For example,
+            the puck estimator's `timestamp` is a string and the EBus tap's
+            `bytes` is a string. Any value may be null: a value that is not a
+            finite number is stored as null. A channel the sensor did not report is absent. Omitted when
+            the sample holds no sensor frame.
+          additionalProperties:
+            type: object
+            description: One sensor's channel map, keyed by channel key.
+            additionalProperties:
+              nullable: true
+              description: A channel value, typed by the manifest's dataChannels, or null.
+          example:
+            DE1-1234-puckestimator:
+              timestamp: "2026-11-08T06:00:00.000"
+              rev: 3
+              flags: 0
+              r1: 1.8
+              confidence: 0.9
+              lagConfidence: 0.7
+              sigmaQ: 0.05
+              hydraulicPowerMeasured: 4.2
 
     SteamSnapshot:
       type: object

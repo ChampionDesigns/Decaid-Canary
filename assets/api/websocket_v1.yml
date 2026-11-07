@@ -903,6 +903,19 @@ components:
       description: Operation type indicating the nature of the raw message.
     SensorSnapshot:
       type: object
+      description: |
+        One frame of a sensor. A Bengle that streams BengleEstSample frames
+        publishes the sensor `Bengle Puck Estimator` with id
+        `<machine id>-puckestimator`. Its frames hold the channels
+        `timestamp` (string), `rev`, `flags`, `r1` (bar·s/mL), `r2`
+        (bar·s²/mL²), `compliance` (mL/bar), `confidence`, `lag` (s),
+        `lagConfidence`, `sigmaQ` (mL/s), `absorbedVolume` (mL), `lastPauseTau`
+        (s), `collapseEventCount`, `collapseLastEventT` (s),
+        `collapseLastEventMagnitude`, `collapseLastEventConcavity` and
+        `hydraulicPowerMeasured` (W, firmware rev 3 and later). Every channel
+        except `timestamp` is a number. The frame is the channel map itself:
+        each channel is a top-level key of the frame.
+        A channel the firmware does not report is omitted, never sent as null.
       required:
         - values
       properties:
