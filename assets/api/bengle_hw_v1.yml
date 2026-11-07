@@ -155,7 +155,7 @@ registers:
     min: null
     max: null
     unit: build
-    semantics: "CPU board firmware build number (starts at 1000 for v1.3, +1 per build). This contract pins the validated firmware build on a firmware development branch
+    semantics: "CPU board firmware build number (starts at 1000 for v1.3, +1 per build)."
 
   - name: DebugLen
     fw_row: 3

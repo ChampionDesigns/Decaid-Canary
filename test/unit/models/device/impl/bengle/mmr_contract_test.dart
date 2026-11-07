@@ -9,6 +9,7 @@ import 'package:reaprime/src/models/device/impl/de1/mmr_address.dart'
     show MmrAddress;
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart'
     show BengleScaleMmr;
+import 'package:yaml/yaml.dart';
 
 const String _contractPath = 'assets/api/bengle_hw_v1.yml';
 
@@ -152,127 +153,62 @@ class HwContract {
   final Map<String, ContractRegister> registers;
 }
 
-/// Drops a `#` comment (whole-line or trailing) unless the `#` sits inside a
-/// double-quoted scalar. Trailing comments in the contract are always
-/// whitespace-separated from the value.
-String _stripComment(String line) {
-  var inQuotes = false;
-  for (var i = 0; i < line.length; i++) {
-    final ch = line[i];
-    if (ch == '"') inQuotes = !inQuotes;
-    if (ch == '#' &&
-        !inQuotes &&
-        (i == 0 || line[i - 1] == ' ' || line[i - 1] == '\t')) {
-      return line.substring(0, i);
-    }
-  }
-  return line;
-}
-
-String _unquote(String value) {
-  final t = value.trim();
-  if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
-    return t.substring(1, t.length - 1);
-  }
-  return t;
-}
-
-/// Parses `null`, decimal, or 0x-prefixed hex scalars (optionally quoted).
-int? _intOrNull(String? value) {
+int? _intOrNull(Object? value) {
   if (value == null) return null;
-  final t = _unquote(value);
-  if (t.isEmpty || t == 'null' || t == '~') return null;
+  if (value is int) return value;
+  final t = value.toString().trim();
   if (t.startsWith('0x') || t.startsWith('0X')) {
     return int.parse(t.substring(2), radix: 16);
   }
   return int.parse(t);
 }
 
+ContractRegister _register(YamlMap fields) {
+  final name =
+      fields['name'] as String? ??
+      (throw const FormatException('register row without a name'));
+  return ContractRegister(
+    name: name,
+    fwRow: _intOrNull(fields['fw_row']),
+    address:
+        _intOrNull(fields['address']) ??
+        (throw FormatException('register $name has no address')),
+    length:
+        _intOrNull(fields['length']) ??
+        (throw FormatException('register $name has no length')),
+    perms: fields['perms']?.toString() ?? '',
+    mult:
+        _intOrNull(fields['mult']) ??
+        (throw FormatException('register $name has no mult')),
+    valueKind: fields['value_kind']?.toString() ?? '',
+    min: _intOrNull(fields['min']),
+    max: _intOrNull(fields['max']),
+    appAlias: fields['app_alias']?.toString(),
+  );
+}
+
 HwContract parseBengleHwContract(String text) {
-  int? version;
-  String? commit;
-  final registers = <String, ContractRegister>{};
-
-  var topKey = '';
-  Map<String, String>? current;
-
-  void flushCurrent() {
-    final fields = current;
-    current = null;
-    if (fields == null) return;
-    final name = _unquote(
-      fields['name'] ?? (throw FormatException('register row without a name')),
-    );
-    registers[name] = ContractRegister(
-      name: name,
-      fwRow: _intOrNull(fields['fw_row']),
-      address:
-          _intOrNull(fields['address']) ??
-          (throw FormatException('register $name has no address')),
-      length:
-          _intOrNull(fields['length']) ??
-          (throw FormatException('register $name has no length')),
-      perms: _unquote(fields['perms'] ?? ''),
-      mult:
-          _intOrNull(fields['mult']) ??
-          (throw FormatException('register $name has no mult')),
-      valueKind: _unquote(fields['value_kind'] ?? ''),
-      min: _intOrNull(fields['min']),
-      max: _intOrNull(fields['max']),
-      appAlias: fields['app_alias'] == null
-          ? null
-          : _unquote(fields['app_alias']!),
-    );
+  final doc = loadYaml(text);
+  if (doc is! YamlMap) {
+    throw const FormatException('the contract is not a YAML mapping');
   }
-
-  for (final raw in text.split('\n')) {
-    final line = _stripComment(raw).trimRight();
-    if (line.trim().isEmpty) continue;
-
-    if (!line.startsWith(' ')) {
-      flushCurrent();
-      final sep = line.indexOf(':');
-      if (sep < 0) continue;
-      topKey = line.substring(0, sep).trim();
-      final value = line.substring(sep + 1).trim();
-      if (topKey == 'contract_version' && value.isNotEmpty) {
-        version = int.parse(value);
-      }
-      continue;
-    }
-
-    if (topKey == 'firmware') {
-      final sep = line.indexOf(':');
-      if (sep > 0 && line.substring(0, sep).trim() == 'commit') {
-        commit = _unquote(line.substring(sep + 1));
-      }
-      continue;
-    }
-
-    if (topKey != 'registers') continue;
-
-    var body = line.trimLeft();
-    if (body.startsWith('- ')) {
-      flushCurrent();
-      current = <String, String>{};
-      body = body.substring(2);
-    }
-    final fields = current;
-    if (fields == null) continue;
-    final sep = body.indexOf(':');
-    if (sep <= 0) continue;
-    fields[body.substring(0, sep).trim()] = body.substring(sep + 1).trim();
-  }
-  flushCurrent();
-
+  final version = _intOrNull(doc['contract_version']);
   if (version == null) {
     throw const FormatException('contract_version missing from contract');
   }
+  final firmware = doc['firmware'];
+  final commit = firmware is YamlMap ? firmware['commit']?.toString() : null;
   if (commit == null) {
     throw const FormatException('firmware.commit missing from contract');
   }
-  if (registers.isEmpty) {
+  final rows = doc['registers'];
+  if (rows is! YamlList || rows.isEmpty) {
     throw const FormatException('no registers parsed from contract');
+  }
+  final registers = <String, ContractRegister>{};
+  for (final row in rows) {
+    final register = _register(row as YamlMap);
+    registers[register.name] = register;
   }
   return HwContract(
     contractVersion: version,
