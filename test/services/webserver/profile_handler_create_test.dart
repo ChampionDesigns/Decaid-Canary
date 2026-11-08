@@ -356,6 +356,37 @@ void main() {
       }
     });
 
+    test('a boolean range gets the named refusal on POST and PUT', () async {
+      final id = await seedRecord();
+      final body = {
+        'profile': profileWithStepLimiter({'value': 6, 'range': true}),
+      };
+
+      final post = await postProfile(body);
+      final put = await putProfile(id, body);
+
+      expect(post.statusCode, 400);
+      expect(put.statusCode, 400);
+      expect(await decode(post), rangeRefusal);
+      expect(await decode(put), rangeRefusal);
+    });
+
+    for (final limiter in <dynamic>[5, 'x', <dynamic>[]]) {
+      test('a non-object limiter $limiter is a 400 on POST and PUT', () async {
+        final id = await seedRecord();
+        final body = {'profile': profileWithStepLimiter(limiter)};
+
+        final post = await postProfile(body);
+        final put = await putProfile(id, body);
+        final postBody = await post.readAsString();
+        final putBody = await put.readAsString();
+
+        expect(post.statusCode, 400);
+        expect(put.statusCode, 400);
+        expect(postBody, equals(putBody));
+      });
+    }
+
     test('POST and PUT answer identically for a valueless limiter', () async {
       final id = await seedRecord();
       final body = {'profile': profileWithStepLimiter(<String, dynamic>{})};

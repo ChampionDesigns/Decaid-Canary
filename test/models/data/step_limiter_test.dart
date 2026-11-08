@@ -131,6 +131,26 @@ void main() {
     });
   });
 
+  group('StepLimiter.fromJson - a JSON type that is not a number', () {
+    for (final (json, field) in [
+      (<String, dynamic>{'value': 6, 'range': true}, 'range'),
+      (<String, dynamic>{'value': 6, 'range': <dynamic>[]}, 'range'),
+      (<String, dynamic>{'value': 6, 'range': <String, dynamic>{}}, 'range'),
+      (<String, dynamic>{'value': true, 'range': 1}, 'value'),
+      (
+        <String, dynamic>{
+          'value': <dynamic>[1],
+          'range': 1,
+        },
+        'value',
+      ),
+    ]) {
+      test('$json refuses by naming "$field"', () {
+        expect(() => StepLimiter.fromJson(json), refusesNaming(field));
+      });
+    }
+  });
+
   group('steps carrying a rangeless limiter', () {
     test('a flow step refuses one by naming "range"', () {
       expect(
