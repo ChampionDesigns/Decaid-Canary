@@ -242,5 +242,46 @@ void main() {
         throwsA(isA<BleTimeoutException>()),
       );
     });
+
+    test('a failed recovery still tears down, and an app connect after it '
+        'keeps its link (${path.name})', () async {
+      final link = GatedBleLink()..timeoutsLeft = 1;
+      final stuck = Completer<void>();
+      addTearDown(() async {
+        if (!stuck.isCompleted) stuck.complete();
+        await link.dispose();
+      });
+      int teardowns() => path == BleLinkPath.raw
+          ? link.disconnectCalls
+          : link.confirmedDisconnectCalls;
+      final unified = UnifiedDe1Transport(transport: overBleLink(path, link));
+      await unified.connect();
+      final states = <ConnectionState>[];
+      final sub = unified.connectionState.listen(states.add);
+      addTearDown(sub.cancel);
+      final before = teardowns();
+      final connecting = link.connectGate = Completer<void>();
+      link.connectError = StateError('reconnect failed');
+
+      final write = unified.write(
+        Endpoint.requestedState,
+        Uint8List.fromList([0x02]),
+      );
+      await settle();
+      link.teardownGate = stuck;
+      connecting.complete();
+      await expectLater(write, throwsA(isA<BleTimeoutException>()));
+
+      link.connectError = null;
+      final reconnect = unified.connect();
+      await settle();
+      stuck.complete();
+      await reconnect;
+      await settle();
+
+      expect(teardowns(), before + 2);
+      expect(link.linked, isTrue);
+      expect(states.last, ConnectionState.connected);
+    });
   }
 }

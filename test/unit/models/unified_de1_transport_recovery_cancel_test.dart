@@ -107,6 +107,28 @@ void main() {
           },
         );
 
+        test(
+          'a timeout that lands after the app reconnected starts no recovery',
+          () async {
+            final connects = rig.transport.connectCalls;
+            final gate = rig.transport.timeoutGate = Completer<void>();
+            final write = rig.timeoutWrite();
+            await settle();
+
+            await rig.de1.disconnect();
+            await rig.de1.connect();
+            gate.complete();
+            await write;
+            await settle();
+
+            expect(rig.writeError, isA<BleTimeoutException>());
+            expect(rig.transport.connectCalls, connects + 1);
+            expect(rig.transport.linked, isTrue);
+            expect(requestedStateWrites(rig.transport), 0);
+            expect(rig.states.last, ConnectionState.connected);
+          },
+        );
+
         test('app disconnect while the recovery connect is pending', () async {
           final gate = rig.transport.connectGate = Completer<void>();
           final write = rig.timeoutWrite();
