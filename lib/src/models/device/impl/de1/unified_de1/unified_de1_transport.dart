@@ -219,6 +219,7 @@ class UnifiedDe1Transport {
   /// observer simply never emits a frame.
   Future<bool> subscribeEstimator() async {
     if (transportType != TransportType.ble) return true;
+    final generation = _linkGeneration;
     final t = _transport;
     if (t is! BLETransport) return false;
 
@@ -243,7 +244,7 @@ class UnifiedDe1Transport {
         ByteData.sublistView(Uint8List.fromList(data)),
       ),
     );
-    _estimatorEnabled = true;
+    if (generation == _linkGeneration) _estimatorEnabled = true;
     return true;
   }
 

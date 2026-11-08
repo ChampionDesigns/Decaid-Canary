@@ -173,6 +173,30 @@ void _cancelGroup(BleLinkPath path) {
       expectNoEstimator();
     });
 
+    test('a cancelled estimator restore does not taint the new link', () async {
+      final restore = link.subscribeGates[Endpoint.estimator.uuid] =
+          Completer<void>();
+      final write = timeoutWrite();
+      await settle();
+      expect(estimatorSubscribes(), 2);
+
+      await de1.disconnect();
+      await de1.connect();
+      restore.complete();
+      await write;
+      await settle();
+      expect(writeError, isA<BleTimeoutException>());
+
+      link.timeoutsLeft = 1;
+      await timeoutWrite();
+      await settle();
+
+      expect(estimatorSubscribes(), 2);
+      expect(link.subscribers.containsKey(Endpoint.estimator.uuid), isFalse);
+      expect(requestedStateWrites(link), 1);
+      expect(link.linked, isTrue);
+    });
+
     test('a later recovery does not restore the cancelled estimator', () async {
       final gate = link.connectGate = Completer<void>();
       final write = timeoutWrite();
