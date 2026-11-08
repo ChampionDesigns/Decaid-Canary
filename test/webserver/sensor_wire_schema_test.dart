@@ -12,9 +12,12 @@ import 'package:reaprime/src/models/device/impl/bengle/bengle_puck_estimator.dar
 import 'package:reaprime/src/models/device/impl/bengle/mock_bengle.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart';
 import 'package:reaprime/src/models/device/impl/difluid/difluid_r2_sensor.dart';
+import 'package:reaprime/src/models/device/impl/sensor/bengle_debug_port.dart';
+import 'package:reaprime/src/models/device/impl/sensor/debug_port.dart';
 import 'package:reaprime/src/models/device/sensor.dart';
 import 'package:reaprime/src/models/device/transport/ble_transport.dart';
 import 'package:reaprime/src/models/device/transport/data_transport.dart';
+import 'package:reaprime/src/models/device/transport/serial_port.dart';
 import 'package:reaprime/src/services/webserver_service.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:shelf/shelf_io.dart' as io;
@@ -71,6 +74,104 @@ class _StubSensor implements Sensor {
 
   @override
   Future<void> disconnect() async {}
+}
+
+class _FakeSerialTransport extends SerialTransport {
+  _FakeSerialTransport(this.id);
+
+  @override
+  final String id;
+
+  final BehaviorSubject<ConnectionState> _states = BehaviorSubject.seeded(
+    ConnectionState.discovered,
+  );
+  final StreamController<Uint8List> raw = StreamController.broadcast();
+  final StreamController<String> lines = StreamController.broadcast();
+
+  @override
+  String get name => 'serial-wire-test';
+
+  @override
+  Stream<ConnectionState> get connectionState => _states.stream;
+
+  @override
+  Stream<Uint8List> get rawStream => raw.stream;
+
+  @override
+  Stream<String> get readStream => lines.stream;
+
+  @override
+  Future<void> connect() async => _states.add(ConnectionState.connected);
+
+  @override
+  Future<void> disconnect() async => _states.add(ConnectionState.disconnected);
+
+  @override
+  Future<void> dispose() async {
+    await raw.close();
+    await lines.close();
+    await _states.close();
+  }
+
+  @override
+  Future<void> writeCommand(String command) async {}
+
+  @override
+  Future<void> writeHexCommand(Uint8List command) async {}
+}
+
+const _estimatorChannels = {
+  'timestamp',
+  'rev',
+  'flags',
+  'r1',
+  'r2',
+  'compliance',
+  'confidence',
+  'lag',
+  'lagConfidence',
+  'sigmaQ',
+  'absorbedVolume',
+  'lastPauseTau',
+  'collapseEventCount',
+  'collapseLastEventT',
+  'collapseLastEventMagnitude',
+  'collapseLastEventConcavity',
+  'hydraulicPowerMeasured',
+};
+
+const _sentinelFrameKeys = {
+  'timestamp',
+  'rev',
+  'flags',
+  'confidence',
+  'lagConfidence',
+  'sigmaQ',
+};
+
+List<String> _estimatorFrameErrors(
+  Map<String, dynamic> frame,
+  Set<String> expectedKeys,
+) => [
+  for (final key in frame.keys)
+    if (!expectedKeys.contains(key)) '$key is not expected',
+  for (final key in expectedKeys)
+    if (!frame.containsKey(key)) '$key is missing',
+  for (final entry in frame.entries)
+    if (entry.value == null) '${entry.key} is null',
+];
+
+YamlMap _restSchemasWithChannelTypes(List<String> types) {
+  const served =
+      'enum: ["number", "integer", "string", "boolean", "object", "array"]';
+  final text = File(_rest).readAsStringSync();
+  expect(text, contains(served));
+  final narrowed = text.replaceFirst(
+    served,
+    'enum: [${types.map((t) => '"$t"').join(', ')}]',
+  );
+  return ((loadYaml(narrowed) as YamlMap)['components'] as YamlMap)['schemas']
+      as YamlMap;
 }
 
 class _FakeR2Transport extends BLETransport {
@@ -202,6 +303,10 @@ List<String> _check(
     _ => false,
   };
   if (!typeOk) return ['$at is ${value.runtimeType}, schema says $type'];
+  final allowed = schema['enum'];
+  if (allowed is YamlList && !allowed.contains(value)) {
+    return ['$at is $value, not in the enum'];
+  }
 
   final errors = <String>[];
   if (value is List && schema['items'] is YamlMap) {
@@ -252,6 +357,7 @@ void main() {
   late HttpServer server;
   late HttpClient client;
   final transports = <_FakeR2Transport>[];
+  final serials = <_FakeSerialTransport>[];
 
   setUp(() async {
     final deviceController = DeviceController([MockDeviceDiscoveryService()]);
@@ -271,6 +377,10 @@ void main() {
       await t.dispose();
     }
     transports.clear();
+    for (final t in serials) {
+      await t.dispose();
+    }
+    serials.clear();
   });
 
   Future<void> settle() async {
@@ -327,10 +437,14 @@ void main() {
     for (final frame in frames) {
       for (final entry in frame.entries) {
         final type = types[entry.key];
-        expect(type, isNotNull, reason: 'undeclared channel ${entry.key}');
+        if (type == null) {
+          expect(entry.key, 'timestamp', reason: 'undeclared channel');
+          expect(entry.value, isA<String>(), reason: 'undeclared timestamp');
+          continue;
+        }
         if (entry.value != null) {
           expect(
-            _hasManifestType(entry.value, type!),
+            _hasManifestType(entry.value, type),
             isTrue,
             reason: '${entry.key}=${entry.value} is not $type',
           );
@@ -375,7 +489,9 @@ void main() {
       expect(frames, hasLength(2));
       expect(frames.first.keys, hasLength(17));
       expect(frames.first['timestamp'], isA<String>());
-      expect(frames.last, isNot(contains('r1')));
+      expect(frames.last.keys.toSet(), _sentinelFrameKeys);
+      expect(_estimatorFrameErrors(frames.first, _estimatorChannels), isEmpty);
+      expect(_estimatorFrameErrors(frames.last, _sentinelFrameKeys), isEmpty);
       expectFramesMatchSchemas(frames, await manifestTypes(sensor));
     });
 
@@ -402,6 +518,90 @@ void main() {
         expectFramesMatchSchemas(frames, await manifestTypes(sensor));
       },
     );
+
+    test('a null or unexpected estimator channel fails the frame check', () {
+      final frame = BenglePuckEstimator.encodeSample(
+        parseBengleEstSample(_sentinelEstimatorFrame())!,
+      );
+      expect(_estimatorFrameErrors(frame, _sentinelFrameKeys), isEmpty);
+      expect(
+        _estimatorFrameErrors({
+          ...frame,
+          'compliance': null,
+        }, _sentinelFrameKeys),
+        isNotEmpty,
+      );
+      expect(
+        _estimatorFrameErrors({...frame, 'r1': 1.5}, _sentinelFrameKeys),
+        isNotEmpty,
+      );
+      expect(
+        _estimatorFrameErrors({
+          ...frame,
+          'confidence': null,
+        }, _sentinelFrameKeys),
+        isNotEmpty,
+      );
+    });
+
+    test('EBus tap frames', () async {
+      final transport = _FakeSerialTransport('usb-wire-test-tap');
+      serials.add(transport);
+      final sensor = BengleDebugPort(transport: transport);
+      await sensorController.register(sensor);
+      final frames = await framesFrom(sensor, () {
+        transport.raw.add(Uint8List.fromList([1, 2, 3]));
+      });
+
+      expect(frames, hasLength(1));
+      expect(frames.single, containsPair('bytes', 'AQID'));
+      expect(frames.single['timestamp'], isA<String>());
+      expectFramesMatchSchemas(frames, await manifestTypes(sensor));
+    });
+
+    test('debug port frames', () async {
+      final transport = _FakeSerialTransport('usb-wire-test-debug');
+      serials.add(transport);
+      final sensor = DebugPort(transport: transport);
+      await sensorController.register(sensor);
+      final frames = await framesFrom(sensor, () {
+        transport.lines.add('hello\nworld');
+      });
+
+      expect(frames, hasLength(1));
+      expect(frames.single['output'], isA<String>());
+      expect(frames.single['timestamp'], isA<String>());
+      expectFramesMatchSchemas(frames, await manifestTypes(sensor));
+    });
+
+    test('each frame-key sentence allows an undeclared timestamp', () {
+      String flat(Object? text) =>
+          text.toString().replaceAll(RegExp(r'\s+'), ' ');
+      final rest = _schemas(_rest);
+      final sensors =
+          ((rest['ShotSnapshot'] as YamlMap)['properties']
+                  as YamlMap)['sensors']
+              as YamlMap;
+      for (final (name, text) in [
+        (
+          'rest SensorSnapshot',
+          (rest['SensorSnapshot'] as YamlMap)['description'],
+        ),
+        (
+          'ws SensorSnapshot',
+          (_schemas(_ws)['SensorSnapshot'] as YamlMap)['description'],
+        ),
+        ('ShotSnapshot.sensors', sensors['description']),
+      ]) {
+        expect(
+          flat(text),
+          contains(
+            'may also send a `timestamp` string that its manifest does not declare',
+          ),
+          reason: name,
+        );
+      }
+    });
 
     for (final path in [_rest, _ws]) {
       test('$path SensorSnapshot has no values or id wrapper', () {
@@ -470,6 +670,22 @@ void main() {
           expect((c as Map).keys.toSet(), documented('CommandDescriptor'));
         }
       }
+    });
+
+    test('a channel type outside the DataChannel enum is rejected', () async {
+      final sensor = await puckEstimator(MockBengle(deviceId: 'DE1-1234'));
+      final served =
+          await getJson(
+                '/api/v1/sensors/${Uri.encodeComponent(sensor.deviceId)}',
+              )
+              as Map<String, dynamic>;
+      final full = _schemas(_rest);
+      expect(_check(served, full['SensorManifest'] as YamlMap, full), isEmpty);
+      final narrowed = _restSchemasWithChannelTypes(['string', 'boolean']);
+      expect(
+        _check(served, narrowed['SensorManifest'] as YamlMap, narrowed),
+        contains(r'$.data[1].type is number, not in the enum'),
+      );
     });
 
     test(

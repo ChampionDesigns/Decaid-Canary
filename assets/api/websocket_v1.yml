@@ -908,7 +908,9 @@ components:
         `id` or `values` wrapper. Its keys are channel keys from the sensor's
         manifest (`GET /api/v1/sensors/{id}`), and each value has the type its
         channel entry names (number, integer, string, boolean, object or
-        array). A frame need not hold every channel. A built-in sensor can send
+        array). A built-in sensor may also send a `timestamp` string that its
+        manifest does not declare (the EBus tap and the debug port do). A frame
+        need not hold every channel. A built-in sensor can send
         null for a channel it cannot read: DiFluid R2 sends `measuring: null`
         for a status code it does not know. A plugin sensor sends every
         declared channel in every frame and never sends null.
