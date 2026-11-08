@@ -12,14 +12,14 @@ enum BengleMmr implements MmrAddress {
     writeScale: 1.0,
   ),
 
-  scaleCalCmd(0x00803880, 4, MmrValueKind.int32, 'ScaleCalCmd', min: 0, max: 5),
+  scaleCalCmd(0x00803880, 4, MmrValueKind.int32, 'ScaleCalCmd', min: 0, max: 3),
   scaleCalState(0x00803884, 4, MmrValueKind.int32, 'ScaleCalState'),
   scaleCalWeight(
     0x00803888,
     4,
     MmrValueKind.scaledFloat,
     'ScaleCalWeight',
-    min: 0,
+    min: 10,
     max: 100000,
     readScale: 0.1,
     writeScale: 10.0,
@@ -100,7 +100,7 @@ enum BengleMmr implements MmrAddress {
     MmrValueKind.int32,
     'SetLocalTimeOfWeek',
     min: 0,
-    max: 604800,
+    max: 604799,
   ),
   scheduleEntry(
     0x008038C4,
