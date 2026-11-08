@@ -32,6 +32,10 @@ const _defaultShotSettingsFrame = <int>[
 
 const _firmwareMapPollReadTimeout = Duration(seconds: 2);
 
+class _RecoveryCancelled implements Exception {
+  const _RecoveryCancelled();
+}
+
 class UnifiedDe1Transport {
   final DataTransport _transport;
   final TransportType transportType;
@@ -43,6 +47,9 @@ class UnifiedDe1Transport {
   bool _cacheCleared = false;
 
   bool _recovering = false;
+  int _linkGeneration = 0;
+  int _appConnects = 0;
+  Future<bool>? _recovery;
 
   Stream<device.ConnectionState> get connectionState => _transport
       .connectionState
@@ -100,6 +107,7 @@ class UnifiedDe1Transport {
       transportType = transport.transportType,
       _log = Logger("UnifiedDe1Transport-${transport.id}");
   Future<void> connect() async {
+    _appConnects++;
     final wasConnected =
         transportType == TransportType.ble &&
         await _transport.connectionState.first ==
@@ -211,6 +219,7 @@ class UnifiedDe1Transport {
   /// observer simply never emits a frame.
   Future<bool> subscribeEstimator() async {
     if (transportType != TransportType.ble) return true;
+    final generation = _linkGeneration;
     final t = _transport;
     if (t is! BLETransport) return false;
 
@@ -219,7 +228,7 @@ class UnifiedDe1Transport {
     final present = await t.discoverCharacteristics(de1ServiceUUID);
     final wanted = BleServiceIdentifier.parse(Endpoint.estimator.uuid);
     if (!wanted.matchesAny(present)) {
-      _estimatorEnabled = false;
+      if (generation == _linkGeneration) _estimatorEnabled = false;
       _log.info(
         'BengleEstSample characteristic not present on this machine; '
         'skipping the estimator subscribe (firmware predates it, or the '
@@ -235,11 +244,12 @@ class UnifiedDe1Transport {
         ByteData.sublistView(Uint8List.fromList(data)),
       ),
     );
-    _estimatorEnabled = true;
+    if (generation == _linkGeneration) _estimatorEnabled = true;
     return true;
   }
 
   Future<void> subscribeBengleShotSample() async {
+    final generation = _linkGeneration;
     switch (transportType) {
       case TransportType.ble:
         if (_transport is! BLETransport) {
@@ -259,7 +269,7 @@ class UnifiedDe1Transport {
         await _transport.writeCommand(
           '<+${Endpoint.bengleShotSample.representation}>',
         );
-        _bengleShotSampleEnabled = true;
+        if (generation == _linkGeneration) _bengleShotSampleEnabled = true;
         await _transport.writeCommand(
           '<-${Endpoint.shotSample.representation}>',
         );
@@ -268,7 +278,7 @@ class UnifiedDe1Transport {
       case TransportType.wifi:
         throw StateError('Unsupported transport type: $transportType');
     }
-    _bengleShotSampleEnabled = true;
+    if (generation == _linkGeneration) _bengleShotSampleEnabled = true;
   }
 
   Future<void> _serialConnect() async {
@@ -309,7 +319,18 @@ class UnifiedDe1Transport {
     );
   }
 
+  void _cancelRecovery() {
+    _linkGeneration++;
+    _recovering = false;
+    _recovery = null;
+  }
+
+  void _throwIfCancelled(int generation) {
+    if (generation != _linkGeneration) throw const _RecoveryCancelled();
+  }
+
   Future<void> dispose() async {
+    _cancelRecovery();
     _serialResponses.failAll(StateError('Serial transport disposed'));
     await _transportSubscription?.cancel();
     _transportSubscription = null;
@@ -332,6 +353,7 @@ class UnifiedDe1Transport {
   }
 
   Future<void> disconnect() async {
+    _cancelRecovery();
     _serialResponses.failAll(StateError('Serial transport disconnected'));
     _log.warning('disconnect() called by app code', null, StackTrace.current);
     switch (transportType) {
@@ -605,6 +627,7 @@ class UnifiedDe1Transport {
   }
 
   Future<ByteData> read(LogicalEndpoint endpoint, {Duration? timeout}) async {
+    final generation = _linkGeneration;
     if (await _transport.connectionState.first !=
         device.ConnectionState.connected) {
       throw const DeviceNotConnectedException.machine();
@@ -641,7 +664,7 @@ class UnifiedDe1Transport {
       }
     } catch (e, st) {
       if (_isBleTimeout(e)) {
-        if (await _handleBleTimeout(e, st)) {
+        if (await _handleBleTimeout(e, st, generation)) {
           _log.info('Retrying read of ${endpoint.name} after reconnect');
           return read(endpoint, timeout: timeout);
         }
@@ -816,6 +839,7 @@ class UnifiedDe1Transport {
   }
 
   Future<void> write(LogicalEndpoint endpoint, Uint8List data) async {
+    final generation = _linkGeneration;
     if (await _transport.connectionState.first !=
         device.ConnectionState.connected) {
       throw const DeviceNotConnectedException.machine();
@@ -848,7 +872,7 @@ class UnifiedDe1Transport {
       }
     } catch (e, st) {
       if (_isBleTimeout(e)) {
-        if (await _handleBleTimeout(e, st)) {
+        if (await _handleBleTimeout(e, st, generation)) {
           _log.info('Retrying write to ${endpoint.name} after reconnect');
           return write(endpoint, data);
         }
@@ -867,6 +891,7 @@ class UnifiedDe1Transport {
     Uint8List data, {
     void Function()? beforeDispatch,
   }) async {
+    final generation = _linkGeneration;
     if (await _transport.connectionState.first !=
         device.ConnectionState.connected) {
       throw const DeviceNotConnectedException.machine();
@@ -900,7 +925,7 @@ class UnifiedDe1Transport {
       }
     } catch (e, st) {
       if (_isBleTimeout(e)) {
-        if (await _handleBleTimeout(e, st)) {
+        if (await _handleBleTimeout(e, st, generation)) {
           _log.info('Retrying write to ${endpoint.name} after reconnect');
           return writeWithResponse(
             endpoint,
@@ -922,34 +947,75 @@ class UnifiedDe1Transport {
     return transportType == TransportType.ble && error is BleTimeoutException;
   }
 
-  Future<bool> _handleBleTimeout(Object error, StackTrace st) async {
+  Future<bool> _handleBleTimeout(
+    Object error,
+    StackTrace st,
+    int operationGeneration,
+  ) {
+    if (operationGeneration != _linkGeneration) {
+      _log.info('BLE timeout after an explicit disconnect; not reconnecting');
+      return Future.value(false);
+    }
+    final running = _recovery;
+    if (running != null) {
+      _log.info('BLE recovery already running; waiting for its result');
+      return running;
+    }
+    final recovery = _recoverBleLink();
+    _recovery = recovery;
+    recovery.whenComplete(() {
+      if (identical(_recovery, recovery)) _recovery = null;
+    }).ignore();
+    return recovery;
+  }
+
+  Future<bool> _recoverBleLink() async {
     _log.warning('BLE write timed out, attempting reconnect');
+    final generation = _linkGeneration;
+    final appConnects = _appConnects;
     _recovering = true;
     final restoreBengleShotSample = _bengleShotSampleEnabled;
     final restoreEstimator = _estimatorEnabled;
     try {
       await _transport.disconnect();
+      if (generation != _linkGeneration) {
+        _log.info('BLE recovery cancelled by an explicit disconnect');
+        return false;
+      }
       await _transport.connect();
+      _throwIfCancelled(generation);
       await _bleConnect();
+      _throwIfCancelled(generation);
       if (restoreBengleShotSample) {
         await subscribeBengleShotSample();
+        _throwIfCancelled(generation);
       }
       if (restoreEstimator) {
         await subscribeEstimator();
+        _throwIfCancelled(generation);
       }
       _log.info('BLE reconnect successful after timeout');
       return true;
     } catch (reconnectError) {
-      _log.severe('BLE reconnect failed, disconnecting', reconnectError);
-      _recovering = false;
-      try {
-        _transport.disconnect();
-      } catch (e, st) {
-        _log.fine('transport.disconnect() during BLE recovery failed', e, st);
+      if (reconnectError is _RecoveryCancelled ||
+          generation != _linkGeneration) {
+        _log.info('BLE recovery cancelled by an explicit disconnect');
+        if (appConnects != _appConnects) return false;
+      } else {
+        _log.severe('BLE reconnect failed, disconnecting', reconnectError);
       }
+      if (generation == _linkGeneration) _recovering = false;
+      unawaited(
+        Future.sync(_transport.disconnect).catchError((
+          Object e,
+          StackTrace st,
+        ) {
+          _log.fine('transport.disconnect() during BLE recovery failed', e, st);
+        }),
+      );
       return false;
     } finally {
-      _recovering = false;
+      if (generation == _linkGeneration) _recovering = false;
     }
   }
 
