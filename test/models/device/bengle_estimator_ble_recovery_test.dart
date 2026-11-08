@@ -11,6 +11,7 @@ import 'package:reaprime/src/models/device/transport/data_transport.dart';
 import 'package:reaprime/src/services/ble/ble_admission_transport.dart';
 
 import '../../helpers/fake_ble_transport.dart';
+import '../../helpers/gated_ble_link.dart';
 
 class _DroppingTimeoutTransport extends FakeBleTransport {
   bool _timedOut = false;
@@ -92,6 +93,107 @@ void main() {
   for (final link in _Link.values) {
     _recoveryGroup(link);
   }
+  for (final path in BleLinkPath.values) {
+    _cancelGroup(path);
+  }
+}
+
+void _cancelGroup(BleLinkPath path) {
+  group('estimator after a cancelled BLE recovery (${path.name})', () {
+    late GatedBleLink link;
+    late UnifiedDe1Transport de1;
+    Object? writeError;
+
+    Future<void> timeoutWrite() => de1
+        .write(Endpoint.requestedState, Uint8List.fromList([0x02]))
+        .then<void>((_) {}, onError: (Object e) => writeError = e);
+
+    int estimatorSubscribes() =>
+        link.subscribeCounts[Endpoint.estimator.uuid] ?? 0;
+
+    void expectNoEstimator() {
+      expect(writeError, isA<BleTimeoutException>());
+      expect(link.linked, isFalse);
+      expect(link.subscribers.containsKey(Endpoint.estimator.uuid), isFalse);
+      expect(estimatorSubscribes(), 1);
+      expect(requestedStateWrites(link), 0);
+    }
+
+    setUp(() async {
+      writeError = null;
+      link = GatedBleLink()..presentCharacteristics = [Endpoint.estimator.uuid];
+      de1 = UnifiedDe1Transport(transport: overBleLink(path, link));
+      await de1.connect();
+      expect(await de1.subscribeEstimator(), isTrue);
+    });
+
+    tearDown(() async {
+      if (!link.disposed) await link.dispose();
+    });
+
+    test('app disconnect while the recovery disconnect is pending', () async {
+      final gate = link.teardownGate = Completer<void>();
+      final write = timeoutWrite();
+      await settle();
+      final disconnect = de1.disconnect();
+      await settle();
+      gate.complete();
+      await disconnect;
+      await write;
+      await settle();
+
+      expectNoEstimator();
+    });
+
+    test('app disconnect while the recovery connect is pending', () async {
+      final gate = link.connectGate = Completer<void>();
+      final write = timeoutWrite();
+      await settle();
+      final disconnect = de1.disconnect();
+      await settle();
+      gate.complete();
+      await disconnect;
+      await write;
+      await settle();
+
+      expectNoEstimator();
+    });
+
+    test('dispose while the recovery connect is pending', () async {
+      final gate = link.connectGate = Completer<void>();
+      final write = timeoutWrite();
+      await settle();
+      final dispose = de1.dispose();
+      await settle();
+      gate.complete();
+      await dispose;
+      await write;
+      await settle();
+
+      expectNoEstimator();
+    });
+
+    test('a later recovery does not restore the cancelled estimator', () async {
+      final gate = link.connectGate = Completer<void>();
+      final write = timeoutWrite();
+      await settle();
+      final disconnect = de1.disconnect();
+      await settle();
+      gate.complete();
+      await disconnect;
+      await write;
+      await settle();
+
+      await de1.connect();
+      link.timeoutsLeft = 1;
+      await timeoutWrite();
+      await settle();
+
+      expect(estimatorSubscribes(), 1);
+      expect(link.subscribers.containsKey(Endpoint.estimator.uuid), isFalse);
+      expect(requestedStateWrites(link), 1);
+    });
+  });
 }
 
 void _recoveryGroup(_Link link) {
