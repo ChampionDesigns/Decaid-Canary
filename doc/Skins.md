@@ -1349,16 +1349,20 @@ GET /api/v1/sensors
 ```json
 [
   {
-    "name": "Basket Sensor",
+    "id": "sensor:basket:001",
     "info": {
-      "id": "sensor:basket:001",
       "name": "Acme Basket Sensor",
       "vendor": "Acme",
-      "dataChannels": [
+      "data": [
         {
           "key": "temperature",
           "type": "number",
           "unit": "°C"
+        },
+        {
+          "key": "pressure",
+          "type": "number",
+          "unit": "bar"
         }
       ],
       "commands": []
@@ -1367,12 +1371,14 @@ GET /api/v1/sensors
 ]
 ```
 
+Each item has the sensor `id` and its manifest in `info`. The manifest has no `id`. Percent-encode the `id` as one path component in the sensor routes below.
+
 #### Get Sensor Manifest
 ```http
 GET /api/v1/sensors/{id}
 ```
 
-Returns full manifest for a specific sensor, including available commands.
+Returns full manifest for a specific sensor, including available commands. The response is the same object as `info` in the list: `name`, `vendor`, `data` and `commands`.
 
 #### Execute Sensor Command
 ```http
@@ -2002,14 +2008,13 @@ delivery.
 **Message Format:**
 ```json
 {
-  "timestamp": "2026-02-06T10:30:45.123Z",
-  "id": "sensor:basket:001",
-  "values": {
-    "temperature": 92.5,
-    "pressure": 9.1
-  }
+  "timestamp": "2026-02-06T10:30:45.123",
+  "temperature": 92.5,
+  "pressure": 9.1
 }
 ```
+
+Each frame is the channel map itself, with no `id` or `values` wrapper. Its keys are the `key` values of the manifest's `data` channels. A built-in sensor may also send a `timestamp` string that its manifest does not declare. A frame need not hold every channel. A built-in sensor can send `null` for a channel it cannot read. A plugin sensor sends every declared channel in every frame and never sends `null`.
 
 ### 7. Plugin Event Streams
 
