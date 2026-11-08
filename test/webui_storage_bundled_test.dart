@@ -19,6 +19,20 @@ void main() {
         expect(source['type'], anyOf('github_release', 'github_branch', 'url'));
       }
     });
+
+    test('lists Decal as a GitHub release named after its skin id', () async {
+      final configString = await rootBundle.loadString('skin_sources.json');
+      final sources = (jsonDecode(configString) as List)
+          .cast<Map<String, dynamic>>();
+
+      final decal = sources
+          .where((source) => source['repo'] == 'ChampionDesigns/decal')
+          .toList();
+
+      expect(decal, hasLength(1));
+      expect(decal.single['type'], 'github_release');
+      expect((decal.single['repo'] as String).split('/').last, 'decal');
+    });
   });
 
   group('bundled_skins manifest', () {
