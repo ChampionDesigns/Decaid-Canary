@@ -173,6 +173,7 @@ void main() {
 
       expect(MMRItem.heaterV.min, isNull);
       expect(MMRItem.heaterV.max, isNull);
+      expect(bengleWriteBound(MMRItem.heaterV), (min: null, max: null));
       expect(_mmrWritesTo(transport, MMRItem.heaterV.address), [0xFFFFFFFF]);
     });
   });
@@ -190,22 +191,40 @@ void main() {
         reason: 'ScaleCalWeight model bound 1..10000 g, x10 on the wire',
       );
       expect(
-        [MMRItem.steamStartSecs.min, MMRItem.steamStartSecs.max],
+        [
+          bengleWriteBound(MMRItem.steamStartSecs).min,
+          bengleWriteBound(MMRItem.steamStartSecs).max,
+        ],
         [10, 400],
       );
       expect(
-        [MMRItem.allowUSBCharging.min, MMRItem.allowUSBCharging.max],
+        [
+          bengleWriteBound(MMRItem.allowUSBCharging).min,
+          bengleWriteBound(MMRItem.allowUSBCharging).max,
+        ],
         [0, 1],
       );
       expect(
-        [MMRItem.appFeatureFlags.min, MMRItem.appFeatureFlags.max],
+        [
+          bengleWriteBound(MMRItem.appFeatureFlags).min,
+          bengleWriteBound(MMRItem.appFeatureFlags).max,
+        ],
         [0, 16777215],
       );
       expect(
-        [MMRItem.refillKitPresent.min, MMRItem.refillKitPresent.max],
+        [
+          bengleWriteBound(MMRItem.refillKitPresent).min,
+          bengleWriteBound(MMRItem.refillKitPresent).max,
+        ],
         [0, 2],
       );
-      expect([MMRItem.userPresent.min, MMRItem.userPresent.max], [0, 1]);
+      expect(
+        [
+          bengleWriteBound(MMRItem.userPresent).min,
+          bengleWriteBound(MMRItem.userPresent).max,
+        ],
+        [0, 1],
+      );
     });
   });
 }

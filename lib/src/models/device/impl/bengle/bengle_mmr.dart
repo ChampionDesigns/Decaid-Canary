@@ -1,4 +1,30 @@
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/mmr_address.dart';
+
+typedef MmrWriteBound = ({int? min, int? max});
+
+const Map<MMRItem, MmrWriteBound> bengleMmrItemBounds = {
+  MMRItem.tankTemp: (min: 0, max: 60),
+  MMRItem.heaterUp1Flow: (min: 5, max: 80),
+  MMRItem.heaterUp2Flow: (min: 5, max: 80),
+  MMRItem.waterHeaterIdleTemp: (min: 5, max: 1000),
+  MMRItem.targetSteamFlow: (min: 40, max: 400),
+  MMRItem.steamStartSecs: (min: 10, max: 400),
+  MMRItem.heaterUp2Timeout: (min: 5, max: 300),
+  MMRItem.flushFlowRate: (min: 10, max: 80),
+  MMRItem.flushTemp: (min: 10, max: 990),
+  MMRItem.flushTimeout: (min: 10, max: 2500),
+  MMRItem.hotWaterFlowRate: (min: 0, max: 80),
+  MMRItem.steamPurgeMode: (min: 0, max: 1),
+  MMRItem.allowUSBCharging: (min: 0, max: 1),
+  MMRItem.appFeatureFlags: (min: 0, max: 0xFFFFFF),
+  MMRItem.refillKitPresent: (min: 0, max: 2),
+  MMRItem.userPresent: (min: 0, max: 1),
+};
+
+MmrWriteBound bengleWriteBound(MmrAddress address) =>
+    (address is MMRItem ? bengleMmrItemBounds[address] : null) ??
+    (min: address.min, max: address.max);
 
 enum BengleMmr implements MmrAddress {
   matSetPoint(

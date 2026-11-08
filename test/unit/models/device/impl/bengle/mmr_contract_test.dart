@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle_mmr.dart'
-    show BengleMmr, BengleSteamMmr;
+    show BengleMmr, BengleSteamMmr, MmrWriteBound, bengleWriteBound;
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart'
     show MMRItem;
 import 'package:reaprime/src/models/device/impl/de1/mmr_address.dart'
@@ -225,8 +225,9 @@ List<String> unconsumedWritableProblems(
 List<String> effectiveBoundProblems(
   HwContract contract,
   List<ContractEntry> entries,
-  Map<String, String> exceptions,
-) {
+  Map<String, String> exceptions, {
+  MmrWriteBound Function(MmrAddress) appBound = bengleWriteBound,
+}) {
   final problems = <String>[];
   for (final row in contract.rows) {
     final name = row.name;
@@ -279,7 +280,7 @@ List<String> effectiveBoundProblems(
     final lo = row.effectiveMin;
     final hi = row.effectiveMax;
     if (lo == null || hi == null) continue;
-    final app = entry.register;
+    final app = appBound(entry.register);
     if (app.min == null || app.max == null) {
       problems.add(
         '${entry.label} has app bounds [${app.min}..${app.max}] but '
@@ -578,8 +579,8 @@ registers:
               '(${1.0 / contract.mult})',
         );
 
-        final appMin = app.min;
-        final appMax = app.max;
+        final appMin = bengleWriteBound(app).min;
+        final appMax = bengleWriteBound(app).max;
         if (appMin != null && contract.min != null) {
           expect(
             appMin >= contract.min!,
@@ -747,7 +748,10 @@ registers:
       final row = _contract().registers['AppFeatureFlags']!;
       expect([row.effectiveMin, row.effectiveMax], [0, 16777215]);
       expect(
-        [MMRItem.appFeatureFlags.min, MMRItem.appFeatureFlags.max],
+        [
+          bengleWriteBound(MMRItem.appFeatureFlags).min,
+          bengleWriteBound(MMRItem.appFeatureFlags).max,
+        ],
         [0, 16777215],
       );
     });
@@ -781,6 +785,25 @@ registers:
       ], boundExceptions);
       expect(problems, [
         contains('differ from the effective range 0..16777215'),
+      ]);
+    });
+
+    test('the checker compares the Bengle bound, not the MMRItem bound', () {
+      expect([MMRItem.tankTemp.min, MMRItem.tankTemp.max], [null, null]);
+      expect(
+        effectiveBoundProblems(_contract(), entriesUnderTest, boundExceptions),
+        isEmpty,
+      );
+      final problems = effectiveBoundProblems(
+        _contract(),
+        entriesUnderTest,
+        boundExceptions,
+        appBound: (address) => address == MMRItem.tankTemp
+            ? (min: 0, max: 59)
+            : bengleWriteBound(address),
+      );
+      expect(problems, [
+        contains('app bounds [0..59] differ from the effective range 0..60'),
       ]);
     });
 
@@ -828,7 +851,7 @@ registers:
       for (final entry in entriesUnderTest) {
         final row = _contract().registers[entry.contractName];
         if (row == null) continue;
-        final app = entry.register;
+        final app = bengleWriteBound(entry.register);
         final narrowerMin =
             app.min != null && row.min != null && app.min! > row.min!;
         final narrowerMax =

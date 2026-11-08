@@ -221,17 +221,18 @@ extension UnifiedDe1MMR on UnifiedDe1 {
   }
 
   Future<void> _writeMMRInt(MMRItem item, int value) async {
-    final clampedValue = (item.min != null && item.max != null)
-        ? value.clamp(item.min!, item.max!)
-        : value;
-    await _mmrWrite(item, _packMMRInt(clampedValue));
+    await _mmrWrite(item, _packMMRInt(_clampToWriteBound(item, value)));
   }
 
   int _scaledClampedMMRInt(MMRItem item, double value) {
-    final scaledValue = (value * item.writeScale).toInt();
-    return (item.min != null && item.max != null)
-        ? scaledValue.clamp(item.min!, item.max!)
-        : scaledValue;
+    return _clampToWriteBound(item, (value * item.writeScale).toInt());
+  }
+
+  int _clampToWriteBound(MMRItem item, int value) {
+    final bound = mmrItemWriteBound(item);
+    final min = bound.min;
+    final max = bound.max;
+    return (min != null && max != null) ? value.clamp(min, max) : value;
   }
 
   Future<void> _writeMMRScaled(MMRItem item, double value) async {
