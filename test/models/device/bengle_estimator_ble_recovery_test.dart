@@ -7,16 +7,25 @@ import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sampl
     show bengleEstSampleBytes;
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1_transport.dart';
 import 'package:reaprime/src/models/device/transport/ble_timeout_exception.dart';
+import 'package:reaprime/src/models/device/transport/data_transport.dart';
+import 'package:reaprime/src/services/ble/ble_admission_transport.dart';
 
 import '../../helpers/fake_ble_transport.dart';
 
 class _DroppingTimeoutTransport extends FakeBleTransport {
   bool _timedOut = false;
   int estimatorSubscribes = 0;
+  int confirmedDisconnectCalls = 0;
 
   @override
   Future<void> disconnect() async {
     await super.disconnect();
+    subscribers.clear();
+  }
+
+  @override
+  Future<void> disconnectConfirmed() async {
+    confirmedDisconnectCalls++;
     subscribers.clear();
   }
 
@@ -63,8 +72,30 @@ Future<void> _timeoutWrite(UnifiedDe1Transport de1) async {
   await Future<void>.delayed(Duration.zero);
 }
 
+enum _Link { raw, admission }
+
+DataTransport _over(_Link link, _DroppingTimeoutTransport t) => switch (link) {
+  _Link.raw => t,
+  _Link.admission => BleAdmissionTransport(
+    transport: t,
+    reserve: Object.new,
+    release: (_) {},
+  ),
+};
+
+int _teardowns(_Link link, _DroppingTimeoutTransport t) => switch (link) {
+  _Link.raw => t.disconnectCalls,
+  _Link.admission => t.confirmedDisconnectCalls,
+};
+
 void main() {
-  group('estimator after BLE timeout recovery', () {
+  for (final link in _Link.values) {
+    _recoveryGroup(link);
+  }
+}
+
+void _recoveryGroup(_Link link) {
+  group('estimator after BLE timeout recovery (${link.name})', () {
     late _DroppingTimeoutTransport transport;
     late UnifiedDe1Transport de1;
     late List<ByteData> samples;
@@ -73,7 +104,7 @@ void main() {
     setUp(() async {
       transport = _DroppingTimeoutTransport()
         ..presentCharacteristics = [Endpoint.estimator.uuid];
-      de1 = UnifiedDe1Transport(transport: transport);
+      de1 = UnifiedDe1Transport(transport: _over(link, transport));
       samples = [];
       sub = de1.estimator
           .where((d) => d.lengthInBytes >= bengleEstSampleBytes)
@@ -93,7 +124,7 @@ void main() {
       expect(samples, hasLength(1));
 
       await _timeoutWrite(de1);
-      expect(transport.disconnectCalls, 1);
+      expect(_teardowns(link, transport), 1);
 
       transport.emitNotification(Endpoint.estimator, _sample(2));
       await Future<void>.delayed(Duration.zero);
@@ -112,7 +143,7 @@ void main() {
 
         await _timeoutWrite(de1);
 
-        expect(transport.disconnectCalls, 1);
+        expect(_teardowns(link, transport), 1);
         expect(transport.estimatorSubscribes, 1);
         expect(
           transport.subscribers.containsKey(Endpoint.estimator.uuid),
@@ -129,7 +160,7 @@ void main() {
 
       await _timeoutWrite(de1);
 
-      expect(transport.disconnectCalls, 2);
+      expect(_teardowns(link, transport), 2);
       expect(transport.estimatorSubscribes, 1);
       expect(
         transport.subscribers.containsKey(Endpoint.estimator.uuid),
@@ -143,7 +174,7 @@ void main() {
       () async {
         await _timeoutWrite(de1);
 
-        expect(transport.disconnectCalls, 1);
+        expect(_teardowns(link, transport), 1);
         expect(transport.estimatorSubscribes, 0);
         expect(
           transport.subscribers.containsKey(Endpoint.estimator.uuid),

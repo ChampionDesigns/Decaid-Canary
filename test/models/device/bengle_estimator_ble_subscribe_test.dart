@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1_transport.dart';
+import 'package:reaprime/src/services/ble/ble_admission_transport.dart';
 
 import '../../helpers/fake_ble_transport.dart';
 
@@ -37,6 +38,25 @@ void main() {
       final subscribed = await de1.subscribeEstimator();
 
       expect(subscribed, isTrue);
+      expect(
+        transport.subscribers.containsKey(Endpoint.estimator.uuid),
+        isTrue,
+      );
+      await transport.dispose();
+    });
+
+    test('subscribes through the BLE admission transport', () async {
+      final transport = FakeBleTransport();
+      transport.presentCharacteristics = [Endpoint.estimator.uuid];
+      final admitted = BleAdmissionTransport(
+        transport: transport,
+        reserve: Object.new,
+        release: (_) {},
+      );
+      final de1 = UnifiedDe1Transport(transport: admitted);
+      await de1.connect();
+
+      expect(await de1.subscribeEstimator(), isTrue);
       expect(
         transport.subscribers.containsKey(Endpoint.estimator.uuid),
         isTrue,

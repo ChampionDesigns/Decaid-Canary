@@ -100,6 +100,9 @@ class BleAdmissionTransport extends BLETransport {
   @override
   Future<List<String>> discoverServices() => _owned(transport.discoverServices);
   @override
+  Future<List<String>> discoverCharacteristics(String serviceUUID) =>
+      _owned(() => transport.discoverCharacteristics(serviceUUID));
+  @override
   Future<Uint8List> read(
     String serviceUUID,
     String characteristicUUID, {
