@@ -461,6 +461,14 @@ void main() {
           served.keys.toSet(),
         );
         expect(_check(served, schema, schemas), isEmpty, reason: '$served');
+        Set<Object?> documented(String name) =>
+            ((schemas[name] as YamlMap)['properties'] as YamlMap).keys.toSet();
+        for (final c in served['data'] as List) {
+          expect((c as Map).keys.toSet(), documented('DataChannel'));
+        }
+        for (final c in (served['commands'] as List?) ?? const []) {
+          expect((c as Map).keys.toSet(), documented('CommandDescriptor'));
+        }
       }
     });
 
