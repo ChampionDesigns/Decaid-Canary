@@ -627,6 +627,7 @@ class UnifiedDe1Transport {
   }
 
   Future<ByteData> read(LogicalEndpoint endpoint, {Duration? timeout}) async {
+    final generation = _linkGeneration;
     if (await _transport.connectionState.first !=
         device.ConnectionState.connected) {
       throw const DeviceNotConnectedException.machine();
@@ -663,7 +664,7 @@ class UnifiedDe1Transport {
       }
     } catch (e, st) {
       if (_isBleTimeout(e)) {
-        if (await _handleBleTimeout(e, st)) {
+        if (await _handleBleTimeout(e, st, generation)) {
           _log.info('Retrying read of ${endpoint.name} after reconnect');
           return read(endpoint, timeout: timeout);
         }
@@ -838,6 +839,7 @@ class UnifiedDe1Transport {
   }
 
   Future<void> write(LogicalEndpoint endpoint, Uint8List data) async {
+    final generation = _linkGeneration;
     if (await _transport.connectionState.first !=
         device.ConnectionState.connected) {
       throw const DeviceNotConnectedException.machine();
@@ -870,7 +872,7 @@ class UnifiedDe1Transport {
       }
     } catch (e, st) {
       if (_isBleTimeout(e)) {
-        if (await _handleBleTimeout(e, st)) {
+        if (await _handleBleTimeout(e, st, generation)) {
           _log.info('Retrying write to ${endpoint.name} after reconnect');
           return write(endpoint, data);
         }
@@ -889,6 +891,7 @@ class UnifiedDe1Transport {
     Uint8List data, {
     void Function()? beforeDispatch,
   }) async {
+    final generation = _linkGeneration;
     if (await _transport.connectionState.first !=
         device.ConnectionState.connected) {
       throw const DeviceNotConnectedException.machine();
@@ -922,7 +925,7 @@ class UnifiedDe1Transport {
       }
     } catch (e, st) {
       if (_isBleTimeout(e)) {
-        if (await _handleBleTimeout(e, st)) {
+        if (await _handleBleTimeout(e, st, generation)) {
           _log.info('Retrying write to ${endpoint.name} after reconnect');
           return writeWithResponse(
             endpoint,
@@ -944,7 +947,15 @@ class UnifiedDe1Transport {
     return transportType == TransportType.ble && error is BleTimeoutException;
   }
 
-  Future<bool> _handleBleTimeout(Object error, StackTrace st) {
+  Future<bool> _handleBleTimeout(
+    Object error,
+    StackTrace st,
+    int operationGeneration,
+  ) {
+    if (operationGeneration != _linkGeneration) {
+      _log.info('BLE timeout after an explicit disconnect; not reconnecting');
+      return Future.value(false);
+    }
     final running = _recovery;
     if (running != null) {
       _log.info('BLE recovery already running; waiting for its result');

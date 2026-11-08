@@ -89,6 +89,24 @@ void main() {
           },
         );
 
+        test(
+          'a timeout that lands after the app disconnect starts no recovery',
+          () async {
+            final connects = rig.transport.connectCalls;
+            final gate = rig.transport.timeoutGate = Completer<void>();
+            final write = rig.timeoutWrite();
+            await settle();
+
+            await rig.de1.disconnect();
+            gate.complete();
+            await write;
+            await settle();
+
+            rig.expectCancelled();
+            expect(rig.transport.connectCalls, connects);
+          },
+        );
+
         test('app disconnect while the recovery connect is pending', () async {
           final gate = rig.transport.connectGate = Completer<void>();
           final write = rig.timeoutWrite();

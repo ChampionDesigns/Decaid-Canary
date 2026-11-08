@@ -16,6 +16,8 @@ class GatedBleLink extends FakeBleTransport {
   int confirmedDisconnectCalls = 0;
   Completer<void>? teardownGate;
   Completer<void>? connectGate;
+  Completer<void>? timeoutGate;
+  Object? connectError;
   final subscribeGates = <String, Completer<void>>{};
   final subscribeCounts = <String, int>{};
   int gattCalls = 0;
@@ -46,6 +48,9 @@ class GatedBleLink extends FakeBleTransport {
     final gate = connectGate;
     connectGate = null;
     await gate?.future;
+    final error = connectError;
+    connectError = null;
+    if (error != null) throw error;
     linked = true;
     _emit(ConnectionState.connected);
   });
@@ -101,6 +106,9 @@ class GatedBleLink extends FakeBleTransport {
     if (characteristicUUID == Endpoint.requestedState.uuid &&
         timeoutsLeft > 0) {
       timeoutsLeft--;
+      final gate = timeoutGate;
+      timeoutGate = null;
+      await gate?.future;
       throw BleTimeoutException('write');
     }
     await super.write(
