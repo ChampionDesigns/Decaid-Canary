@@ -21,7 +21,7 @@ class ReleaseDye2Test(unittest.TestCase):
         (self.root / "scripts").mkdir()
         (self.root / "bin").mkdir()
         shutil.copy(ROOT / "scripts/fetch_dye2_plugin.sh", self.root / "scripts")
-        for plugin in ("shot_upload", "dcamp"):
+        for plugin in ("shot_upload", "dcamp", "weather"):
             (self.root / f"scripts/fetch_{plugin}_plugin.sh").write_text(
                 "#!/usr/bin/env bash\nexit 0\n"
             )
