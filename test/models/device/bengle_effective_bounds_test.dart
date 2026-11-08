@@ -199,7 +199,7 @@ void main() {
       );
       expect(
         [MMRItem.appFeatureFlags.min, MMRItem.appFeatureFlags.max],
-        [0, 0x7FFFFFFF],
+        [0, 16777215],
       );
       expect(
         [MMRItem.refillKitPresent.min, MMRItem.refillKitPresent.max],

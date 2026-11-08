@@ -743,6 +743,47 @@ registers:
       );
     });
 
+    test('AppFeatureFlags is bounded to the exact float range', () {
+      final row = _contract().registers['AppFeatureFlags']!;
+      expect([row.effectiveMin, row.effectiveMax], [0, 16777215]);
+      expect(
+        [MMRItem.appFeatureFlags.min, MMRItem.appFeatureFlags.max],
+        [0, 16777215],
+      );
+    });
+
+    test('an AppFeatureFlags effective_max of 2147483647 fails', () {
+      final contract = parseBengleHwContract(
+        _editRow(
+          'AppFeatureFlags',
+          (block) => block.replaceFirst(
+            'effective_max: 16777215',
+            'effective_max: 2147483647',
+          ),
+        ),
+      );
+      expect(
+        effectiveBoundProblems(contract, entriesUnderTest, boundExceptions),
+        [contains('differ from the effective range 0..2147483647')],
+      );
+    });
+
+    test('an AppFeatureFlags app clamp of 0x7FFFFFFF fails', () {
+      final problems = effectiveBoundProblems(_contract(), [
+        ContractEntry(
+          _FakeAddress(
+            MMRItem.appFeatureFlags.address,
+            min: 0,
+            max: 0x7FFFFFFF,
+          ),
+          'AppFeatureFlags',
+        ),
+      ], boundExceptions);
+      expect(problems, [
+        contains('differ from the effective range 0..16777215'),
+      ]);
+    });
+
     test('every named exception is a writable contract row', () {
       final problems = effectiveBoundProblems(_contract(), const [], const {
         ...boundExceptions,

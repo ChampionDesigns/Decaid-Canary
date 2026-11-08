@@ -403,7 +403,7 @@ enum MMRItem implements MmrAddress {
     MmrValueKind.int32,
     "App Feature Flags",
     min: 0,
-    max: 0x7FFFFFFF,
+    max: 0xFFFFFF,
   ),
   refillKitPresent(
     0x0080385C,

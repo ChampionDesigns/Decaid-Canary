@@ -46,9 +46,10 @@
 #     register table column. The firmware does not check that column on a
 #     write: it divides the wire value by mult and gives the result to the
 #     model setter, which clamps the value in the RAM model to the bound of
-#     the model parameter table, with no error on the wire. Flash keeps the
-#     raw written value until the next write; after a reboot the load path
-#     calls the same clamping setter, so the model is inside its bound again.
+#     the model parameter table, with no error on the wire. On a persisted
+#     row (RWD), flash keeps the raw written value until the next write;
+#     after a reboot the load path calls the same clamping setter, so the
+#     model is inside its bound again. Other rows are held in RAM only.
 #     A row with its own write case follows that case. A row's hook acts on
 #     the raw value before the clamp, so its effective bound comes from the
 #     hook. Each writable row gives `effective_min` / `effective_max`: the
@@ -473,7 +474,8 @@ registers:
     min: 0
     max: 2147483647 # 0x7FFFFFFF -- top bit unavailable (parts of FW treat it as signed)
     effective_min: 0
-    effective_max: 2147483647
+    effective_max: 16777215
+    bound_note: "Values 0 to 16777215 (2^24 - 1) are stored exactly. Above that, the firmware rounds the value through a float, so low bits are lost; 2147483584 or more stores 0. The value is held in RAM only, not saved across a reboot. The only defined flag is 0x1 (UserNotPresent)."
     unit: bitmask
     semantics: "App-reported feature flags; bit0 = app supports the UserNotPresent substate (app writes 1 on connect)."
 
