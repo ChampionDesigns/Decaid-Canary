@@ -9,6 +9,8 @@ import 'package:reaprime/src/models/device/transport/ble_timeout_exception.dart'
 import 'package:reaprime/src/models/device/transport/ble_transport.dart';
 import 'package:rxdart/rxdart.dart';
 
+import '../../helpers/gated_ble_link.dart';
+
 class _RecoveryFakeTransport extends BLETransport {
   _RecoveryFakeTransport({required this.reconnectSucceeds});
 
@@ -128,4 +130,34 @@ void main() {
       },
     );
   });
+
+  for (final path in BleLinkPath.values) {
+    test('two timeouts together start one recovery (${path.name})', () async {
+      final link = GatedBleLink()..timeoutsLeft = 2;
+      addTearDown(link.dispose);
+      final unified = UnifiedDe1Transport(transport: overBleLink(path, link));
+      await unified.connect();
+      await unified.subscribeBengleShotSample();
+      final connects = link.connectCalls;
+      final gate = link.teardownGate = Completer<void>();
+
+      final writes = [
+        unified.write(Endpoint.requestedState, Uint8List.fromList([0x02])),
+        unified.write(Endpoint.requestedState, Uint8List.fromList([0x03])),
+      ];
+      await settle();
+      gate.complete();
+      await Future.wait(writes);
+      await settle();
+
+      expect(link.connectCalls - connects, 1);
+      expect(
+        link.subscribeCounts.values.where((n) => n != 2).toList(),
+        isEmpty,
+        reason: '${link.subscribeCounts}',
+      );
+      expect(requestedStateWrites(link), 2);
+      expect(link.linked, isTrue);
+    });
+  }
 }

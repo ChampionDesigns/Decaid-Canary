@@ -49,6 +49,7 @@ class UnifiedDe1Transport {
   bool _recovering = false;
   int _linkGeneration = 0;
   int _appConnects = 0;
+  Future<bool>? _recovery;
 
   Stream<device.ConnectionState> get connectionState => _transport
       .connectionState
@@ -319,6 +320,7 @@ class UnifiedDe1Transport {
   void _cancelRecovery() {
     _linkGeneration++;
     _recovering = false;
+    _recovery = null;
   }
 
   void _throwIfCancelled(int generation) {
@@ -940,7 +942,21 @@ class UnifiedDe1Transport {
     return transportType == TransportType.ble && error is BleTimeoutException;
   }
 
-  Future<bool> _handleBleTimeout(Object error, StackTrace st) async {
+  Future<bool> _handleBleTimeout(Object error, StackTrace st) {
+    final running = _recovery;
+    if (running != null) {
+      _log.info('BLE recovery already running; waiting for its result');
+      return running;
+    }
+    final recovery = _recoverBleLink();
+    _recovery = recovery;
+    recovery.whenComplete(() {
+      if (identical(_recovery, recovery)) _recovery = null;
+    }).ignore();
+    return recovery;
+  }
+
+  Future<bool> _recoverBleLink() async {
     _log.warning('BLE write timed out, attempting reconnect');
     final generation = _linkGeneration;
     final appConnects = _appConnects;
@@ -977,7 +993,7 @@ class UnifiedDe1Transport {
       } else {
         _log.severe('BLE reconnect failed, disconnecting', reconnectError);
       }
-      _recovering = false;
+      if (generation == _linkGeneration) _recovering = false;
       try {
         await _transport.disconnect();
       } catch (e, st) {
@@ -985,7 +1001,7 @@ class UnifiedDe1Transport {
       }
       return false;
     } finally {
-      _recovering = false;
+      if (generation == _linkGeneration) _recovering = false;
     }
   }
 
