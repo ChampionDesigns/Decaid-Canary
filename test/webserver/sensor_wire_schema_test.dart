@@ -275,6 +275,19 @@ ByteData _sentinelEstimatorFrame() {
   return b;
 }
 
+YamlMap _sensorListItem() {
+  final doc = loadYaml(File(_rest).readAsStringSync()) as YamlMap;
+  final get =
+      ((doc['paths'] as YamlMap)['/api/v1/sensors'] as YamlMap)['get']
+          as YamlMap;
+  final ok = (get['responses'] as YamlMap)['200'] as YamlMap;
+  final body =
+      ((ok['content'] as YamlMap)['application/json'] as YamlMap)['schema']
+          as YamlMap;
+  expect(body['type'], 'array');
+  return body['items'] as YamlMap;
+}
+
 List<String> _check(
   Object? value,
   YamlMap schema,
@@ -707,5 +720,67 @@ void main() {
         }
       },
     );
+  });
+
+  group('GET /api/v1/sensors list matches its schema', () {
+    test('each served item documents id and info, and no name', () async {
+      final bengle = MockBengle(deviceId: 'DE1-1234');
+      final puck = await puckEstimator(bengle);
+      final (r2, _) = await difluid();
+      final stub = _StubSensor(
+        'stub sensor/1',
+        SensorInfo(
+          name: 'Stub',
+          vendor: 'test',
+          dataChannels: [DataChannel(key: 'v', type: 'number')],
+          commands: null,
+        ),
+      );
+      await sensorController.register(stub);
+      final schemas = _schemas(_rest);
+      final item = _sensorListItem();
+      final listed = (await getJson('/api/v1/sensors') as List)
+          .cast<Map<String, dynamic>>();
+      final ids = [for (final entry in listed) entry['id']];
+      expect(ids, containsAll([puck.deviceId, r2.deviceId, stub.deviceId]));
+      expect(ids.toSet().length, ids.length);
+      expect(item['type'], 'object');
+      expect((item['required'] as YamlList?)?.toSet(), {'id', 'info'});
+      expect((item['properties'] as YamlMap).keys.toSet(), {'id', 'info'});
+      final properties = item['properties'] as YamlMap;
+      expect((properties['id'] as YamlMap)['type'], 'string');
+      expect(
+        (properties['info'] as YamlMap)[r'$ref'],
+        '#/components/schemas/SensorManifest',
+      );
+      for (final entry in listed) {
+        expect(entry.keys.toSet(), {'id', 'info'}, reason: '$entry');
+        expect(_check(entry, item, schemas), isEmpty, reason: '$entry');
+        final manifest = await getJson(
+          '/api/v1/sensors/${Uri.encodeComponent(entry['id'] as String)}',
+        );
+        expect(entry['info'], manifest, reason: '${entry['id']}');
+      }
+    });
+
+    test('a list item without id or info, or with a number id, fails', () {
+      final schemas = _schemas(_rest);
+      expect(
+        _check({'info': <String, dynamic>{}}, _sensorListItem(), schemas),
+        contains(r'$ lacks required id'),
+      );
+      expect(
+        _check(
+          {'id': 5, 'info': <String, dynamic>{}},
+          _sensorListItem(),
+          schemas,
+        ),
+        contains(r'$.id is int, schema says string'),
+      );
+      expect(
+        _check({'id': 'x'}, _sensorListItem(), schemas),
+        contains(r'$ lacks required info'),
+      );
+    });
   });
 }

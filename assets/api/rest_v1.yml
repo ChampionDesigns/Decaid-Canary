@@ -1516,9 +1516,15 @@ paths:
                 type: array
                 items:
                   type: object
+                  required: [id, info]
                   properties:
-                    name:
+                    id:
                       type: string
+                      description: >-
+                        The sensor ID. Use it, percent-encoded as one path
+                        component, in `/api/v1/sensors/{id}`,
+                        `/api/v1/sensors/{id}/execute` and
+                        `/ws/v1/sensors/{id}/snapshot`.
                     info:
                       $ref: "#/components/schemas/SensorManifest"
 
