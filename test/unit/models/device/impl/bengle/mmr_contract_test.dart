@@ -17,7 +17,7 @@ const String _contractPath = 'assets/api/bengle_hw_v1.yml';
 
 /// The contract_version this registration table was written against.
 /// Bump deliberately, together with the enum updates the new contract needs.
-const int _expectedContractVersion = 3;
+const int _expectedContractVersion = 4;
 
 const int _expectedRegisterCount = 61;
 
@@ -103,6 +103,9 @@ class ContractRegister {
     required this.min,
     required this.max,
     required this.appAlias,
+    this.hasEffectiveBound = false,
+    this.effectiveMin,
+    this.effectiveMax,
   });
 
   final String name;
@@ -116,6 +119,11 @@ class ContractRegister {
   final int? min;
   final int? max;
   final String? appAlias;
+  final bool hasEffectiveBound;
+  final int? effectiveMin;
+  final int? effectiveMax;
+
+  bool get writable => perms.contains('W');
 }
 
 class HwContract {
@@ -167,7 +175,127 @@ ContractRegister _register(YamlMap fields) {
     min: _intOrNull(fields['min']),
     max: _intOrNull(fields['max']),
     appAlias: fields['app_alias']?.toString(),
+    hasEffectiveBound:
+        fields.containsKey('effective_min') &&
+        fields.containsKey('effective_max'),
+    effectiveMin: _intOrNull(fields['effective_min']),
+    effectiveMax: _intOrNull(fields['effective_max']),
   );
+}
+
+const Map<String, String> boundExceptions = <String, String>{
+  'ExternalFlash': 'byte window to external flash, not a scalar',
+  'HeaterV':
+      'the firmware takes only 120 or 230; a clamp would turn unset into a '
+      'set voltage',
+  'CalFlowEst': 'the firmware ignores the write at the pin',
+  'SetLCZero': 'trigger, the written value is ignored',
+  'SetLCCalPoint1': 'retired trigger, the written value is ignored',
+  'SetLCCalPoint2': 'retired trigger, the written value is ignored',
+  'ScaleTare': 'trigger, the written value is ignored',
+};
+
+const Map<String, String> writableRowsWithoutAppEntry = <String, String>{
+  'V24CurrentBudget':
+      'the app does not write it; an app entry must clamp to the effective '
+      'range',
+  'SetLCZero': 'trigger the app does not send',
+  'SetLCCalPoint1': 'retired trigger the app does not send',
+  'SetLCCalPoint2': 'retired trigger the app does not send',
+};
+
+List<String> unconsumedWritableProblems(
+  HwContract contract,
+  List<ContractEntry> entries,
+  Map<String, String> gaps,
+) {
+  final covered = entries.map((e) => e.contractName).toSet();
+  final actual = {
+    for (final row in contract.rows)
+      if (row.writable && !covered.contains(row.name)) row.name,
+  };
+  return [
+    for (final name in actual.difference(gaps.keys.toSet()))
+      'writable row $name has no app entry and is not a named gap',
+    for (final name in gaps.keys.toSet().difference(actual))
+      'named gap $name is not an unconsumed writable row',
+  ]..sort();
+}
+
+List<String> effectiveBoundProblems(
+  HwContract contract,
+  List<ContractEntry> entries,
+  Map<String, String> exceptions,
+) {
+  final problems = <String>[];
+  for (final row in contract.rows) {
+    final name = row.name;
+    if (!row.writable) {
+      if (row.hasEffectiveBound) {
+        problems.add('$name is not writable but carries an effective bound');
+      }
+      continue;
+    }
+    if (!row.hasEffectiveBound) {
+      problems.add('$name is writable and has no effective_min/effective_max');
+      continue;
+    }
+    final lo = row.effectiveMin;
+    final hi = row.effectiveMax;
+    if ((lo == null) != (hi == null)) {
+      problems.add('$name has only one effective bound');
+      continue;
+    }
+    if (lo == null || hi == null) {
+      if (!exceptions.containsKey(name)) {
+        problems.add(
+          '$name has no effective range and is not a named exception',
+        );
+      }
+      continue;
+    }
+    if (exceptions.containsKey(name)) {
+      problems.add('$name is a named exception but has an effective range');
+    }
+    if (lo > hi) {
+      problems.add('$name effective range $lo..$hi is empty');
+    }
+    if (row.min != null && lo < row.min!) {
+      problems.add('$name effective_min $lo lies below the column ${row.min}');
+    }
+    if (row.max != null && hi > row.max!) {
+      problems.add('$name effective_max $hi lies above the column ${row.max}');
+    }
+  }
+  for (final name in exceptions.keys) {
+    final row = contract.registers[name];
+    if (row == null || !row.writable) {
+      problems.add('named exception $name is not a writable contract row');
+    }
+  }
+  for (final entry in entries) {
+    final row = contract.registers[entry.contractName];
+    if (row == null || !row.writable) continue;
+    final lo = row.effectiveMin;
+    final hi = row.effectiveMax;
+    if (lo == null || hi == null) continue;
+    final app = entry.register;
+    if (app.min == null || app.max == null) {
+      problems.add(
+        '${entry.label} has app bounds [${app.min}..${app.max}] but '
+        '${row.name} has the effective range $lo..$hi: both app bounds are '
+        'required',
+      );
+      continue;
+    }
+    if (app.min != lo || app.max != hi) {
+      problems.add(
+        '${entry.label} app bounds [${app.min}..${app.max}] differ from the '
+        'effective range $lo..$hi of ${row.name}',
+      );
+    }
+  }
+  return problems;
 }
 
 HwContract parseBengleHwContract(String text) {
@@ -476,6 +604,154 @@ registers:
     }
   });
 
+  group('effective write bounds', () {
+    test('every writable row and every app bound agree', () {
+      expect(
+        effectiveBoundProblems(_contract(), entriesUnderTest, boundExceptions),
+        isEmpty,
+      );
+    });
+
+    test('every writable row has an app entry or is a named gap', () {
+      expect(
+        unconsumedWritableProblems(
+          _contract(),
+          entriesUnderTest,
+          writableRowsWithoutAppEntry,
+        ),
+        isEmpty,
+      );
+    });
+
+    test('dropping the app entry of a bounded row fails', () {
+      final without = [
+        for (final e in entriesUnderTest)
+          if (e.contractName != 'MatSetPoint') e,
+      ];
+      expect(
+        unconsumedWritableProblems(
+          _contract(),
+          without,
+          writableRowsWithoutAppEntry,
+        ),
+        ['writable row MatSetPoint has no app entry and is not a named gap'],
+      );
+    });
+
+    test('removing either bound of MatSetPoint fails', () {
+      const row = BengleMmr.matSetPoint;
+      for (final bounds in const [(null, 80), (0, null)]) {
+        final problems = effectiveBoundProblems(_contract(), [
+          ContractEntry(
+            _FakeAddress(row.address, min: bounds.$1, max: bounds.$2),
+            'MatSetPoint',
+          ),
+        ], boundExceptions);
+        expect(problems, [contains('both app bounds are required')]);
+      }
+    });
+
+    test('an app bound wider than the effective bound fails', () {
+      final problems = effectiveBoundProblems(_contract(), [
+        ContractEntry(
+          _FakeAddress(
+            BengleScaleMmr.endOfShotWeight.address,
+            min: 0,
+            max: 1000000,
+          ),
+          'EndOfShotWeight',
+        ),
+      ], boundExceptions);
+      expect(problems, [contains('differ from the effective range 0..300000')]);
+    });
+
+    test('a register with no app bounds and a finite range fails', () {
+      final problems = effectiveBoundProblems(
+        parseBengleHwContract(_synthetic(effective: '0', max: '5')),
+        [ContractEntry(_FakeAddress(0x00800000), 'A')],
+        const {},
+      );
+      expect(problems, [contains('both app bounds are required')]);
+    });
+
+    test('a writable row without effective keys fails', () {
+      final problems = effectiveBoundProblems(
+        parseBengleHwContract(_synthetic(keys: false)),
+        const [],
+        const {},
+      );
+      expect(problems, [contains('has no effective_min/effective_max')]);
+    });
+
+    test('a null effective range needs a named exception', () {
+      final contract = parseBengleHwContract(
+        _synthetic(effective: 'null', max: 'null'),
+      );
+      expect(effectiveBoundProblems(contract, const [], const {}), [
+        contains('is not a named exception'),
+      ]);
+      expect(
+        effectiveBoundProblems(contract, const [], const {'A': 'trigger'}),
+        isEmpty,
+      );
+    });
+
+    test('a named exception with a finite range fails', () {
+      final problems = effectiveBoundProblems(
+        parseBengleHwContract(_synthetic(effective: '0', max: '5')),
+        const [],
+        const {'A': 'trigger'},
+      );
+      expect(problems, [contains('named exception but has an effective')]);
+    });
+
+    test('an effective bound outside the column fails', () {
+      final problems = effectiveBoundProblems(
+        parseBengleHwContract(_synthetic(effective: '0', max: '20')),
+        const [],
+        const {},
+      );
+      expect(problems, [contains('lies above the column 10')]);
+    });
+
+    test('dropping the effective bound of one real row fails', () {
+      final contract = parseBengleHwContract(
+        _editRow(
+          'MatSetPoint',
+          (block) => block
+              .replaceFirst(RegExp(r'\n    effective_min: [^\n]*'), '')
+              .replaceFirst(RegExp(r'\n    effective_max: [^\n]*'), ''),
+        ),
+      );
+      expect(
+        effectiveBoundProblems(contract, entriesUnderTest, boundExceptions),
+        ['MatSetPoint is writable and has no effective_min/effective_max'],
+      );
+    });
+
+    test('a changed effective bound of one real row fails', () {
+      final contract = parseBengleHwContract(
+        _editRow(
+          'TankTemp',
+          (block) =>
+              block.replaceFirst('effective_max: 60', 'effective_max: 59'),
+        ),
+      );
+      expect(
+        effectiveBoundProblems(contract, entriesUnderTest, boundExceptions),
+        [contains('differ from the effective range 0..59 of TankTemp')],
+      );
+    });
+
+    test('every named exception is a writable contract row', () {
+      final problems = effectiveBoundProblems(_contract(), const [], const {
+        ...boundExceptions,
+        'HWConfig': 'read-only',
+      });
+      expect(problems, [contains('named exception HWConfig')]);
+    });
+  });
+
   group('contract coverage (informational, never fails)', () {
     test('contract rows not yet consumed by the app', () {
       final covered = entriesUnderTest.map((e) => e.contractName).toSet();
@@ -525,4 +801,59 @@ registers:
       }
     });
   });
+}
+
+class _FakeAddress extends MmrAddress {
+  _FakeAddress(this.address, {this.min, this.max});
+
+  @override
+  final int address;
+  @override
+  final int? min;
+  @override
+  final int? max;
+  @override
+  int get length => 4;
+  @override
+  String get name => 'fake';
+  @override
+  MmrValueKind get kind => MmrValueKind.int32;
+}
+
+String _editRow(String name, String Function(String block) edit) {
+  final text = File(_contractPath).readAsStringSync();
+  final start = text.indexOf('\n  - name: $name\n');
+  expect(start, isNonNegative, reason: 'row $name not in the contract');
+  final next = text.indexOf('\n  - name: ', start + 1);
+  final end = next < 0 ? text.length : next;
+  final block = text.substring(start, end);
+  final edited = edit(block);
+  expect(edited, isNot(block), reason: 'the edit changed nothing in $name');
+  return text.replaceRange(start, end, edited);
+}
+
+String _synthetic({
+  bool keys = true,
+  String effective = '0',
+  String max = '5',
+}) {
+  final bound = keys
+      ? '''
+    effective_min: $effective
+    effective_max: $max
+'''
+      : '';
+  return '''
+contract_version: 4
+firmware:
+  commit: "0000000000000000000000000000000000000000"
+registers:
+  - name: A
+    address: "0x00800000"
+    length: 4
+    perms: RW
+    mult: 1
+    min: 0
+    max: 10
+$bound''';
 }

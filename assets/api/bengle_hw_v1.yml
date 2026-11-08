@@ -1,10 +1,13 @@
 # =============================================================================
 # Bengle firmware <-> app hardware contract (bengle_hw_v1.yml)
 # =============================================================================
-# contract_version: 3
+# contract_version: 4
 #
 # Generated from the firmware register table at firmware commit
 # ebb12ab36a571dd248319e946e89d09d41d366b7 (rev-list count 711).
+#
+# contract_version 4: every writable row adds its effective write bound
+# (effective_min / effective_max, bound_note).
 #
 # contract_version 3 (refresh to that pin): adds rows 33-35, 37, 38, 51-53
 # and 62; FrontLEDColor and RearLEDColor are RW (live, not persisted); the
@@ -39,10 +42,23 @@
 #     resolution and a written value reads back unchanged. A stored value at
 #     or below 0 reads as 0, so these rows can never read back negative.
 #     (MatSetPoint is float-backed too: mult 1, whole-degC writes.)
-#   * The firmware does NOT enforce min/max on Bengle macro-path writes
-#     the firmware write path never range-checks): bounds here are documentation and the app
-#     is the sole guard. Checker semantics: app range must be a SUBSET of the
-#     contract range (not equal) -- e.g. calFlowEst app min raw 130 vs FW 125.
+#   * Write bounds (contract_version 4). `min` / `max` are the firmware
+#     register table column. The firmware does not check that column on a
+#     write: it divides the wire value by mult and gives the result to the
+#     model setter, which clamps the value in the RAM model to the bound of
+#     the model parameter table, with no error on the wire. Flash keeps the
+#     raw written value until the next write; after a reboot the load path
+#     calls the same clamping setter, so the model is inside its bound again.
+#     A row with its own write case follows that case. A row's hook acts on
+#     the raw value before the clamp, so its effective bound comes from the
+#     hook. Each writable row gives `effective_min` / `effective_max`: the
+#     narrower of the column and the bound of the write path, in raw wire
+#     units. `null` / `null` means no scalar bound applies (a trigger, an
+#     ignored write or a set of values); `bound_note` says why, or how the
+#     two bounds differ. Consumer rule: send only values inside the
+#     effective bound, then read back to prove the stored value. Checker
+#     semantics: the app range is a SUBSET of the column range, and on a
+#     writable row with an effective range the app bounds EQUAL it.
 #   * perms are canonicalized from the the firmware register table ENTRY column:
 #     PERM_READ -> R, PERM_RT -> RT, PERM_RW -> RW, PERM_RWD -> RWD (persisted
 #     to disk), PERM_RWT -> RWT (write triggers an action). The ENTRY column is
@@ -63,13 +79,13 @@
 #     addresses is discarded).
 # =============================================================================
 
-contract_version: 3
+contract_version: 4
 firmware:
   commit: ebb12ab36a571dd248319e946e89d09d41d366b7
   build: 90
   source: the firmware register table
 generated: 2026-07-11
-updated: 2026-10-30 # contract_version 3: refresh to firmware ebb12ab3 (rows 33-35, 37, 38, 51-53, 62; LED live perms; 0xA013 Weight and Flags)
+updated: 2026-11-08 # contract_version 4: effective write bound on every writable row (same firmware pin)
 
 # -----------------------------------------------------------------------------
 # MMR register table
@@ -88,6 +104,9 @@ registers:
     value_kind: bytes
     min: null
     max: null
+    effective_min: null
+    effective_max: null
+    bound_note: "A byte window to external flash; the flash controller takes the write, so no scalar bound applies."
     unit: null
     semantics: "External-flash window (disk operations, firmware images); not a scalar register."
 
@@ -200,6 +219,8 @@ registers:
     value_kind: int32
     min: 0
     max: 50
+    effective_min: 0
+    effective_max: 50
     unit: degC
     semantics: "Fan threshold temperature."
 
@@ -212,6 +233,8 @@ registers:
     value_kind: int32
     min: 0
     max: 60
+    effective_min: 0
+    effective_max: 60
     unit: degC
     semantics: "Tank water temperature threshold."
 
@@ -224,6 +247,8 @@ registers:
     value_kind: scaledFloat
     min: 5 # the firmware register table 0.5 ml/s (post-divide)
     max: 80 # the firmware register table 8.0 ml/s
+    effective_min: 5
+    effective_max: 80
     unit: "ml/s x 10"
     semantics: "HeaterUp phase-1 flow rate."
 
@@ -236,6 +261,8 @@ registers:
     value_kind: scaledFloat
     min: 5 # the firmware register table 0.5 ml/s
     max: 80 # the firmware register table 8.0 ml/s
+    effective_min: 5
+    effective_max: 80
     unit: "ml/s x 10"
     semantics: "HeaterUp phase-2 flow rate."
 
@@ -248,6 +275,8 @@ registers:
     value_kind: scaledFloat
     min: 5 # the firmware register table 0.5 degC
     max: 1000 # the firmware register table 100.0 degC
+    effective_min: 5
+    effective_max: 1000
     unit: "degC x 10"
     semantics: "Water heater idle temperature."
 
@@ -272,6 +301,8 @@ registers:
     value_kind: scaledFloat
     min: 40 # the firmware register table 0.4 ml/s
     max: 400 # the firmware register table 4.0 ml/s
+    effective_min: 40
+    effective_max: 400
     unit: "ml/s x 100"
     semantics: "Target steam flow rate."
 
@@ -287,6 +318,8 @@ registers:
     value_kind: scaledFloat
     min: 10 # the firmware register table 0.1 s
     max: 400 # the firmware register table 4.0 s
+    effective_min: 10
+    effective_max: 400
     unit: "seconds x 100"
     semantics: "Seconds of high steam flow; 0 may overheat the heater."
 
@@ -311,6 +344,9 @@ registers:
     value_kind: int32
     min: 0
     max: 1230
+    effective_min: null
+    effective_max: null
+    bound_note: "The firmware stores only 120 or 230, and only while the voltage is not measured; it ignores every other value, so the app does not clamp this row."
     unit: volts
     semantics: "Nominal heater voltage (0, 120 or 230); +1000 when it is a set value."
 
@@ -323,6 +359,8 @@ registers:
     value_kind: scaledFloat
     min: 5 # the firmware register table 0.5 s
     max: 300 # the firmware register table 30.0 s
+    effective_min: 5
+    effective_max: 300
     unit: "seconds x 10"
     semantics: "HeaterUp phase-2 timeout."
 
@@ -335,6 +373,9 @@ registers:
     value_kind: scaledFloat
     min: 125 # the firmware register table 0.125 (post-divide). App declares min raw 130 -- narrower is legal (app range must be a subset of this range).
     max: 2000 # the firmware register table 2.0
+    effective_min: null
+    effective_max: null
+    bound_note: "The firmware ignores this write at the pin (its setter call is commented out), so the value is not stored."
     unit: "ratio x 1000"
     semantics: "Flow-estimation calibration multiplier."
 
@@ -347,6 +388,8 @@ registers:
     value_kind: scaledFloat
     min: 10 # the firmware register table 1 ml/s
     max: 80 # the firmware register table 8.0 ml/s
+    effective_min: 10
+    effective_max: 80
     unit: "ml/s x 10"
     semantics: "Flush flow rate."
 
@@ -359,6 +402,8 @@ registers:
     value_kind: scaledFloat
     min: 10 # the firmware register table 1 degC
     max: 990 # the firmware register table 99.0 degC
+    effective_min: 10
+    effective_max: 990
     unit: "degC x 10"
     semantics: "Flush temperature."
 
@@ -371,6 +416,8 @@ registers:
     value_kind: scaledFloat
     min: 10 # the firmware register table 1 s
     max: 2500 # the firmware register table 250.0 s
+    effective_min: 10
+    effective_max: 2500
     unit: "seconds x 10"
     semantics: "Flush timeout."
 
@@ -383,6 +430,8 @@ registers:
     value_kind: scaledFloat
     min: 0
     max: 80 # the firmware register table 8.0 ml/s
+    effective_min: 0
+    effective_max: 80
     unit: "ml/s x 10"
     semantics: "Hot water flow rate."
 
@@ -395,6 +444,8 @@ registers:
     value_kind: int32
     min: 0
     max: 1
+    effective_min: 0
+    effective_max: 1
     unit: enum
     semantics: "Steam purge mode."
 
@@ -407,6 +458,8 @@ registers:
     value_kind: boolean
     min: 0
     max: 1
+    effective_min: 0
+    effective_max: 1
     unit: bool
     semantics: "Allow USB charging."
 
@@ -419,6 +472,8 @@ registers:
     value_kind: int32
     min: 0
     max: 2147483647 # 0x7FFFFFFF -- top bit unavailable (parts of FW treat it as signed)
+    effective_min: 0
+    effective_max: 2147483647
     unit: bitmask
     semantics: "App-reported feature flags; bit0 = app supports the UserNotPresent substate (app writes 1 on connect)."
 
@@ -431,6 +486,9 @@ registers:
     value_kind: int32
     min: 0
     max: 2147483647 # 0x7FFFFFFF
+    effective_min: 0
+    effective_max: 2
+    bound_note: "The model stores 0 or 1; a write of 2 makes the firmware detect the kit and store 0 or 1, so 2 is the highest value with an effect."
     unit: enum
     semantics: "Refill kit presence -- TRI-STATE 0/1/2, not a boolean."
 
@@ -443,6 +501,8 @@ registers:
     value_kind: boolean
     min: 0
     max: 1
+    effective_min: 0
+    effective_max: 1
     unit: bool
     semantics: "Is the user present."
 
@@ -455,10 +515,10 @@ registers:
     mult: 100
     value_kind: scaledFloat
     min: 0
-    max: 1000000 # the firmware register table 10000.0 g (post-divide) -- the 10000 g WIRE clamp the app enforces (grams clamped 0..10000 before x100).
-    # Footnote: the firmware's internal model table
-    # gives EOSW a model range of 0..3000 g -- targets above 3000 g are
-    # wire-legal but outside the firmware's model range.
+    max: 1000000 # the firmware register table 10000.0 g (post-divide); the app clamps to effective_max (3000 g).
+    effective_min: 0
+    effective_max: 300000
+    bound_note: "The model maximum is 3000 g (300000 raw), below the column's 10000 g; a larger write is clamped to 3000 g with no error on the wire."
     unit: "g x 100"
     semantics: "Stop-at-weight target: firmware ends the shot autonomously at this weight; 0 = disabled. App writes round(grams x 100) -- rounding, not truncation. Reads return round(g x 100), so read-back keeps 0.01 g."
 
@@ -483,6 +543,9 @@ registers:
     value_kind: int32
     min: 0
     max: 4294967295 # 0xFFFFFFFF
+    effective_min: null
+    effective_max: null
+    bound_note: "A trigger: the firmware ignores the written value."
     unit: trigger
     semantics: "Zero the load cells (empty platform). The written value is ignored. The app uses ScaleCalCmd instead."
 
@@ -495,6 +558,9 @@ registers:
     value_kind: int32
     min: 0
     max: 4294967295 # 0xFFFFFFFF
+    effective_min: null
+    effective_max: null
+    bound_note: "Retired: the write only prints a pointer to ScaleCalCmd=2 and the firmware ignores the value."
     unit: trigger
     semantics: "Retired (superseded by ScaleCalCmd); inert. Never write it."
 
@@ -506,7 +572,10 @@ registers:
     mult: 1 # WHOLE degrees C -- not deci-degC, not float32 
     value_kind: scaledFloat
     min: 0
-    max: 4294967295 # the firmware register table column is unbounded (0..0xFFFFFFFF); firmware never clamps -- the app is the sole guard, clamping 0..80 degC.
+    max: 4294967295 # the firmware register table column is unbounded (0..0xFFFFFFFF); the model setter clamps to 0..80 degC (effective_max).
+    effective_min: 0
+    effective_max: 80
+    bound_note: "The model bound is 0..80 degC; the column is unbounded, and a larger write is clamped to 80 degC with no error on the wire."
     unit: degC
     semantics: "Cup-warmer target in whole degC; 0 = off. Inert unless CupWarmerMode=1; app re-sends both on every connect."
 
@@ -519,6 +588,9 @@ registers:
     value_kind: int32
     min: 0
     max: 4294967295 # 0xFFFFFFFF
+    effective_min: null
+    effective_max: null
+    bound_note: "Retired: the write only prints a pointer to ScaleCalCmd=2 and the firmware ignores the value."
     unit: trigger
     semantics: "Retired (superseded by ScaleCalCmd); inert. Never write it."
 
@@ -543,6 +615,9 @@ registers:
     value_kind: int32
     min: 0
     max: 5
+    effective_min: 0
+    effective_max: 3
+    bound_note: "Commands 0 to 3 act; 4 and 5 are retired and set the Error step, and a higher value is an unknown command."
     unit: enum
     semantics: "Start a non-blocking cal step: 0=abort 1=precision zero 2=isolated-cell gain latch (platform off, the ScaleCalWeight mass on one cell; the firmware detects which cell; run once per cell, the second latch solves) 3=quick tare. 4 and 5 are retired: each sets Step=Error, Phase=error and CalStatus=BadWeight. Other values are ignored. Non-zero cmd while busy OR during Espresso is ignored (a cal step would move the mass reference the running shot's stop-at-weight gate depends on; the step stays Idle)."
 
@@ -567,6 +642,9 @@ registers:
     value_kind: scaledFloat
     min: 0
     max: 100000 # the firmware register table 10000 g (post-divide)
+    effective_min: 10
+    effective_max: 100000
+    bound_note: "The model minimum is 1 g (10 raw), above the column's 0; a write of 0 is clamped to 1 g with no error on the wire."
     unit: "g x 10"
     semantics: "Known reference calibration mass in grams; write and read-back-confirm (within 0.1 g) before ScaleCalCmd 2. Reads return round(g x 10), so a mass with one decimal reads back unchanged."
 
@@ -579,6 +657,9 @@ registers:
     value_kind: int32
     min: null # trigger -- value ignored, never clamped
     max: null
+    effective_min: null
+    effective_max: null
+    bound_note: "A trigger: the firmware ignores the written value."
     unit: trigger
     semantics: "Quick tare: writing any value performs an immediate tare; app writes 1 (de1plus parity). Confirm by watching Weight drop, not by the 0xA013 Flags bit."
 
@@ -595,6 +676,8 @@ registers:
     value_kind: int32
     min: 0
     max: 16777215 # 0x00FFFFFF
+    effective_min: 0
+    effective_max: 16777215
     unit: rgb24
     semantics: "Live/preview front strip colour 0x00RRGGBB: shows immediately regardless of awake/sleep without touching the stored palette; FW refreshes it when a stored palette is applied."
 
@@ -607,6 +690,8 @@ registers:
     value_kind: int32
     min: 0
     max: 16777215 # 0x00FFFFFF
+    effective_min: 0
+    effective_max: 16777215
     unit: rgb24
     semantics: "Live/preview rear strip colour 0x00RRGGBB (as FrontLEDColor)."
 
@@ -619,6 +704,8 @@ registers:
     value_kind: int32
     min: 0
     max: 16777215 # 0x00FFFFFF
+    effective_min: 0
+    effective_max: 16777215
     unit: rgb24
     semantics: "Stored front awake palette 0x00RRGGBB; FW applies on wake and immediately when written while awake."
 
@@ -631,6 +718,8 @@ registers:
     value_kind: int32
     min: 0
     max: 16777215 # 0x00FFFFFF
+    effective_min: 0
+    effective_max: 16777215
     unit: rgb24
     semantics: "Stored rear awake palette 0x00RRGGBB."
 
@@ -643,6 +732,8 @@ registers:
     value_kind: int32
     min: 0
     max: 16777215 # 0x00FFFFFF
+    effective_min: 0
+    effective_max: 16777215
     unit: rgb24
     semantics: "Stored front sleep palette 0x00RRGGBB; FW applies on sleep."
 
@@ -655,6 +746,8 @@ registers:
     value_kind: int32
     min: 0
     max: 16777215 # 0x00FFFFFF
+    effective_min: 0
+    effective_max: 16777215
     unit: rgb24
     semantics: "Stored rear sleep palette 0x00RRGGBB."
 
@@ -668,6 +761,8 @@ registers:
     value_kind: scaledFloat
     min: 0
     max: 850 # ALREADY RAW (= 85.0 degC): the firmware register table lists 850 in violation of its own post-divide convention (desc says "Range 0-85").
+    effective_min: 0
+    effective_max: 850
     unit: "degC x 10"
     semantics: "Milk-probe steam auto-stop target; 0 = disabled. App clamps 0..85 degC before scaling; live probe reading rides 0xA013 MilkTemp, not an MMR. Reads return round(degC x 10), so read-back keeps 0.1 degC."
     app_alias: StopAtTemperatureTarget # app desc string differs from the FW name (BengleSteamMmr.stopAtTemperatureTarget)
@@ -682,6 +777,8 @@ registers:
     value_kind: boolean
     min: 0
     max: 1
+    effective_min: 0
+    effective_max: 1
     unit: bool
     semantics: "Cup-warmer enable 0=Off 1=On; RAM-only by design. App writes 1 iff target > 0 and re-asserts (with MatSetPoint) on reconnect."
 
@@ -694,6 +791,8 @@ registers:
     value_kind: scaledFloat
     min: 0
     max: 70 # the firmware register table 7.0 A (post-divide)
+    effective_min: 0
+    effective_max: 70
     unit: "A x 10"
     semantics: "24 V supply current budget; firmware default 6.0 A (60 raw), PSU cap about 6.67 A. Reads return round(A x 10), so read-back keeps 0.1 A."
 
@@ -730,6 +829,8 @@ registers:
     value_kind: int32
     min: 0
     max: 240
+    effective_min: 0
+    effective_max: 240
     unit: minutes
     semantics: "Minutes of inactivity before autonomous sleep when no tablet is connected; 0 = disabled, default 60. While a tablet is connected the tablet owns sleep."
 
@@ -742,6 +843,9 @@ registers:
     value_kind: int32
     min: 0
     max: 604800
+    effective_min: 0
+    effective_max: 604799
+    bound_note: "The clock setter ignores 604800 (one full week), so the highest value it takes is 604799."
     unit: seconds
     semantics: "Local time as seconds since Sunday 00:00:00; sets the firmware wall-clock. RAM-only, re-push on connect."
 
@@ -754,6 +858,9 @@ registers:
     value_kind: int32
     min: 0
     max: 2147483647 # 0x7FFFFFFF
+    effective_min: 0
+    effective_max: 2147483647
+    bound_note: "Inside this range the firmware drops an entry whose day is above 6, whose start is not before its end, or whose end is above 1440. The firmware converts the packed value to float before the divide, so for dow 4 to 6 an odd value rounds to even and an odd end minute arrives one minute off; an entry whose start is then not before its end is dropped. For dow 4 to 6, send an even end minute."
     unit: packed
     semantics: "One wake window, packed (dow<<22)|(startMin<<11)|endMin; appended to the schedule table."
 
@@ -766,6 +873,9 @@ registers:
     value_kind: int32
     min: 0
     max: 255
+    effective_min: 0
+    effective_max: 255
+    bound_note: "The hook gets the raw value: 0 clears and disables, any other value sets enable to (value & 1), so 2 disables without a clear. Only 0 and 1 are defined; the app writes only those."
     unit: enum
     semantics: "Schedule control: 0 = clear table + disable, 1 = enable. Write 0, then entries, then 1."
 
@@ -806,6 +916,8 @@ registers:
     value_kind: boolean
     min: 0
     max: 1
+    effective_min: 0
+    effective_max: 1
     unit: bool
     since: 2
     requires_firmware: "newer firmware (contract_version 2); absent on the v1 baseline -- reads fail and the app degrades to null"
@@ -820,10 +932,12 @@ registers:
     value_kind: int32
     min: 0
     max: 120
+    effective_min: 0
+    effective_max: 120
     unit: minutes
     since: 2
     requires_firmware: "newer firmware (contract_version 2); absent on the v1 baseline -- reads fail and the app degrades to null"
-    semantics: "Minutes before a scheduled wake window to start the cup warmer; 0 = no lead, firmware default 30. The firmware clamps to 0-120, but a firmware-REJECTED write is a silent no-op, so the app clamps first. App surface: cupWarmer.prewarmLeadMinutes (GET/PUT)."
+    semantics: "Minutes before a scheduled wake window to start the cup warmer; 0 = no lead, firmware default 30. The firmware clamps to 0-120 with no error on the wire; the app clamps to the same bound first. App surface: cupWarmer.prewarmLeadMinutes (GET/PUT)."
 
   - name: MatPreheatActive
     fw_row: 61
