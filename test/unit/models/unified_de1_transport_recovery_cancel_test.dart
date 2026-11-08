@@ -96,12 +96,14 @@ void main() {
 
           final disconnect = rig.de1.disconnect();
           await settle();
+          final gattCalls = rig.transport.gattCalls;
           gate.complete();
           await disconnect;
           await write;
           await settle();
 
           rig.expectCancelled();
+          expect(rig.transport.gattCalls, gattCalls);
           expect(rig.states.last, ConnectionState.disconnected);
         });
 
@@ -112,12 +114,14 @@ void main() {
 
           final dispose = rig.de1.dispose();
           await settle();
+          final gattCalls = rig.transport.gattCalls;
           gate.complete();
           await dispose;
           await write;
           await settle();
 
           rig.expectCancelled();
+          expect(rig.transport.gattCalls, gattCalls);
         });
 
         test('app reconnect after a cancel keeps the new link', () async {
@@ -147,8 +151,9 @@ void main() {
         test(
           'app disconnect during a restore leaves no restore request behind',
           () async {
-            final gate = rig.transport.bengleShotSampleSubscribeGate =
-                Completer<void>();
+            final gate =
+                rig.transport.subscribeGates[Endpoint.bengleShotSample.uuid] =
+                    Completer<void>();
             final write = rig.timeoutWrite();
             await settle();
 

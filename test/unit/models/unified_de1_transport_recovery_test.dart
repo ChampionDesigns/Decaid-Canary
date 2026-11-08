@@ -160,4 +160,58 @@ void main() {
       expect(link.linked, isTrue);
     });
   }
+
+  for (final path in BleLinkPath.values) {
+    test('a cancelled recovery does not hold or taint the app\'s new link '
+        '(${path.name})', () async {
+      final link = GatedBleLink()..timeoutsLeft = 1;
+      addTearDown(link.dispose);
+      final unified = UnifiedDe1Transport(transport: overBleLink(path, link));
+      int shotSampleSubscribes() =>
+          link.subscribeCounts[Endpoint.bengleShotSample.uuid] ?? 0;
+      Future<void> timeoutWrite() {
+        link.timeoutsLeft = 1;
+        return unified.write(
+          Endpoint.requestedState,
+          Uint8List.fromList([0x02]),
+        );
+      }
+
+      await unified.connect();
+      await unified.subscribeBengleShotSample();
+      final restore = link.subscribeGates[Endpoint.bengleShotSample.uuid] =
+          Completer<void>();
+      Object? firstError;
+      final first = timeoutWrite().then<void>(
+        (_) {},
+        onError: (Object e) => firstError = e,
+      );
+      await settle();
+      expect(shotSampleSubscribes(), 2);
+
+      await unified.disconnect();
+      await unified.connect();
+      var secondDone = false;
+      final second = timeoutWrite().then((_) => secondDone = true);
+      await settle();
+      expect(secondDone, isTrue);
+
+      restore.complete();
+      await first;
+      await second;
+      await settle();
+      expect(firstError, isA<BleTimeoutException>());
+
+      await timeoutWrite();
+      await settle();
+
+      expect(shotSampleSubscribes(), 2);
+      expect(
+        link.subscribers.containsKey(Endpoint.bengleShotSample.uuid),
+        isFalse,
+      );
+      expect(requestedStateWrites(link), 2);
+      expect(link.linked, isTrue);
+    });
+  }
 }

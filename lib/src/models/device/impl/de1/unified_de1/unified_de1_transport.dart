@@ -248,6 +248,7 @@ class UnifiedDe1Transport {
   }
 
   Future<void> subscribeBengleShotSample() async {
+    final generation = _linkGeneration;
     switch (transportType) {
       case TransportType.ble:
         if (_transport is! BLETransport) {
@@ -267,7 +268,7 @@ class UnifiedDe1Transport {
         await _transport.writeCommand(
           '<+${Endpoint.bengleShotSample.representation}>',
         );
-        _bengleShotSampleEnabled = true;
+        if (generation == _linkGeneration) _bengleShotSampleEnabled = true;
         await _transport.writeCommand(
           '<-${Endpoint.shotSample.representation}>',
         );
@@ -276,7 +277,7 @@ class UnifiedDe1Transport {
       case TransportType.wifi:
         throw StateError('Unsupported transport type: $transportType');
     }
-    _bengleShotSampleEnabled = true;
+    if (generation == _linkGeneration) _bengleShotSampleEnabled = true;
   }
 
   Future<void> _serialConnect() async {
@@ -988,8 +989,6 @@ class UnifiedDe1Transport {
           generation != _linkGeneration) {
         _log.info('BLE recovery cancelled by an explicit disconnect');
         if (appConnects != _appConnects) return false;
-        _bengleShotSampleEnabled = false;
-        _estimatorEnabled = false;
       } else {
         _log.severe('BLE reconnect failed, disconnecting', reconnectError);
       }

@@ -16,8 +16,9 @@ class GatedBleLink extends FakeBleTransport {
   int confirmedDisconnectCalls = 0;
   Completer<void>? teardownGate;
   Completer<void>? connectGate;
-  Completer<void>? bengleShotSampleSubscribeGate;
+  final subscribeGates = <String, Completer<void>>{};
   final subscribeCounts = <String, int>{};
+  int gattCalls = 0;
   Future<void> _lifecycle = Future.value();
 
   Future<void> _serial(Future<void> Function() step) {
@@ -67,13 +68,26 @@ class GatedBleLink extends FakeBleTransport {
     String characteristicUUID,
     void Function(Uint8List) callback,
   ) async {
+    gattCalls++;
     subscribeCounts.update(characteristicUUID, (n) => n + 1, ifAbsent: () => 1);
     await super.subscribe(serviceUUID, characteristicUUID, callback);
-    if (characteristicUUID == Endpoint.bengleShotSample.uuid) {
-      final gate = bengleShotSampleSubscribeGate;
-      bengleShotSampleSubscribeGate = null;
-      await gate?.future;
-    }
+    await subscribeGates.remove(characteristicUUID)?.future;
+  }
+
+  @override
+  Future<List<String>> discoverServices() {
+    gattCalls++;
+    return super.discoverServices();
+  }
+
+  @override
+  Future<Uint8List> read(
+    String serviceUUID,
+    String characteristicUUID, {
+    Duration? timeout,
+  }) {
+    gattCalls++;
+    return super.read(serviceUUID, characteristicUUID, timeout: timeout);
   }
 
   @override
