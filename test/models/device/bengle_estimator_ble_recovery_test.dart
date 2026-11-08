@@ -73,6 +73,19 @@ Future<void> _timeoutWrite(UnifiedDe1Transport de1) async {
   await Future<void>.delayed(Duration.zero);
 }
 
+class _GatedDiscoveryLink extends GatedBleLink {
+  Completer<void>? staleDiscoveryGate;
+
+  @override
+  Future<List<String>> discoverCharacteristics(String serviceUUID) async {
+    final gate = staleDiscoveryGate;
+    if (gate == null) return super.discoverCharacteristics(serviceUUID);
+    staleDiscoveryGate = null;
+    await gate.future;
+    return const [];
+  }
+}
+
 enum _Link { raw, admission }
 
 DataTransport _over(_Link link, _DroppingTimeoutTransport t) => switch (link) {
@@ -95,7 +108,46 @@ void main() {
   }
   for (final path in BleLinkPath.values) {
     _cancelGroup(path);
+    _staleDiscoveryRow(path);
   }
+}
+
+void _staleDiscoveryRow(BleLinkPath path) {
+  test('a stale estimator restore keeps the app\'s new request '
+      '(${path.name})', () async {
+    final link = _GatedDiscoveryLink()
+      ..presentCharacteristics = [Endpoint.estimator.uuid];
+    addTearDown(link.dispose);
+    final de1 = UnifiedDe1Transport(transport: overBleLink(path, link));
+    int estimatorSubscribes() =>
+        link.subscribeCounts[Endpoint.estimator.uuid] ?? 0;
+    Future<void> timeoutWrite() {
+      link.timeoutsLeft = 1;
+      return de1
+          .write(Endpoint.requestedState, Uint8List.fromList([0x02]))
+          .then<void>((_) {}, onError: (Object _) {});
+    }
+
+    await de1.connect();
+    expect(await de1.subscribeEstimator(), isTrue);
+    final stale = link.staleDiscoveryGate = Completer<void>();
+    final first = timeoutWrite();
+    await settle();
+
+    await de1.disconnect();
+    await de1.connect();
+    expect(await de1.subscribeEstimator(), isTrue);
+    stale.complete();
+    await first;
+    await settle();
+    final before = estimatorSubscribes();
+
+    await timeoutWrite();
+    await settle();
+
+    expect(estimatorSubscribes(), before + 1);
+    expect(link.subscribers.containsKey(Endpoint.estimator.uuid), isTrue);
+  });
 }
 
 void _cancelGroup(BleLinkPath path) {

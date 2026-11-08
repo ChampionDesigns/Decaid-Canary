@@ -228,7 +228,7 @@ class UnifiedDe1Transport {
     final present = await t.discoverCharacteristics(de1ServiceUUID);
     final wanted = BleServiceIdentifier.parse(Endpoint.estimator.uuid);
     if (!wanted.matchesAny(present)) {
-      _estimatorEnabled = false;
+      if (generation == _linkGeneration) _estimatorEnabled = false;
       _log.info(
         'BengleEstSample characteristic not present on this machine; '
         'skipping the estimator subscribe (firmware predates it, or the '
