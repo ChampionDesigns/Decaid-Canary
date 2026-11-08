@@ -72,8 +72,6 @@ class WorkflowDeviceSync {
     }
     _desiredProfile = next;
     _attempt = 0;
-    // A genuine profile change clears any parked capability refusal so the new
-    // profile gets a fresh attempt.
     _refusedProfile = null;
     _cancelRetry();
     unawaited(_drain());
@@ -84,8 +82,6 @@ class WorkflowDeviceSync {
     _lastPushedProfile = null;
     _desiredProfile = _workflow.currentWorkflow.profile;
     _attempt = 0;
-    // A reconnect may be to firmware that now advertises the capability, so
-    // clear any parked refusal and let the push re-drive.
     _refusedProfile = null;
     _cancelRetry();
     unawaited(_drain());
@@ -102,9 +98,6 @@ class WorkflowDeviceSync {
           _desiredProfile = null;
           return;
         }
-        // Parked on a permanent capability refusal. Do not re-attempt — only a
-        // workflow-profile change or a reconnect (both clear _refusedProfile
-        // and re-drive) can resolve it.
         if (profile == _refusedProfile) {
           return;
         }
@@ -119,12 +112,6 @@ class WorkflowDeviceSync {
           }
         } on ProfileModeUnsupportedException catch (e) {
           if (generation != _generation) return;
-          // The machine's firmware cannot run the pump step types / transitions
-          // in this profile. The refusal is permanent for the connection (the
-          // gate throws before any BLE write, so nothing is wedged), so PARK —
-          // no retry timer — and remember the profile so a spurious re-drive
-          // doesn't re-attempt it. A workflow-profile change or a reconnect
-          // clears _refusedProfile and re-drives.
           _refusedProfile = profile;
           _lastPushedProfile = null;
           _log.warning(

@@ -440,12 +440,6 @@ class UnifiedDe1 implements De1Interface {
     _refillKitDetected = _unpackMMRInt(
       await _mmrRead(MMRItem.refillKitPresent),
     );
-    // Per-frame Power/Lever/HOLD/power-exit capability bitmask. Only firmware
-    // that implements the new pump modes defines this register; stock firmware
-    // and every DE1 do not. ANY failure — timeout, short buffer, or a stray word
-    // with bits outside 0xF — must yield 0, so the read can never hang or fail
-    // the connect flow and the arm-time refusal gate then fail-closes on any
-    // new-mode step.
     final profileModeCaps = await _readProfileModeCaps();
     try {
       _cachedFlowEstimation = await getFlowEstimation();
@@ -461,8 +455,6 @@ class UnifiedDe1 implements De1Interface {
       extra: {
         'refillKit': (_refillKitDetected & 0x01) != 0,
         'voltage': _voltage,
-        // Surfaced through /api/v1/machine/info and read by the
-        // profile-upload refusal gate.
         'profileModeCaps': profileModeCaps,
       },
     );
@@ -665,22 +657,14 @@ class UnifiedDe1 implements De1Interface {
   void _assertProfileModeSupported(Profile profile) {
     final hasPower = profile.steps.any((s) => s is ProfileStepPower);
     final hasLever = profile.steps.any((s) => s is ProfileStepLever);
-    // A HOLD step is any pressure/flow/power step with `transition:hold`. A
-    // LEVER step never takes HOLD (the editor forces JUMP on lever, and the
-    // encoder writes it as a plain lever), so it is covered by [hasLever].
     final hasHold = profile.steps.any(
       (s) => s.transition == TransitionType.hold && s is! ProfileStepLever,
     );
-    // A power exit is orthogonal to the step type: any step may carry one.
     final hasPowerExit = profile.steps.any(
       (s) => s.exit?.type == ExitType.power,
     );
     if (!hasPower && !hasLever && !hasHold && !hasPowerExit) return;
 
-    // HOLD on the FIRST step is invalid on EVERY machine — there is no previous
-    // step whose achieved value could be latched. Refuse it up front (before
-    // the caps/Bengle checks); the editor also disables HOLD on step 1, and the
-    // firmware falls back to the benign base frame as a last resort.
     if (hasHold &&
         profile.steps.isNotEmpty &&
         profile.steps.first.transition == TransitionType.hold &&
@@ -693,14 +677,9 @@ class UnifiedDe1 implements De1Interface {
       );
     }
 
-    // "Power", "Power and Lever", "Power, Lever and HOLD".
     String andJoin(List<String> xs) => xs.length <= 1
         ? xs.join()
         : '${xs.sublist(0, xs.length - 1).join(', ')} and ${xs.last}';
-    // Describe each refused capability with the RIGHT noun: Power and Lever are
-    // pump MODES, HOLD is a TRANSITION, a power exit is an EXIT CONDITION (never
-    // a "pump mode"). e.g. "Power and Lever pump modes and the HOLD transition
-    // and the power exit condition".
     String describe(List<String> pumpModes, bool hold, bool powerExit) {
       final parts = <String>[
         if (pumpModes.isNotEmpty)
@@ -711,12 +690,6 @@ class UnifiedDe1 implements De1Interface {
       return parts.join(' and the ');
     }
 
-    // Refuse a non-Bengle BEFORE any BLE write — these modes are protocol-v2 by
-    // definition. This also closes a garbage-caps hole: a stock DE1 whose
-    // out-of-range MMR read of the register happened to answer with a mask that
-    // passes the check below would otherwise reach the encoder's ext-loop guard
-    // only AFTER header + base frames were on the wire, stranding a half-written
-    // profile. The ext-loop isBengle guard stays as belt-and-suspenders.
     if (!isBengle) {
       final desc = describe(
         [if (hasPower) 'Power', if (hasLever) 'Lever'],
@@ -751,7 +724,6 @@ class UnifiedDe1 implements De1Interface {
   }
 
   Future<void> _uploadProfileLocked(Profile profile) async {
-    // Fail-closed before any BLE write.
     _assertProfileModeSupported(profile);
     if (_currentProfile == profile) {
       return;

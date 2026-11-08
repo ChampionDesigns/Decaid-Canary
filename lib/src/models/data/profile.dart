@@ -152,31 +152,10 @@ BeverageType _parseBeverageType(dynamic value) {
   return BeverageType.espresso;
 }
 
-// A HOLD step carries no user-selected target — at frame entry the firmware
-// latches the value the machine actually ACHIEVED at the exit of the previous
-// step (for the step's OWN control variable) and holds it flat for the frame.
-// HOLD is encoded as a NEW enum value (not an additive boolean key)
-// deliberately: an old client's `TransitionType.values.byName('hold')` THROWS
-// an ArgumentError -> a VISIBLE 400 at the REST boundary, whereas an unknown
-// additive key would be silently DROPPED on the toJson round-trip and
-// re-uploaded as a plain JUMP (forbidden — a silent target jump). A client that
-// knows `hold` round-trips it losslessly on ANY machine (a stock DE1 included)
-// via `.name`/`byName`; only execution/arming and the editor UI are gated by
-// the machine's advertised capability. The target field is ignored at
-// execution and stored as 0 so the base-frame fallback encodes to a benign
-// vent.
 enum TransitionType { fast, smooth, hold }
 
 enum TemperatureSensor { coffee, water }
 
-// `power` (hydraulic watts, W = 0.1 * pressure * flow) is a NEW enum value, not
-// an additive boolean/key, for the same skew reason as TransitionType.hold: an
-// old client's `ExitType.values.byName('power')` THROWS an ArgumentError -> a
-// VISIBLE 400 at the REST boundary, whereas a dropped additive key would round-
-// trip to a silent pressure/flow exit (a wrong early exit — forbidden). A client
-// that knows `power` round-trips it losslessly on ANY machine (a stock DE1
-// included) via `.name`/`byName`; only encoding/arming is gated by the machine's
-// advertised power-exit capability.
 enum ExitType { pressure, flow, power }
 
 enum ExitCondition { over, under }
@@ -232,9 +211,6 @@ abstract class ProfileStep extends Equatable {
       return ProfileStepPressure.fromJson(json);
     } else if (json.containsKey('pump') && json['pump'] == 'flow') {
       return ProfileStepFlow.fromJson(json);
-      // Additive per-frame pump modes. Bengle-only at execution time (gated by
-      // the capability read + arm-time refusal), but parsed and round-tripped
-      // everywhere so stored profiles stay machine-independent.
     } else if (json.containsKey('pump') && json['pump'] == 'power') {
       return ProfileStepPower.fromJson(json);
     } else if (json.containsKey('pump') && json['pump'] == 'lever') {
@@ -452,8 +428,6 @@ class ProfileStepPower extends ProfileStep {
   double getTarget() => power;
 
   factory ProfileStepPower.fromJson(Map<String, dynamic> json) {
-    // The pressure limiter is the shaper's mandatory over-pressure cap: a
-    // power step is meaningless (and unsafe to send) without it.
     final limiterJson = json['limiter'];
     final limiter = limiterJson != null
         ? StepLimiter.fromJson(limiterJson)
