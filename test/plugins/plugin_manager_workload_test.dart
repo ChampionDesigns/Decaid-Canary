@@ -102,7 +102,6 @@ void main() {
           'round',
           reason: 'workload result in round $round',
         );
-        await Future<void>.delayed(const Duration(milliseconds: 50));
 
         expect(manager.activeTimerCount, 0, reason: 'timers in round $round');
         expect(
