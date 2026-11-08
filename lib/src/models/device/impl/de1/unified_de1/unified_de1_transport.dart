@@ -1005,11 +1005,14 @@ class UnifiedDe1Transport {
         _log.severe('BLE reconnect failed, disconnecting', reconnectError);
       }
       if (generation == _linkGeneration) _recovering = false;
-      try {
-        await _transport.disconnect();
-      } catch (e, st) {
-        _log.fine('transport.disconnect() during BLE recovery failed', e, st);
-      }
+      unawaited(
+        Future.sync(_transport.disconnect).catchError((
+          Object e,
+          StackTrace st,
+        ) {
+          _log.fine('transport.disconnect() during BLE recovery failed', e, st);
+        }),
+      );
       return false;
     } finally {
       if (generation == _linkGeneration) _recovering = false;

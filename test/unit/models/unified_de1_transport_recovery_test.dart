@@ -214,4 +214,33 @@ void main() {
       expect(link.linked, isTrue);
     });
   }
+
+  for (final path in BleLinkPath.values) {
+    test('a failed recovery does not wait for a stuck teardown '
+        '(${path.name})', () async {
+      final link = GatedBleLink()..timeoutsLeft = 1;
+      final stuck = Completer<void>();
+      addTearDown(() async {
+        if (!stuck.isCompleted) stuck.complete();
+        await link.dispose();
+      });
+      final unified = UnifiedDe1Transport(transport: overBleLink(path, link));
+      await unified.connect();
+      final connecting = link.connectGate = Completer<void>();
+      link.connectError = StateError('reconnect failed');
+
+      final write = unified.write(
+        Endpoint.requestedState,
+        Uint8List.fromList([0x02]),
+      );
+      await settle();
+      link.teardownGate = stuck;
+      connecting.complete();
+
+      await expectLater(
+        write.timeout(const Duration(seconds: 2)),
+        throwsA(isA<BleTimeoutException>()),
+      );
+    });
+  }
 }
