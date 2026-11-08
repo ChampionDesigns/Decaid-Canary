@@ -59,13 +59,16 @@ void main() {
       );
       addTearDown(manager.dispose);
 
-      final done = Completer<void>();
+      var finished = Completer<Object?>();
       final sub = manager.emitStream.listen((e) {
         final event = e['event'] as String;
-        if (event == 'finished' && !done.isCompleted) done.complete();
+        if (event == 'finished' && !finished.isCompleted) {
+          finished.complete(e['payload']);
+        }
       });
 
       for (var round = 0; round < 10; round++) {
+        finished = Completer<Object?>();
         await manager.loadPlugin(
           id: pluginId,
           manifest: manifest(),
@@ -94,8 +97,11 @@ void main() {
             }
           ''',
         );
-        await done.future.timeout(const Duration(seconds: 10));
-        if (!done.isCompleted) done.complete();
+        expect(
+          await finished.future.timeout(const Duration(seconds: 10)),
+          'round',
+          reason: 'workload result in round $round',
+        );
         await Future<void>.delayed(const Duration(milliseconds: 50));
 
         expect(manager.activeTimerCount, 0, reason: 'timers in round $round');
