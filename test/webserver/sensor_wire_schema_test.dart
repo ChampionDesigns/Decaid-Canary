@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/controllers/device_controller.dart';
 import 'package:reaprime/src/controllers/sensor_controller.dart';
 import 'package:reaprime/src/models/device/device.dart';
+import 'package:reaprime/src/models/device/device_implementation.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle_puck_estimator.dart';
 import 'package:reaprime/src/models/device/impl/bengle/mock_bengle.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart';
@@ -30,6 +31,47 @@ YamlMap _schemas(String path) =>
     ((loadYaml(File(path).readAsStringSync()) as YamlMap)['components']
             as YamlMap)['schemas']
         as YamlMap;
+
+class _StubSensor implements Sensor {
+  _StubSensor(this.deviceId, this.info);
+
+  @override
+  final String deviceId;
+
+  @override
+  final SensorInfo info;
+
+  @override
+  String get name => info.name;
+
+  @override
+  DeviceType get type => DeviceType.sensor;
+
+  @override
+  DeviceImplementation get implementation => DeviceImplementation.sensorBasket;
+
+  @override
+  TransportType get transportType => TransportType.unknown;
+
+  @override
+  Stream<ConnectionState> get connectionState =>
+      Stream.value(ConnectionState.connected);
+
+  @override
+  Stream<Map<String, dynamic>> get data => const Stream.empty();
+
+  @override
+  Future<Map<String, dynamic>> execute(
+    String commandId,
+    Map<String, dynamic>? parameters,
+  ) async => const {};
+
+  @override
+  Future<void> onConnect() async {}
+
+  @override
+  Future<void> disconnect() async {}
+}
 
 class _FakeR2Transport extends BLETransport {
   final BehaviorSubject<ConnectionState> _states = BehaviorSubject.seeded(
@@ -371,5 +413,75 @@ void main() {
         expect(schema['additionalProperties'], isNot(false));
       });
     }
+  });
+
+  group('SensorManifest matches GET /api/v1/sensors/{id}', () {
+    test('documents exactly the keys of the served manifest', () async {
+      final bengle = MockBengle(deviceId: 'DE1-1234');
+      final (r2, _) = await difluid();
+      final schemas = _schemas(_rest);
+      final schema = schemas['SensorManifest'] as YamlMap;
+      final bare = _StubSensor(
+        'stub-no-commands',
+        SensorInfo(
+          name: 'Bare',
+          vendor: 'test',
+          dataChannels: [DataChannel(key: 'v', type: 'number')],
+          commands: null,
+        ),
+      );
+      final unschemed = _StubSensor(
+        'stub-unschemed-command',
+        SensorInfo(
+          name: 'Unschemed',
+          vendor: 'test',
+          dataChannels: [DataChannel(key: 'v', type: 'number')],
+          commands: [
+            CommandDescriptor(
+              id: 'tare',
+              name: null,
+              description: null,
+              paramsSchema: null,
+              resultsSchema: null,
+            ),
+          ],
+        ),
+      );
+      await sensorController.register(bare);
+      await sensorController.register(unschemed);
+      for (final sensor in [await puckEstimator(bengle), r2, bare, unschemed]) {
+        final served =
+            await getJson(
+                  '/api/v1/sensors/${Uri.encodeComponent(sensor.deviceId)}',
+                )
+                as Map<String, dynamic>;
+        expect(served.keys.toSet(), sensor.info.toJson().keys.toSet());
+        expect(
+          (schema['properties'] as YamlMap).keys.toSet(),
+          served.keys.toSet(),
+        );
+        expect(_check(served, schema, schemas), isEmpty, reason: '$served');
+      }
+    });
+
+    test(
+      'no sensor schema text calls the served channel list dataChannels',
+      () {
+        final rest = _schemas(_rest);
+        final ws = _schemas(_ws);
+        for (final (name, schema) in [
+          ('SensorManifest', rest['SensorManifest']),
+          ('rest SensorSnapshot', rest['SensorSnapshot']),
+          ('ShotSnapshot', rest['ShotSnapshot']),
+          ('ws SensorSnapshot', ws['SensorSnapshot']),
+        ]) {
+          expect(
+            schema.toString(),
+            isNot(contains('dataChannels')),
+            reason: name,
+          );
+        }
+      },
+    );
   });
 }
