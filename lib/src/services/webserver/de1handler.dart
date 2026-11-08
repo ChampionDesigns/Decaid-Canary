@@ -953,22 +953,35 @@ class De1Handler {
   }
 
   Future<Response> _profileHandler(Request request) async {
-    return withDe1((_) async {
-      final payload = await readBoundedRequestBodyString(
-        request,
-        maxBytes: largeRequestBodyBytes,
-        timeout: largeRequestBodyTimeout,
-      );
+    final payload = await readBoundedRequestBodyString(
+      request,
+      maxBytes: largeRequestBodyBytes,
+      timeout: largeRequestBodyTimeout,
+    );
+    Profile profile;
+    try {
+      final Map<String, dynamic> json = jsonDecode(payload);
+      profile = Profile.fromJson(json);
+    } on FormatException catch (e) {
+      return jsonBadRequest({'error': 'Invalid profile', 'message': '$e'});
+    } on ArgumentError catch (e) {
+      return jsonBadRequest({'error': 'Invalid profile', 'message': '$e'});
+    } on TypeError catch (e) {
+      return jsonBadRequest({'error': 'Invalid profile', 'message': '$e'});
+    }
 
-      Map<String, dynamic> json;
+    return withDe1((_) async {
       try {
-        json = jsonDecode(payload);
-      } catch (e) {
-        return jsonBadRequest({'error': 'Invalid JSON body'});
+        await _controller.runDeviceWrite(
+          (device) => device.setProfile(profile),
+        );
+        return jsonOk(null);
+      } on ProfileModeUnsupportedException catch (e) {
+        return jsonBadRequest({
+          'error': 'Unsupported profile',
+          'message': e.message,
+        });
       }
-      Profile profile = Profile.fromJson(json);
-      await _controller.runDeviceWrite((device) => device.setProfile(profile));
-      return jsonOk(null);
     });
   }
 

@@ -358,7 +358,14 @@ enum MMRItem implements MmrAddress {
   allowUSBCharging(0x00803854, 4, MmrValueKind.boolean, "Allow USB charging"),
   appFeatureFlags(0x00803858, 4, MmrValueKind.int32, "App Feature Flags"),
   refillKitPresent(0x0080385C, 4, MmrValueKind.int32, "Refill Kit Present"),
-  userPresent(0x00803860, 4, MmrValueKind.boolean, "Is User Present");
+  userPresent(0x00803860, 4, MmrValueKind.boolean, "Is User Present"),
+  profileModeCaps(
+    0x008038DC,
+    4,
+    MmrValueKind.int32,
+    "ProfileModeCaps bitmask: 0x1 = per-frame Power, 0x2 = per-frame Lever, "
+    "0x4 = per-frame HOLD, 0x8 = cross-variable power exit",
+  );
 
   @override
   final int address;
