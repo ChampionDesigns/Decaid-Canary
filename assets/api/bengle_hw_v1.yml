@@ -49,7 +49,7 @@
 #     the model parameter table, with no error on the wire. On a persisted
 #     row (RWD), flash keeps the raw written value until the next write;
 #     after a reboot the load path calls the same clamping setter, so the
-#     model is inside its bound again. Other rows are held in RAM only.
+#     model is inside its bound again.
 #     A row with its own write case follows that case. A row's hook acts on
 #     the raw value before the clamp, so its effective bound comes from the
 #     hook. Each writable row gives `effective_min` / `effective_max`: the
