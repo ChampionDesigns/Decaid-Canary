@@ -160,6 +160,9 @@ enum ExitType { pressure, flow, power }
 
 enum ExitCondition { over, under }
 
+double? _parseLimiterNumber(dynamic raw) =>
+    raw is num || raw is String ? parseOptionalDouble(raw) : null;
+
 class StepLimiter extends Equatable {
   final double value;
   final double range;
@@ -167,10 +170,15 @@ class StepLimiter extends Equatable {
   const StepLimiter({required this.value, required this.range});
 
   factory StepLimiter.fromJson(Map<String, dynamic> json) {
-    return StepLimiter(
-      value: parseDouble(json["value"]),
-      range: parseDouble(json["range"]),
-    );
+    final value = _parseLimiterNumber(json['value']);
+    if (value == null) {
+      throw const FormatException('limiter "value" must be a number');
+    }
+    final range = _parseLimiterNumber(json['range']);
+    if (range == null) {
+      throw const FormatException('limiter "range" must be a number');
+    }
+    return StepLimiter(value: value, range: range);
   }
 
   Map<String, dynamic> toJson() {

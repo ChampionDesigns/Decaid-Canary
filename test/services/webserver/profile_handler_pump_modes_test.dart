@@ -67,6 +67,16 @@ void main() {
     );
   }
 
+  Future<Response> putProfile(String id, Map<String, dynamic> body) async {
+    return await handler(
+      Request(
+        'PUT',
+        Uri.parse('http://localhost/api/v1/profiles/$id'),
+        body: jsonEncode(body),
+      ),
+    );
+  }
+
   setUp(() {
     final controller = ProfileController(storage: _StubStorage());
     final profileHandler = ProfileHandler(controller: controller);
@@ -159,5 +169,88 @@ void main() {
         expect(response.statusCode, 400);
       },
     );
+  });
+
+  group('a power step limiter on POST and PUT', () {
+    const rangeRefusal = {
+      'error': 'Invalid request',
+      'message': 'FormatException: limiter "range" must be a number',
+    };
+    const valueRefusal = {
+      'error': 'Invalid request',
+      'message': 'FormatException: limiter "value" must be a number',
+    };
+
+    Map<String, dynamic> powerProfileWithLimiter(dynamic limiter) {
+      final body = powerProfile();
+      (body['steps'] as List).first['limiter'] = limiter;
+      return body;
+    }
+
+    Future<String> seedRecord() async {
+      final response = await postProfile({'profile': powerProfile()});
+      final created =
+          jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      return created['id'] as String;
+    }
+
+    Future<Map<String, dynamic>> decode(Response response) async =>
+        jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+
+    final refusedForms = <String, (Map<String, dynamic>, Map<String, String>)>{
+      '(a) {value: 6}': (const {'value': 6}, rangeRefusal),
+      '(c) {value: 6, range: null}': (
+        const {'value': 6, 'range': null},
+        rangeRefusal,
+      ),
+      '(d) {range: 1}': (const {'range': 1}, valueRefusal),
+      '(e) {value: null, range: 1}': (
+        const {'value': null, 'range': 1},
+        valueRefusal,
+      ),
+      '(f) {value: 6, range: "x"}': (
+        const {'value': 6, 'range': 'x'},
+        rangeRefusal,
+      ),
+    };
+
+    for (final MapEntry(key: form, value: (limiter, refusal))
+        in refusedForms.entries) {
+      test(
+        'form $form: POST and PUT both answer 400 with the same text',
+        () async {
+          final id = await seedRecord();
+          final body = {'profile': powerProfileWithLimiter(limiter)};
+
+          final post = await postProfile(body);
+          final put = await putProfile(id, body);
+
+          expect(post.statusCode, 400);
+          expect(put.statusCode, 400);
+          expect(await decode(post), refusal);
+          expect(await decode(put), refusal);
+        },
+      );
+    }
+
+    test('form (b) {value: 6, range: 0}: POST and PUT store range 0', () async {
+      final id = await seedRecord();
+      final body = {
+        'profile': powerProfileWithLimiter({'value': 6, 'range': 0}),
+      };
+
+      final post = await postProfile(body);
+      final put = await putProfile(id, body);
+
+      expect(post.statusCode, 201);
+      expect(put.statusCode, 200);
+      for (final response in [post, put]) {
+        final record = await decode(response);
+        final step =
+            (record['profile']['steps'] as List).single as Map<String, dynamic>;
+        expect(step['pump'], 'power');
+        expect(step['limiter'], {'value': 6.0, 'range': 0.0});
+      }
+    });
   });
 }
