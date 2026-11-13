@@ -252,5 +252,32 @@ void main() {
         expect(step['limiter'], {'value': 6.0, 'range': 0.0});
       }
     });
+
+    final nonFiniteForms = <(Map<String, dynamic>, String)>[
+      (const {'value': 'NaN', 'range': 1}, 'value'),
+      (const {'value': 'Infinity', 'range': 1}, 'value'),
+      (const {'value': 6, 'range': 'NaN'}, 'range'),
+      (const {'value': 6, 'range': '-Infinity'}, 'range'),
+    ];
+
+    for (final (limiter, field) in nonFiniteForms) {
+      test('$limiter: POST and PUT both answer 400 naming "$field"', () async {
+        final refusal = {
+          'error': 'Invalid request',
+          'message':
+              'FormatException: limiter "$field" must be a finite number',
+        };
+        final id = await seedRecord();
+        final body = {'profile': powerProfileWithLimiter(limiter)};
+
+        final post = await postProfile(body);
+        final put = await putProfile(id, body);
+
+        expect(post.statusCode, 400);
+        expect(put.statusCode, 400);
+        expect(await decode(post), refusal);
+        expect(await decode(put), refusal);
+      });
+    }
   });
 }
