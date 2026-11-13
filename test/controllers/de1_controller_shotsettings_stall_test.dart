@@ -361,7 +361,7 @@ void main() {
     addTearDown(controller.dispose);
     final defaultsSettled = controller.initSettled.firstWhere(
       (generation) => generation != null,
-    );
+    )..ignore();
 
     // A serial machine never pushes K; the transport seeds the subject
     // from its local mirror, so the controller can write defaults and
