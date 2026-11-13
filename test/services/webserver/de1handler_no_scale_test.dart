@@ -39,13 +39,18 @@ void main() {
     required bool blockOnNoScale,
     required bool scaleConnected,
     required bool cleaningProfile,
+    bool machineConnected = true,
   }) async {
     final deviceController = DeviceController([MockDeviceDiscoveryService()]);
     await deviceController.initialize();
     controller = De1Controller(controller: deviceController);
     machine = _RecordingMockDe1();
-    controller.adoptDevice(machine);
-    await controller.initSettled.firstWhere((generation) => generation != null);
+    if (machineConnected) {
+      controller.adoptDevice(machine);
+      await controller.initSettled.firstWhere(
+        (generation) => generation != null,
+      );
+    }
 
     final mockSettings = MockSettingsService();
     await mockSettings.setBlockOnNoScale(blockOnNoScale);
@@ -78,6 +83,90 @@ void main() {
   Future<Response> requestEspresso() async => await handler(
     Request('PUT', Uri.parse('http://localhost/api/v1/machine/state/espresso')),
   );
+
+  Future<Response> requestState(String name) async => await handler(
+    Request('PUT', Uri.parse('http://localhost/api/v1/machine/state/$name')),
+  );
+
+  group('PUT /api/v1/machine/state/{newState} — state name', () {
+    for (final name in ['brew', 'Espresso', 'notAState']) {
+      test(
+        'answers 400 for unknown name $name without a machine write',
+        () async {
+          await wire(
+            blockOnNoScale: false,
+            scaleConnected: true,
+            cleaningProfile: false,
+          );
+          final res = await requestState(name);
+          expect(res.statusCode, 400);
+          final body =
+              jsonDecode(await res.readAsString()) as Map<String, dynamic>;
+          expect(body.keys.toSet().difference({'type', 'details'}), isEmpty);
+          expect(body.containsKey('type'), isFalse);
+          expect(body['details'], isA<String>());
+          expect(body['details'], contains(name));
+          expect(machine.requestedStates, isEmpty);
+        },
+      );
+    }
+
+    test('answers 400 for an unknown name before the no-scale block', () async {
+      await wire(
+        blockOnNoScale: true,
+        scaleConnected: false,
+        cleaningProfile: false,
+      );
+      final res = await requestState('brew');
+      expect(res.statusCode, 400);
+      final body = jsonDecode(await res.readAsString()) as Map<String, dynamic>;
+      expect(body.containsKey('type'), isFalse);
+      expect(machine.requestedStates, isEmpty);
+    });
+
+    test('answers 400 for an unknown name with no machine connected', () async {
+      await wire(
+        blockOnNoScale: false,
+        scaleConnected: true,
+        cleaningProfile: false,
+        machineConnected: false,
+      );
+      final res = await requestState('brew');
+      expect(res.statusCode, 400);
+    });
+
+    test('answers 500 for a known name with no machine connected', () async {
+      await wire(
+        blockOnNoScale: false,
+        scaleConnected: true,
+        cleaningProfile: false,
+        machineConnected: false,
+      );
+      final res = await requestState('idle');
+      expect(res.statusCode, 500);
+      expect(machine.requestedStates, isEmpty);
+    });
+
+    for (final name in [
+      'idle',
+      'sleeping',
+      'espresso',
+      'steam',
+      'hotWater',
+      'flush',
+    ]) {
+      test('sends documented name $name to the machine', () async {
+        await wire(
+          blockOnNoScale: false,
+          scaleConnected: true,
+          cleaningProfile: false,
+        );
+        final res = await requestState(name);
+        expect(res.statusCode, 200);
+        expect(machine.requestedStates, [MachineState.values.byName(name)]);
+      });
+    }
+  });
 
   group('PUT /api/v1/machine/state/espresso — cleaning profile carve-out', () {
     test('still blocks a normal espresso profile with no scale', () async {
