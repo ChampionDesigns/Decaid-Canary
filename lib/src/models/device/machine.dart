@@ -164,9 +164,11 @@ class MachineSnapshot {
       state: MachineStateSnapshot(
         state: MachineState.values.firstWhere(
           (e) => e.name == json["state"]["state"],
+          orElse: () => MachineState.error,
         ),
         substate: MachineSubstate.values.firstWhere(
           (e) => e.name == json["state"]["substate"],
+          orElse: () => MachineSubstate.idle,
         ),
       ),
       flow: json["flow"],
