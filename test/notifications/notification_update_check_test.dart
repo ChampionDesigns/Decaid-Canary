@@ -87,9 +87,7 @@ void main() {
     Brightness brightness = Brightness.light,
   }) async {
     await tester.runAsync(() async {
-      final release = Uri.parse(
-        'https://github.com/decentespresso/decaid/releases/tag/v99.0.0',
-      );
+      final release = Uri.parse(service.getReleaseUrl(update('99.0.0'))!);
       await center.publish(
         NativeNotification(
           namespace: namespace,
