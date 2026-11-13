@@ -7,8 +7,34 @@ part of 'unified_de1.dart';
 /// is the enforcement point for this ceiling.
 const double _bengleMaxFlowMlPerSec = 20.0;
 
+const double _maxStepTemperature = 127.5;
+
+class ProfileValueUnsupportedException extends ProfileModeUnsupportedException
+    implements UnsupportedError {
+  ProfileValueUnsupportedException({
+    required this.field,
+    required this.value,
+    required String problem,
+    this.stepNumber,
+    String? stepName,
+    required String profileTitle,
+  }) : super(
+         'Profile "$profileTitle"'
+         '${stepNumber == null ? '' : ' step $stepNumber ("$stepName")'}: '
+         '$field $value $problem',
+       );
+
+  final int? stepNumber;
+  final String field;
+  final double value;
+
+  @override
+  StackTrace? get stackTrace => null;
+}
+
 extension UnifiedDe1Profile on UnifiedDe1 {
   Future<void> _sendProfile(Profile profile) async {
+    _assertProfileEncodable(profile);
     await _writeHeader(profile);
     await _writeSteps(profile);
     await _writeTail(profile);
@@ -21,14 +47,12 @@ extension UnifiedDe1Profile on UnifiedDe1 {
   /// A Bengle decodes these as **U8D1** (`byte × 0.1`, range 0..25.5); a DE1
   /// uses **U8P4** (`byte / 16`, range 0..15.9375). Encoding a v2 value with
   /// the v1 scale silently mis-commands the machine (`6 ml/s` written as the
-  /// v1 `96` reads back as `9.6` on a Bengle). Only the Bengle U8D1 path clamps
-  /// (to 0..25.5); the DE1 U8P4 path is unchanged from stock reaprime and wraps
-  /// mod-256 above 15.9375 — harmless in practice, as DE1 flow/pressure stays
-  /// well within range. Mirrors de1plus `convert_float_to_flow_pressure_byte`
+  /// v1 `96` reads back as `9.6` on a Bengle). Both paths saturate at the ends
+  /// of their range. Mirrors de1plus `convert_float_to_flow_pressure_byte`
   /// (`binary.tcl`).
   int _encodeFlowPressure(double value) => isBengle
       ? Helper.convert_float_to_U8D1(value)
-      : (0.5 + value * 16.0).toInt();
+      : Helper.convert_float_to_U8P4(value);
 
   int _encodeLimiterByte(double value) => isBengle
       ? Helper.convert_float_to_U8D1(value)
@@ -40,6 +64,64 @@ extension UnifiedDe1Profile on UnifiedDe1 {
   /// is treated as a plain lever (Mode 2), NOT HOLD.
   bool _isHoldStep(ProfileStep step) =>
       step.transition == TransitionType.hold && step is! ProfileStepLever;
+
+  void _assertProfileEncodable(Profile profile) {
+    void refuse(String field, double value, String problem, [int? step]) =>
+        throw ProfileValueUnsupportedException(
+          field: field,
+          value: value,
+          problem: problem,
+          stepNumber: step == null ? null : step + 1,
+          stepName: step == null ? null : profile.steps[step].name,
+          profileTitle: profile.title,
+        );
+    void requireNumber(String field, double value, [int? step]) {
+      if (value.isNaN) refuse(field, value, 'is not a number', step);
+    }
+
+    for (var i = 0; i < profile.steps.length; i++) {
+      final step = profile.steps[i];
+      final temperature = step.temperature;
+      if (!(temperature >= 0 && temperature <= _maxStepTemperature)) {
+        refuse(
+          'temperature',
+          temperature,
+          'is outside 0 to $_maxStepTemperature C',
+          i,
+        );
+      }
+      if (!_isHoldStep(step)) {
+        requireNumber(_targetField(step), step.getTarget(), i);
+      }
+      if (step.seconds.isNaN || step.seconds == double.negativeInfinity) {
+        refuse('seconds', step.seconds, 'cannot be encoded', i);
+      }
+      requireNumber('exit value', step.exit?.value ?? 0, i);
+      if (!step.volume.isFinite) {
+        refuse('volume', step.volume, 'cannot be encoded', i);
+      }
+      final limiter = step.limiter;
+      if (limiter != null && limiter.value != 0) {
+        requireNumber('limiter value', limiter.value, i);
+        if (step is! ProfileStepPower) {
+          requireNumber('limiter range', limiter.range, i);
+        }
+      }
+      if (step is ProfileStepLever) {
+        requireNumber('lever spring', step.leverSpring, i);
+        requireNumber('lever give', step.leverGive, i);
+      }
+    }
+    if (!profile.tankTemperature.isFinite) {
+      refuse('tank temperature', profile.tankTemperature, 'cannot be encoded');
+    }
+  }
+
+  String _targetField(ProfileStep step) => switch (step) {
+    ProfileStepFlow() => 'flow',
+    ProfileStepPower() => 'power',
+    _ => 'pressure',
+  };
 
   Future<void> _writeHeader(Profile profile) async {
     final scale = isBengle ? 10.0 : 16.0;
@@ -90,7 +172,7 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       index++;
       data[index] = Helper.convert_float_to_F8_1_7(step.seconds);
       index++;
-      data[index] = (0.5 + (step.exit?.value ?? 0) * scale).toInt();
+      data[index] = Helper.saturatingByte(step.exit?.value ?? 0, scale);
       index++;
       Helper.convert_float_to_U10P0(step.volume, data, index);
 
@@ -240,6 +322,12 @@ class Helper {
   static int convert_float_to_U8D1(double x) {
     final clamped = x < 0.0 ? 0.0 : (x > 25.5 ? 25.5 : x);
     return (clamped * 10).round();
+  }
+
+  static int saturatingByte(double x, double scale) {
+    final top = 255 / scale;
+    final clamped = x < 0.0 ? 0.0 : (x > top ? top : x);
+    return (0.5 + clamped * scale).toInt();
   }
 
   // ignore: non_constant_identifier_names
