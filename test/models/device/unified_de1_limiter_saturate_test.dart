@@ -42,18 +42,33 @@ List<Uint8List> _extensionFrames(FakeBleTransport transport) => transport.writes
     .toList();
 
 class _Machine {
-  const _Machine(this.name, this.build, this.top, this.aboveTop, this.inRange);
+  const _Machine(
+    this.name,
+    this.build,
+    this.top,
+    this.aboveTop,
+    this.inRange, {
+    this.extraRows = const [],
+  });
 
   final String name;
   final UnifiedDe1 Function(FakeBleTransport) build;
   final double top;
   final double aboveTop;
   final (double, int) inRange;
+  final List<(String, double, int)> extraRows;
 }
 
 final _machines = [
   _Machine('Bengle', (t) => Bengle(transport: t), 25.5, 25.6, (4.4, 44)),
-  _Machine('DE1', (t) => UnifiedDe1(transport: t), 15.9375, 15.95, (9.5, 152)),
+  _Machine(
+    'DE1',
+    (t) => UnifiedDe1(transport: t),
+    15.9375,
+    15.95,
+    (9.5, 152),
+    extraRows: [('16', 16.0, 255)],
+  ),
 ];
 
 void main() {
@@ -103,6 +118,7 @@ void main() {
         ('+Infinity', double.infinity, 255),
         ('-Infinity', double.negativeInfinity, 0),
         ('in range $inValue', inValue, inByte),
+        ...machine.extraRows,
       ];
 
       Future<Map<int, Uint8List>> upload(
@@ -167,15 +183,18 @@ void main() {
         ('value', (double.nan, 1.0)),
         ('range', (inValue, double.nan)),
       ]) {
-        test('limiter $field NaN fails the upload before any frame', () async {
-          final transport = FakeBleTransport();
-          addTearDown(transport.dispose);
-          await expectLater(
-            machine.build(transport).setProfile(_limiterProfile([limiter])),
-            throwsUnsupportedError,
-          );
-          expect(_extensionFrames(transport), isEmpty);
-        });
+        test(
+          'limiter $field NaN fails the upload before any extension frame',
+          () async {
+            final transport = FakeBleTransport();
+            addTearDown(transport.dispose);
+            await expectLater(
+              machine.build(transport).setProfile(_limiterProfile([limiter])),
+              throwsUnsupportedError,
+            );
+            expect(_extensionFrames(transport), isEmpty);
+          },
+        );
       }
     });
   }
