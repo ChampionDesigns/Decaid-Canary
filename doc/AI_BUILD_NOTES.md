@@ -17,7 +17,7 @@ flutter test                                   # All tests
 flutter test test/path/to_test.dart            # Specific file
 flutter test --name "test pattern"             # Specific test
 flutter analyze                                # Static analysis
-dart format lib/ test/                      # Format
+# Format changed Dart files: see AGENTS.md -> Verification step 1.
 
 # Build (Linux via Docker/Colima)
 make build-arm                                 # ARM64 binary
@@ -48,6 +48,7 @@ temporary real-hardware tuning builds where debug endpoints must be reachable.
 - `flutter_with_commit.sh` injects the git commit hash as a compile-time constant via `--dart-define`.
 - CI uses pinned Flutter version. Linux build smoke runs via Docker.
 - Android uses `ForegroundTaskService` for background BLE. Auto-stops 5min after disconnect; auto-restarts on reconnect.
+- Skin `exitApp()` backgrounds Android with `moveTaskToBack(true)` on the `app/lifecycle` channel rather than finishing the activity, so the BLE connection and wake schedules keep running. Desktop quits through `exitApplication(AppExitType.cancelable)`; iOS cannot close itself, so the call does nothing there.
 - `Makefile` targets: `build-arm`, `build-amd`, `dual-build` (Linux only, requires Docker/Colima).
 
 ## Skin Camera Permissions on Apple Platforms
@@ -158,9 +159,9 @@ the primary checkout; `git worktree add` does not copy it.
 
 ## CLI Parameters
 
-The app supports several command-line flags for headless/calibration-station use. See PR #349 and #352 for full details.
+The app supports several command-line flags for headless/calibration-station use. See PR #349 and #352 for full details. This is an option catalogue, not a runnable script: pass the flags separately as described below the list.
 
-```bash
+```text
 ./flutter_with_commit.sh run --dart-define=simulate=1 \
   --serial                    # Serial-only mode; skip BLE service creation
   --bypass-onboarding         # Skip onboarding, go straight to launcher
@@ -169,15 +170,17 @@ The app supports several command-line flags for headless/calibration-station use
   --skin=<id>                 # Pre-select skin by ID
   --skin-path=<path>          # Pre-select skin by filesystem path
   --no-account                # Skip DecentAccountService (headless Linux with no desktop session)
+  --dummy-account             # Isolated demo identity; debug + explicit dart-define only
   --trust-consent=<key>       # Trust one account-proxy caller for this process; repeatable
   --trust-all-consent         # Trust every account-proxy caller for this process
+  --extensions-token=<value>  # Accept this bearer for plugin and skin management (extensions:manage); 32+ chars
 ```
 
-All flags are optional. Combine as needed. `--no-account` is specifically for headless Linux stations where `libsecret` blocks on XDG secrets portal. `--force-onboarding` is the inverse of `--bypass-onboarding`: it clears the persisted onboarding completion flags so the welcome, login, and import screens show again on the next launch, and it wins if both are passed. Consent keys use `skin:<installed-id>`, `plugin:<id>`, or `api:<token-id>`; API token labels are presentation-only. Both trust flags are session-only and are never persisted. With `flutter run`, pass each app flag separately as `--dart-entrypoint-args=<flag>`; `--dart-define` does not populate `main()` arguments. With `scripts/sb-dev.sh`, pass each app flag separately as `--app-arg <flag>` and repeat `--app-arg` for multiple flags.
+All flags are optional. Combine as needed. `--dummy-account` is safe only with a debug build and `--dart-define=DECAID_ENABLE_DUMMY_ACCOUNT=true`; it uses an in-memory credential store and offline account clients. See [`shot-upload-onboarding.md`](shot-upload-onboarding.md) for isolated persona instructions. `--no-account` is specifically for headless Linux stations where `libsecret` blocks on XDG secrets portal. `--force-onboarding` is the inverse of `--bypass-onboarding`: it clears the persisted onboarding completion flags so the welcome, login, and import screens show again on the next launch, and it wins if both are passed. Consent keys use `skin:<installed-id>`, `plugin:<id>`, or `api:<token-id>`; API token labels are presentation-only. Both trust flags are session-only and are never persisted. `--extensions-token` registers a process-lifetime bearer token with the `extensions:manage` scope, which the plugin and skin management routes require (see `doc/Plugins.md` -> "Authorization"); it is never persisted, and a value shorter than 32 characters or containing spaces or commas is ignored with a severe log line. Generate one with `openssl rand -hex 32`. The `DECAID_EXTENSIONS_TOKEN` environment variable registers the same token without putting it in the process arguments, which other local users can read; the flag wins when both are set. Both are for development, headless testing and automation; a device in service gets a named, revocable token from the native API access tokens section. With `flutter run`, pass each app flag separately as `--dart-entrypoint-args=<flag>`; `--dart-define` does not populate `main()` arguments. With `scripts/sb-dev.sh`, pass each app flag separately as `--app-arg <flag>` and repeat `--app-arg` for multiple flags. Entrypoint arguments reach `main()` on desktop and `flutter-tester`; the Android and iOS launch paths in `flutter_tools` do not forward them, so on a tablet both mechanisms are inert. See `.agents/skills/decent-dev/SKILL.md` for the Android onboarding reset procedure.
 
-## Dev-Loop Skill
+## Dev-Loop Skills
 
-Driving a running app through its lifecycle: `.agents/skills/decent-app/SKILL.md`. Managed by `scripts/sb-dev.sh`:
+Driving a running app through its lifecycle: `.agents/skills/decent-app/SKILL.md`. Changing the code — gate, formatting, worktrees, tablet loop: `.agents/skills/decent-dev/SKILL.md`. A code change verified at runtime uses both. Managed by `scripts/sb-dev.sh`:
 
 ```bash
 scripts/sb-dev.sh start      # Launch in simulate mode
@@ -201,7 +204,7 @@ Prefer `reload` over `hot-restart` — state is preserved.
 ```sh
 flutter analyze          # Minimum before any commit
 flutter test             # Full suite before commit/PR
-dart format lib/ test/  # Format check
+# Format changed Dart files: see AGENTS.md -> Verification step 1.
 ```
 
 ## Keeping Notes Fresh

@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -172,9 +173,8 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
         _isLoading = false;
       });
     } catch (error, stackTrace) {
-      Logger(
-        'PluginsSettingsView',
-      ).warning('Failed to initialize plugins', error, stackTrace);
+      Logger('PluginsSettingsView')
+          .warning('Failed to initialize plugins', error, stackTrace);
       if (!mounted) return;
       setState(() {
         _loadError = error.toString();
@@ -358,14 +358,19 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
                         .map(
                           (permission) => Chip(
                             label: Text(permission.wireName),
-                            backgroundColor: Theme.of(
-                              context,
-                            ).colorScheme.tertiary,
+                            backgroundColor:
+                                permission == PluginPermissions.manageExtensions
+                                ? Theme.of(context).colorScheme.errorContainer
+                                : Theme.of(context).colorScheme.tertiary,
                             labelStyle: Theme.of(context).textTheme.labelSmall,
                           ),
                         )
                         .toList(),
                   ),
+                  if (plugin.permissions.contains(
+                    PluginPermissions.manageExtensions,
+                  ))
+                    const ExtensionManagementWarning(),
                 ],
               ),
             _buildSourceLine(context, plugin),
@@ -399,9 +404,8 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
                           );
                           setState(() {});
                         } catch (e, st) {
-                          Logger(
-                            'PluginsSettingsView',
-                          ).warning('Failed to set auto-load', e, st);
+                          Logger('PluginsSettingsView')
+                              .warning('Failed to set auto-load', e, st);
                           if (mounted) {
                             _showSnackBar(
                               context,
@@ -521,9 +525,8 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
           if (source.lastError != null)
             Text(
               'Last update failed: ${source.lastError}',
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: Colors.red),
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: Colors.red),
             ),
         ],
       ),
@@ -576,6 +579,10 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
             const Text('This update requests new permissions:'),
             const SizedBox(height: 8),
             ...pending.addedPermissions.map((p) => Text('• $p')),
+            if (pending.addedPermissions.contains(
+              PluginPermissions.manageExtensions.wireName,
+            ))
+              const ExtensionManagementWarning(),
             const SizedBox(height: 12),
             Text(
               'Current permissions: '
@@ -629,9 +636,8 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
       await _sourceService.updateAllPlugins();
       if (context.mounted) _showSnackBar(context, 'Plugin update check done');
     } catch (e, st) {
-      Logger(
-        'PluginsSettingsView',
-      ).warning('Plugin update check failed', e, st);
+      Logger('PluginsSettingsView')
+          .warning('Plugin update check failed', e, st);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           remoteErrorSnackBar(
@@ -739,10 +745,14 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
           ? _sourceService.installFromGitHubRelease(
               repo,
               assetName: detail.isEmpty ? null : detail,
+              approveExtensionManagement: (candidate) =>
+                  _approveExtensionManagement(context, candidate),
             )
           : _sourceService.installFromGitHubBranch(
               repo,
               branch: detail.isEmpty ? 'main' : detail,
+              approveExtensionManagement: (candidate) =>
+                  _approveExtensionManagement(context, candidate),
             ),
       successMessage: 'Plugin installed',
     );
@@ -758,7 +768,11 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
 
     await _runInstall(
       context,
-      () => _sourceService.installFromZip(path),
+      () => _sourceService.installFromZip(
+        path,
+        approveExtensionManagement: (candidate) =>
+            _approveExtensionManagement(context, candidate),
+      ),
       successMessage: 'Plugin installed',
     );
   }
@@ -778,10 +792,11 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
       if (context.mounted) {
         _showSnackBar(context, '$successMessage: ${manifest.name}');
       }
+    } on PluginInstallDeclinedException {
+      return;
     } catch (e, st) {
-      Logger(
-        'PluginsSettingsView',
-      ).warning('Plugin installation failed', e, st);
+      Logger('PluginsSettingsView')
+          .warning('Plugin installation failed', e, st);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           remoteErrorSnackBar(
@@ -860,18 +875,23 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
         }
       }
 
-      await _sourceService.installFromFolder(tempDir.path);
+      await _sourceService.installFromFolder(
+        tempDir.path,
+        approveExtensionManagement: (candidate) =>
+            _approveExtensionManagement(context, candidate),
+      );
 
       if (context.mounted) {
         _showSnackBar(context, 'Plugin installed successfully');
       }
       _refreshPlugins();
+    } on PluginInstallDeclinedException {
+      return;
     } catch (e, st) {
       logger.warning('Failed to install plugin', e, st);
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(remoteErrorSnackBar(e, action: 'install the plugin'));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(remoteErrorSnackBar(e, action: 'install the plugin'));
       }
     } finally {
       try {
@@ -882,6 +902,32 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
         logger.warning('Failed to clean up plugin staging directory', e, st);
       }
     }
+  }
+
+  Future<bool> _approveExtensionManagement(
+    BuildContext context,
+    PluginManifest candidate,
+  ) async {
+    if (!mounted || !context.mounted) return false;
+    final approved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Allow ${candidate.name} to manage plugins and skins?'),
+        content: const ExtensionManagementWarning(),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            key: const Key('approve-extension-management'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Allow and install'),
+          ),
+        ],
+      ),
+    );
+    return approved == true;
   }
 
   Future<void> _confirmRemovePlugin(
@@ -1204,9 +1250,8 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
                       _showSnackBar(context, 'Settings saved');
                       Navigator.pop(context);
                     } catch (e, st) {
-                      Logger(
-                        'PluginsSettingsView',
-                      ).warning('Failed to save settings', e, st);
+                      Logger('PluginsSettingsView')
+                          .warning('Failed to save settings', e, st);
                       if (context.mounted) {
                         _showSnackBar(
                           context,
@@ -1281,9 +1326,9 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
               if (!checking && !unavailable && !loggedIn) ...[
                 const SizedBox(height: 8),
                 ShadButton.outline(
-                  onPressed: () => Navigator.of(
-                    context,
-                  ).popAndPushNamed(AccountPage.routeName),
+                  onPressed: () =>
+                      Navigator.of(context)
+                          .popAndPushNamed(AccountPage.routeName),
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1310,6 +1355,34 @@ class _PluginsSettingsViewState extends State<PluginsSettingsView> {
       SnackBar(
         content: Text(message),
         backgroundColor: isError ? Colors.red : null,
+      ),
+    );
+  }
+}
+
+class ExtensionManagementWarning extends StatelessWidget {
+  const ExtensionManagementWarning({super.key});
+
+  static const message =
+      'manage.extensions lets this plugin install, replace, configure and '
+      'remove plugins and skins on this device, including on instruction '
+      'from a remote server, and approve new permissions for any plugin, '
+      'itself included. Allow it only for a plugin you trust completely.';
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.error;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.warning_amber_rounded, color: color, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(message, style: TextStyle(color: color)),
+          ),
+        ],
       ),
     );
   }

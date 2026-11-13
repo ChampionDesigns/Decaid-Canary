@@ -12,6 +12,7 @@ import 'package:reaprime/src/models/data/shot_state_event.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/device.dart';
+import 'package:reaprime/src/models/device/device_identity.dart';
 import 'package:reaprime/src/models/device/firmware_update_state.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
@@ -430,8 +431,13 @@ class De1Controller {
   Future<T> runDeviceWrite<T>(
     Future<T> Function(De1Interface device) write, {
     De1ReplayPolicy replayPolicy = De1ReplayPolicy.never,
+    bool firmwareDiagnostic = false,
   }) {
-    return _enqueueDeviceWrite(write, replayPolicy: replayPolicy);
+    return _enqueueDeviceWrite(
+      write,
+      replayPolicy: replayPolicy,
+      firmwareDiagnostic: firmwareDiagnostic,
+    );
   }
 
   Future<void> runReplaceableDeviceWrite(
@@ -678,6 +684,15 @@ class De1Controller {
     });
   }
 
+  Future<void> updateRefillLevel(int? refillLevel) async {
+    await runDeviceWrite((device) async {
+      final identity = _machineSettingsIdentity(device);
+      if (refillLevel == null) return;
+      await device.setRefillLevel(refillLevel);
+      await _saveMachineSettings(identity, refillLevel: refillLevel);
+    });
+  }
+
   Future<void> updateAdvancedMachineSettings({
     double? heaterPh1Flow,
     double? heaterPh2Flow,
@@ -716,12 +731,14 @@ class De1Controller {
     int? fanThreshold,
     De1RefillKitSettings? refillKitSetting,
     double? flowCalibration,
+    int? refillLevel,
   }) async {
     await _machineSettings.update(
       identity,
       fanThreshold: fanThreshold,
       refillKitSetting: refillKitSetting,
       flowCalibration: flowCalibration,
+      refillLevel: refillLevel,
     );
   }
 
@@ -739,7 +756,8 @@ class De1Controller {
       if (serial.isNotEmpty && serial != '0') return 'serial:$serial';
     } catch (_) {}
     final deviceId = device.deviceId.trim();
-    return deviceId.isEmpty ? '' : 'device:$deviceId';
+    if (deviceId.isEmpty || isEphemeralDeviceIdentity(deviceId)) return '';
+    return 'device:$deviceId';
   }
 
   void _publishSteamFlow(double newFlow) {
@@ -833,7 +851,12 @@ class De1Controller {
     _firmwareUpdatePending = true;
     _firmwareUpdateStarted = false;
     _firmwareCancellationRequested = false;
+    final firmwareStopwatch = Stopwatch()..start();
     final queued = _activeDeviceWrite != null;
+    _log.fine(
+      'firmware stage=admission '
+      'generation=$_connectionGeneration elapsed=0ms queued=$queued',
+    );
     final Future<void> operation;
     try {
       operation = runDeviceWrite((device) {
@@ -842,9 +865,14 @@ class De1Controller {
           throw const FirmwareUpdateCancelledException();
         }
         _firmwareUpdateStarted = true;
+        _log.fine(
+          'firmware stage=onStart '
+          'generation=$_connectionGeneration '
+          'elapsed=${firmwareStopwatch.elapsedMilliseconds}ms',
+        );
         onStart?.call();
         return device.updateFirmware(image, onProgress: onProgress);
-      });
+      }, firmwareDiagnostic: true);
       if (queued) _pendingFirmwareWrite = _pendingDeviceWrites.last;
     } catch (_) {
       _firmwareUpdatePending = false;
