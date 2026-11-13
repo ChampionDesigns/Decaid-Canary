@@ -30,6 +30,10 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       ? Helper.convert_float_to_U8D1(value)
       : (0.5 + value * 16.0).toInt();
 
+  int _encodeLimiterByte(double value) => isBengle
+      ? Helper.convert_float_to_U8D1(value)
+      : Helper.convert_float_to_U8P4(value);
+
   /// True iff [step] is a HOLD step that carries an ext HOLD Mode byte (3/4/5).
   /// Pressure/flow/power steps honour `transition:hold`; a LEVER step never
   /// does (the editor forces JUMP on lever), so a `hold` marker on a lever step
@@ -190,8 +194,8 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       double limiterValue = step.limiter!.value;
       double limiterRange = step.limiter!.range;
 
-      data[1] = (0.5 + limiterValue * scale).toInt();
-      data[2] = (0.5 + limiterRange * scale).toInt();
+      data[1] = _encodeLimiterByte(limiterValue);
+      data[2] = _encodeLimiterByte(limiterRange);
 
       data[3] = 0;
       data[4] = 0;
@@ -236,6 +240,12 @@ class Helper {
   static int convert_float_to_U8D1(double x) {
     final clamped = x < 0.0 ? 0.0 : (x > 25.5 ? 25.5 : x);
     return (clamped * 10).round();
+  }
+
+  // ignore: non_constant_identifier_names
+  static int convert_float_to_U8P4(double x) {
+    final clamped = x < 0.0 ? 0.0 : (x > 15.9375 ? 15.9375 : x);
+    return (0.5 + clamped * 16.0).toInt();
   }
 
   // ignore: non_constant_identifier_names
