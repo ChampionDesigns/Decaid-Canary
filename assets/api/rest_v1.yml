@@ -7133,12 +7133,13 @@ components:
           pouring,
           pouringDone,
           cleaningStart,
-          cleaingGroup,
+          cleaningGroup,
           cleanSoaking,
           cleaningSteam,
           pausedSteam,
           puffing,
           refillStopped,
+          pumpZeroing,
           errorNaN,
           errorInf,
           errorGeneric,
@@ -7157,7 +7158,11 @@ components:
           errorLoCurrent,
           errorBootFill,
           errorNoAC,
-
+          errorPumpZero,
+          errorPumpNeedsCalibration,
+          errorFrontSwitchOff,
+          errorPumpFault,
+          errorPumpSilent,
         ]
       example: preparingForShot
     Profile:
