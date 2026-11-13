@@ -79,6 +79,11 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       if (value.isNaN) refuse(field, value, 'is not a number', step);
     }
 
+    void requireNotNegative(String field, double value, int step) {
+      requireNumber(field, value, step);
+      if (value < 0) refuse(field, value, 'is below 0', step);
+    }
+
     for (var i = 0; i < profile.steps.length; i++) {
       final step = profile.steps[i];
       final temperature = step.temperature;
@@ -93,11 +98,10 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       if (!_isHoldStep(step)) {
         requireNumber(_targetField(step), step.getTarget(), i);
       }
-      if (!_encodesSeconds(step.seconds)) {
-        refuse('seconds', step.seconds, 'cannot be encoded', i);
-      }
+      requireNotNegative('seconds', step.seconds, i);
       requireNumber('exit value', step.exit?.value ?? 0, i);
-      if (!step.volume.isFinite) {
+      requireNotNegative('volume', step.volume, i);
+      if (step.volume == double.infinity) {
         refuse('volume', step.volume, 'cannot be encoded', i);
       }
       final limiter = step.limiter;
@@ -116,9 +120,6 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       refuse('tank temperature', profile.tankTemperature, 'cannot be encoded');
     }
   }
-
-  bool _encodesSeconds(double seconds) =>
-      !seconds.isNaN && (seconds >= 12.75 || (0.5 + seconds * 10).isFinite);
 
   String _targetField(ProfileStep step) => switch (step) {
     ProfileStepFlow() => 'flow',

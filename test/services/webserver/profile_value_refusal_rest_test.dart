@@ -38,6 +38,7 @@ class _EncoderBackedDe1 extends MockDe1 {
 Map<String, dynamic> _profileJson({
   Object temperature = 92,
   Object seconds = 30,
+  Object volume = 0,
 }) => {
   'version': '2',
   'title': 'Out of range',
@@ -57,7 +58,7 @@ Map<String, dynamic> _profileJson({
       'name': 'too hot',
       'pump': 'pressure',
       'transition': 'fast',
-      'volume': 0,
+      'volume': volume,
       'seconds': seconds,
       'temperature': temperature,
       'sensor': 'coffee',
@@ -123,6 +124,8 @@ void main() {
             'seconds',
             '-1e+308',
           ),
+          ('step seconds of -1', _profileJson(seconds: -1), 'seconds', '-1'),
+          ('a step volume of -5', _profileJson(volume: -5), 'volume', '-5'),
         ]) {
       test('$label answers 400 and writes nothing', () async {
         de1.transport.writes.clear();
@@ -152,6 +155,8 @@ void main() {
     for (final (label, json) in <(String, Map<String, dynamic>)>[
       ('a step temperature of 130', _profileJson(temperature: 130)),
       ('step seconds of -1e308', _profileJson(seconds: -1e308)),
+      ('step seconds of -1', _profileJson(seconds: -1)),
+      ('a step volume of -5', _profileJson(volume: -5)),
     ]) {
       test('with $label answers 200 first; WorkflowDeviceSync then tries once '
           'and parks', () async {

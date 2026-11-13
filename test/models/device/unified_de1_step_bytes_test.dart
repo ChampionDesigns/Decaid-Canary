@@ -12,6 +12,7 @@ const _setpointByte = 2;
 const _temperatureByte = 3;
 const _secondsByte = 4;
 const _exitByte = 5;
+const _volumeByte = 6;
 
 int _baseByte(double value, double scale) => (0.5 + value * scale).toInt();
 
@@ -337,6 +338,8 @@ void main() {
           double.negativeInfinity,
           _pressureStep(1, seconds: double.negativeInfinity),
         ),
+        ('seconds', -1.0, _pressureStep(1, seconds: -1)),
+        ('seconds', -12.0, _pressureStep(1, seconds: -12)),
         ('seconds', -1e308, _pressureStep(1, seconds: -1e308)),
         (
           'seconds',
@@ -344,6 +347,12 @@ void main() {
           _pressureStep(1, seconds: -double.maxFinite),
         ),
         ('volume', nan, _pressureStep(1, volume: nan)),
+        ('volume', -5.0, _pressureStep(1, volume: -5)),
+        (
+          'volume',
+          -double.maxFinite,
+          _pressureStep(1, volume: -double.maxFinite),
+        ),
         ('volume', double.infinity, _pressureStep(1, volume: double.infinity)),
         (
           'volume',
@@ -381,6 +390,23 @@ void main() {
           expect(frames[1]?[_secondsByte], 255);
         });
       }
+
+      test('-0.0 seconds and -0.0 volume upload as 0', () async {
+        final frames = await _upload(machine.build, [
+          _pressureStep(0),
+          _pressureStep(1, seconds: -0.0, volume: -0.0),
+        ]);
+        expect(frames[1]?[_secondsByte], 0);
+        expect(frames[1]?.sublist(_volumeByte, _volumeByte + 2), [0x04, 0x00]);
+      });
+
+      test('the largest double volume uploads as FF FF', () async {
+        final frames = await _upload(machine.build, [
+          _pressureStep(0),
+          _pressureStep(1, volume: double.maxFinite),
+        ]);
+        expect(frames[1]?.sublist(_volumeByte, _volumeByte + 2), [0xFF, 0xFF]);
+      });
 
       test(
         'a NaN limiter range under a 0 limiter value still uploads',
