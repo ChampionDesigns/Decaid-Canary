@@ -1,4 +1,5 @@
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart';
+
 import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
@@ -26,9 +27,8 @@ import 'package:reaprime/src/services/simulated_shot_library.dart';
 import 'package:rxdart/subjects.dart';
 
 class MockReplayDe1 implements BengleInterface, SimulatedDevice {
-  MockReplayDe1({required SimulatedShotLibrary library, Random? random})
-    : _library = library,
-      _random = random ?? Random();
+  MockReplayDe1({required this._library, Random? random})
+    : _random = random ?? Random();
 
   final SimulatedShotLibrary _library;
   final Random _random;

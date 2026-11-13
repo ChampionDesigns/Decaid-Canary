@@ -223,6 +223,7 @@ enum MachineSubstate {
 
   /// The purge after steam stops on time or on milk temperature.
   puffing,
+  refillStopped,
 
   errorNaN,
   errorInf,

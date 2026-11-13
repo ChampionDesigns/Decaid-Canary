@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+
 import 'package:reaprime/src/models/device/scale.dart';
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
@@ -85,25 +86,16 @@ class De1StateManager with WidgetsBindingObserver {
   bool _navigationContextReady = false;
 
   De1StateManager({
-    required De1Controller de1Controller,
-    required ScaleController scaleController,
-    required WorkflowController workflowController,
-    required PersistenceController persistenceController,
-    required SettingsController settingsController,
-    required ConnectionManager connectionManager,
-    DecentAccountService? accountService,
-    SensorController? sensorController,
-    required GlobalKey<NavigatorState> navigatorKey,
-  }) : _de1Controller = de1Controller,
-       _scaleController = scaleController,
-       _workflowController = workflowController,
-       _persistenceController = persistenceController,
-       _settingsController = settingsController,
-       _connectionManager = connectionManager,
-       _accountService = accountService,
-       _sensorController = sensorController,
-       _navigatorKey = navigatorKey,
-       _backgroundStates = _getPlatformBackgroundStates() {
+    required this._de1Controller,
+    required this._scaleController,
+    required this._workflowController,
+    required this._persistenceController,
+    required this._settingsController,
+    required this._connectionManager,
+    this._accountService,
+    this._sensorController,
+    required this._navigatorKey,
+  }) : _backgroundStates = _getPlatformBackgroundStates() {
     _initialize();
   }
 

@@ -1,6 +1,7 @@
 import 'package:collection/collection.dart';
 import 'package:reaprime/src/models/device/grinder_device.dart';
 import 'package:reaprime/src/util/safe_path.dart';
+
 import 'plugin_ble_matcher.dart';
 
 List<String> parsePluginEnumValues(String key, dynamic schema) {
@@ -355,6 +356,7 @@ enum PluginPermissions {
   log('log'),
   api('api'),
   emit('emit'),
+  notifications('notifications'),
   pluginStorage('pluginStorage'),
   eventsMachine('events.machine'),
   eventsShots('events.shots'),
@@ -364,7 +366,8 @@ enum PluginPermissions {
   networkWebsocket('network.websocket'),
   networkTcp('network.tcp'),
   networkTls('network.tls'),
-  transportBle('transport.ble');
+  transportBle('transport.ble'),
+  manageExtensions('manage.extensions');
 
   final String wireName;
 

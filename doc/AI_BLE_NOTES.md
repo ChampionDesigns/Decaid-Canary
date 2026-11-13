@@ -67,6 +67,19 @@ priority even over already queued MMR work. Once firmware owners finish or fail,
 queued MMR work resumes one operation at a time in FIFO order. This preserves
 firmware exclusivity without discarding settings requests.
 
+Managed firmware diagnostics log elapsed stage boundaries from queue admission
+through controller initialization, `onStart`, sleep, preflight and gate
+acquisition. The governor attributes a firmware-only initialization timeout at
+its readiness wait (`stage: initialization`) and pre-start resolution or
+connection-generation failure at the controller boundary (`stage: controller`);
+causes and original stacks are retained. Sleep, preflight, erase, upload and
+verification failures retain their original causes and messages and are not
+labelled as gate-acquisition failures. Typed cancellation is a single terminal
+error without failure-stage logging. HTTP 200 admits the stream;
+clients must consume its terminal `done` or `error` event. Transport-level hex
+payload logging is suppressed for MMR writes because firmware image chunks share
+that endpoint; the MMR layer still logs its own payloads at fine level.
+
 The HTTP handlers select DE1's verified coalesced groups and Bengle's individually
 validated groups; the steam-purge/USB group stays sequential. Dart extension
 dispatch is static, so the `De1SettingsSnapshots` extension remains the sequential
@@ -193,6 +206,22 @@ with pending ambiguity, scale recovery is deferred to avoid racing with
 the user's choice. Scales powered off while the machine is sleeping are
 skipped to respect the radio-disconnect power mode. On Android, uses a
 filtered scan to bypass background throttling.
+
+With a preferred scale configured, scale-only recovery passes only the matching
+candidate to scale policy, while preserving the full inventory and scan report.
+Only the first matching candidate is passed; duplicate objects with the same
+preferred ID must not become fallback picker alternatives after a failed connect.
+An absent or failed preferred scale therefore retains the existing bounded
+retries instead of opening a picker for an alternative. In the #1078 controlled
+USB-loss test, that automatic picker cancelled retries and later blocked wake
+recovery even after the USB HDS returned. This rule also covers adapter recovery's
+scale-only path; explicit scans and no-preference selection are unchanged.
+
+This is intentionally scoped to scale-only recovery. Full automatic startup and
+machine-recovery scans retain their existing scale-picker policy, which can still
+pause preferred-scale retries when only an alternative is discovered. Changing
+that policy needs a separate decision and combined machine/scale recovery tests;
+the #1078 controlled USB-loss fix does not establish that broader path as fixed.
 
 ### Phase lifecycle
 

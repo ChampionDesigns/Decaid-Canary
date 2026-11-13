@@ -833,6 +833,7 @@ components:
         - cleaningSteam
         - pausedSteam
         - puffing
+        - refillStopped
       example: preparingForShot
     ShotSettings:
       type: object

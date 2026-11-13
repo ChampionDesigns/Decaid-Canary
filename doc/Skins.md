@@ -64,6 +64,9 @@ backgrounded. After ten minutes in the background, it unloads the page and
 reloads the selected skin when the app returns. Skin state that must survive
 this reload should be persisted through the Decaid API or browser storage.
 
+On Android, Decaid disables the WebView's native overscroll effect without
+disabling ordinary page scrolling.
+
 WebView pause/resume and timer bridge failures are awaited and logged without
 terminating the view; unsupported methods are skipped. Timer operations are
 ordered across view replacements; a failed resume remains eligible for retry on
@@ -82,6 +85,119 @@ finishes later. Replacing the simulated device starts a new loading attempt;
 callbacks from the previous view cannot complete it. A failed browser launch
 keeps the recovery screen available. This does not move or clear browser storage,
 retry downloads, or identify the native cause of a startup failure.
+
+### Switching Skins from an Embedded Skin
+
+An embedded skin switches the app to another installed skin with:
+
+```javascript
+window.decentApp.switchSkin('streamline.js');
+```
+
+The call returns immediately and returns `false` without doing anything when it
+is not running in the embedded WebView or when `skinId` is not a non-empty
+string. There is no completion callback: the switch normally destroys the
+calling page, and the new skin appearing is the indication that it finished. A
+skin must not wait for a promise before letting the page unload.
+
+The hook is a native request, not a page navigation. The script navigates the
+top frame to `/__decent/switch-skin?id=<skinId>&nonce=<nonce>` on its own
+origin; Decaid cancels that navigation and performs the switch itself. Decaid
+accepts the request only from the active embedded `SkinView`'s top-level page on
+the port it is currently serving: subframes, a page left over from an earlier
+port, other origins and external browsers are rejected, and
+`window.__DECENT_HOST__` alone does not authorise it. Only an installed skin ID
+is accepted; URLs, paths and remote hosts are not.
+
+The nonce closes the one gap `isForMainFrame` leaves: that flag describes the
+navigation's target frame, so a cross-origin subframe — a plugin iframe, for
+instance — that navigates `_top` after a user gesture would otherwise look like
+a main-frame request from the skin's own origin. `window.__DECENT_SWITCH_NONCE__`
+is injected per `SkinView` into the main frame only, so a cross-origin subframe
+can neither read it nor forge it, and a request carrying no nonce or a retired
+view's nonce is rejected. Skin pages never handle the nonce themselves;
+`switchSkin` reads it.
+
+Decaid selects the skin, restarts the WebUI server on that skin's own port,
+persists it as the default skin, and recreates the embedded view on the new port
+before loading it. Switching is single-flight: a second request while one is
+running returns `busy` and changes nothing. Requesting the skin that is already
+being served does nothing. If the new skin fails to serve, Decaid restores the
+previous skin, does not persist the selection, and reports the failure in the
+app instead of opening a system browser. If the new skin serves but saving it as
+the default fails, it stays active for this session and the app reports that the
+default was not saved, so a restart returns to the previous default. Failure
+messages are shown by the route that owns the embedded view, so they survive the
+view being replaced by a restart.
+
+Fixture skins and the manual steps for the A -> B -> A round trip, the
+rejection cases, the cross-origin subframe attempt and the failure-to-serve
+rollback live in
+`test/fixtures/skins/` and
+`.agents/skills/decent-app/scenarios/skin-switch-embedded.md`.
+
+In an external browser `switchSkin` is a no-op. Use the REST skin controls
+(`PUT /api/v1/webui/skins/default` with `{"skinId": "<id>"}`, then the WebUI
+server stop and start endpoints) and then open the stable entry point on port
+3000, which redirects to the selected skin's origin. Those REST calls need an
+`extensions:manage` bearer token; see
+[Managing Plugins and Skins from a Skin](#managing-plugins-and-skins-from-a-skin).
+
+### Managing Plugins and Skins from a Skin
+
+The REST routes that install, replace, configure, enable, disable or remove
+plugins and skins, change the default skin, or start and stop the skin server
+require `Authorization: Bearer <token>` with the `extensions:manage` scope. The
+rest of the API stays unauthenticated. The full list is in
+[REST management routes](#rest-management-routes).
+
+Skins get no implicit management authority. The account-proxy token Decaid
+injects into served skin pages has only the `account:proxy` scope, and the
+management routes refuse it with 403. A skin that offers plugin or skin
+management has these options:
+
+- **Switch skins inside the app** with `window.decentApp.switchSkin(skinId)`
+  (see [Switching Skins from an Embedded Skin](#switching-skins-from-an-embedded-skin)).
+  It needs no token and is unaffected by this gate.
+- **Ask the user for a token** created in the app (**Decent Account** page,
+  **API access tokens**, **Create**, turn on **Manage plugins and skins**; the
+  token is shown once) and send it as a bearer. Keep it in memory for the life of
+  the page. Do not put it in `localStorage`, `sessionStorage`, cookies or the
+  key-value store: other pages on the same origin, and any client of the
+  key-value store, could read it. On 401, discard it and ask again. Do this only
+  in a page served from the skin's own port. Pages served by plugins on the API
+  port share one origin and can script each other, so a token must never be
+  entered there.
+- **Delegate to a plugin** that holds the `manage.extensions` permission. The
+  plugin calls the routes through `host.localApi`, which reaches plugin and skin
+  management and nothing else in the API. Its own endpoints are open to
+  every client on the network, so it must decide for itself what to do rather
+  than pass a caller's request through. See `doc/Plugins.md`.
+- **Send the user to the native settings screens**, which call the services
+  in-process and need no token.
+
+```javascript
+let extensionsToken = null;
+
+async function manage(path, init = {}) {
+  extensionsToken ??= window.prompt('Paste a "Manage plugins and skins" API token');
+  if (!extensionsToken) return null;
+  const response = await fetch(`http://${location.hostname}:8080${path}`, {
+    ...init,
+    headers: { ...init.headers, Authorization: `Bearer ${extensionsToken}` },
+  });
+  if (response.status === 401) extensionsToken = null;
+  return response;
+}
+
+await manage('/api/v1/plugins/my.reaplugin/enable', { method: 'POST' });
+```
+
+The responses are 401 `{"error":"Missing or malformed bearer token"}`, 401
+`{"error":"Invalid token"}` for an unknown or revoked token, and 403
+`{"error":"Token is not scoped for extensions:manage"}` for a token of another
+scope. HTTP bearer tokens are not confidential on the LAN; use a trusted network
+until Decaid has an HTTPS listener.
 
 ### Live Camera Access on Android, iOS and macOS
 
@@ -211,11 +327,25 @@ unload described above — and it never survives an app restart.
 
 Ports are assigned from 24800 upward. 3000, 4001 and 8080 are reserved, so a
 skin never lands on the entry point, the local listener or the REST API.
-Bookmark `http://localhost:3000` on the device running Decaid, or
-`http://<gateway-ip>:3000` from another device. This entry point redirects
-without caching to the selected skin's origin. Bookmark the entry point
-rather than the redirected address so the bookmark follows skin changes
-and temporary port fallbacks.
+
+`http://localhost:3000` on the device running Decaid — or
+`http://<gateway-ip>:3000` from another device — is the canonical entry point.
+It redirects without caching to the selected skin's origin, and bookmarking it
+is the recommended way back to the WebUI.
+
+**A bookmark to a skin's own port still works.** While a skin is not active,
+its assigned port keeps a lightweight listener that answers requests for a
+device address, or a hostname that resolves to one, with
+`307 Temporary Redirect` and `Cache-Control: no-store` to the entry point,
+preserving the request's host, path and query and changing only the port. Any
+other host gets the same plain 404 the entry point returns. A
+bookmark created after the entry point redirected you to a skin therefore
+recovers on whatever skin is active now, instead of failing with a connection
+error. That listener returns nothing but the redirect: no skin files, no
+injected `skin-api.js`, no account-proxy token metadata, and its origin is not
+added to the account-proxy allowlist. It exists only while Decaid can bind the
+port; if another process holds it, the redirect is absent and Decaid keeps
+serving, so the entry point stays the reliable bookmark.
 
 **The fallback, and what it costs.** If a skin's assigned port cannot be bound
 — another process holds it — Decaid retries briefly, then falls back to a
@@ -223,6 +353,8 @@ and temporary port fallbacks.
 because the origin differs, **persistent browser storage written under the
 stable origin is not visible**, and anything written during that run is not
 visible after it. Nothing is deleted; it is simply keyed to a different origin.
+A temporary origin is exceptional: it changes per run, it is never persisted,
+and it never becomes a redirect alias, so it is not a bookmark target.
 
 A skin that must not lose state across such a run should persist it through the
 Decaid API rather than browser storage. The KV endpoints are unaffected by
@@ -386,6 +518,17 @@ Returns machine hardware information.
 }
 ```
 
+#### Firmware Catalog and Eligibility
+```http
+GET /api/v1/machine/firmware
+```
+
+Use `recommendedArtifactId` and each artifact's `eligibility` when presenting
+managed firmware updates. `updateAvailable: false` does not necessarily mean
+"up to date": `not_newer` means the installed build is current or newer,
+while `model_incompatible` and eligibility status `unknown` describe different
+states that should not be presented as current.
+
 #### Get Machine State
 ```http
 GET /api/v1/machine/state
@@ -442,6 +585,7 @@ Returns current machine state snapshot.
 - `cleaningSteam` - Steam cleaning
 - `pausedSteam` - Steam paused between pours
 - `puffing` - Steam purge after steam stops
+- `refillStopped` - Refill kit has given up; reports with the `needsWater` state
 
 #### Request State Change
 ```http
@@ -543,15 +687,42 @@ Set `"usb"` to `"enable"` to turn the charger on, or `"disable"` to turn it off.
 
 The DE1 firmware re-enables the charger on its own, so the app re-applies the desired state periodically.
 
+#### Get Water Levels
+```http
+GET /api/v1/machine/waterLevels
+```
+
+Returns the latest water levels the machine reported, the same payload
+`/ws/v1/machine/waterLevels` sends. `refillLevel` is the refill threshold as
+the machine last reported it, so it reflects a POST only once the machine
+reports again.
+
+```json
+{
+  "currentLevel": 45.2,
+  "refillLevel": 10.0
+}
+```
+
+If the machine has not reported water levels since it connected, the request
+waits up to 4 seconds for the first report and returns `504` if none arrives.
+
 #### Update Water Level Threshold
 ```http
 POST /api/v1/machine/waterLevels
 Content-Type: application/json
 
 {
-  "warningThresholdPercentage": 20
+  "refillLevel": 10
 }
 ```
+
+The DE1 forgets this threshold when it loses power, so the app saves the value
+per machine and writes it again each time that machine reconnects. Skins do not
+need to resend it after a reconnect or power cycle. `DELETE
+/api/v1/machine/settings/reset` keeps the saved threshold and does not change
+the machine's current one. Until a skin sets a value, the app writes nothing
+and the machine keeps its own threshold.
 
 ---
 
@@ -748,13 +919,21 @@ Update just the profile:
   linked grinder each time a shot is stored, so a stored shot records the burrs that were
   fitted when it was pulled and later grinder edits leave that history alone
 - `grinderSetting` (string): Current grinder setting
+- `grinderRpm` (integer): Recorded grinder RPM for the recipe. Optional and non-negative;
+  absence stays absent. It is workflow configuration, not an observed grinder speed — a
+  connected grinder's telemetry is never written here, and the catalog's RPM step sizes are
+  UI increments, not this value. A PUT rejects negative, fractional, string and boolean
+  values with `400`, and an explicit `null` clears it without touching the rest of the context
 - `beanBatchId` (string): ID of a managed BeanBatch entity (see Beans API)
 - `coffeeName` (string): Coffee bean name (display string)
 - `coffeeRoaster` (string): Coffee roaster name (display string)
 - `finalBeverageType` (string): Beverage classification (e.g., "espresso", "filter")
 - `baristaName` (string): Person pulling the shot
 - `drinkerName` (string): Person drinking
-- `extras` (object): Arbitrary key-value pairs for custom data
+- `extras` (object): Arbitrary key-value pairs for custom data. Plugin-owned grinder preparation
+  values (feeding rate, feed RPM, slow-feeding modes) live here under a namespaced key such as
+  `plugin.grinder`, and are preserved unchanged through a shot snapshot, REST responses, edits,
+  JSON export and backup/restore
 
 > **Backward compatibility:** Legacy fields `doseData`, `grinderData`, and `coffeeData` are still accepted for writes. When `context` is not provided, the system backfills it from legacy fields automatically.
 
@@ -1470,6 +1649,25 @@ Content-Type: application/json
 
 Only include fields you want to update. Changes take effect immediately.
 
+A body that contains `webUiPath` or sets `defaultSkinId` to a skin other than the
+current default changes which skin is served, and one that sets
+`automaticUpdateCheck` to `true` while it is off lets Decaid install skin and
+plugin updates, so these need an `extensions:manage` bearer token. Without one
+the request is refused with 401 or 403 and none of its fields are applied.
+Values already in effect, turning `automaticUpdateCheck` off, and other fields
+need no token. Restoring a backup (`POST /api/v1/data/import`) or pulling a sync
+(`POST /api/v1/data/sync`) without the token imports everything except a
+`defaultSkinId` that differs from the current one and an
+`automaticUpdateCheck: true` while automatic updates are off, and reports a
+warning for each skipped setting.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/settings \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"defaultSkinId": "my-skin-id"}'
+```
+
 ---
 
 ### Key-Value Store
@@ -1561,8 +1759,14 @@ GET /api/v1/plugins/{id}/settings
 Returns current settings for the plugin.
 
 #### Update Plugin Settings
+
+Requires an `extensions:manage` bearer token; see
+[Managing Plugins and Skins from a Skin](#managing-plugins-and-skins-from-a-skin).
+Enabling, disabling, installing, updating and removing plugins need it too.
+
 ```http
 POST /api/v1/plugins/{id}/settings
+Authorization: Bearer <token>
 Content-Type: application/json
 
 {
@@ -3235,11 +3439,13 @@ This creates an `out/` directory with static HTML/CSS/JS files.
 3. Enter `owner/repo` (and optionally the asset name, or the branch, defaulting to `main`)
 4. The skin is installed and appears in the skin list; **Check for updates** re-fetches from the same source
 
-**Option C: Install via REST API:**
+**Option C: Install via REST API** (needs an `extensions:manage` token, see
+[REST management routes](#rest-management-routes)):
 
 ```bash
 # Install from a local or remote URL
 curl -X POST http://localhost:8080/api/v1/webui/skins/install/url \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"url": "file:///path/to/my-skin.zip"}'
 ```
@@ -3505,7 +3711,14 @@ Live-edit validates that the selected folder contains an `index.html`.
 
 ### Settings Plugin (Web-Based Management)
 
-The bundled **settings plugin** provides a web-based settings dashboard at `/api/v1/plugins/settings.reaplugin/ui`. It includes a "Web Interface" section for skin management: select active skin, start/stop server, install/remove skins, and check for updates — all from a browser.
+The bundled **settings plugin** provides a web-based settings dashboard at `/api/v1/plugins/settings.reaplugin/ui`. Its "Web Interface" section shows the installed skins and the skin server's status, with controls to select the active skin, start or stop the server, install or remove skins, and check for updates.
+
+The page has no authority. Its management actions (switching or removing a skin,
+starting or stopping the server, installing, checking for updates, or changing a
+plugin) are refused and the page says to use the settings in the Decaid app or
+to call the API with a token. It does not ask for a token: plugin pages share
+the API origin, so another plugin's page could read one entered there. Viewing
+and changing ordinary settings works as before.
 
 **Linking back from your skin:** Skins can link to the settings plugin with a customizable back button label using the `backName` query parameter:
 
@@ -3517,20 +3730,87 @@ This shows "Back to MySkin" in the settings plugin's nav bar. When clicked, it n
 
 **External links:** When a skin runs inside the embedded webview (mobile/desktop app), navigations to the active skin origin, `localhost:3000`, and the settings plugin load in place; any other `http`/`https` link opens in the **system browser** while the skin stays loaded. A plain `<a href="https://…">` works, but the in-app webview blocks `target="_blank"` popups (`javaScriptCanOpenWindowsAutomatically: false`). For JS-driven links, use a delegated click handler with `window.open(url, '_blank')` and a `location.href` fallback so the navigation reaches `shouldOverrideUrlLoading` and is handed off to the OS.
 
-**Return to the dashboard:** Port 3000 is a stable no-store entry point that redirects to the selected skin's origin, normally retained across restarts as described in [Skin Origins and Browser Storage](#skin-origins-and-browser-storage). The active origin loads the tokenless `/__decent/skin-api.js` from an absolute same-origin URL, which exposes `window.decentApp.exitToDashboard()`. ReaPrime stores a newly rotated, skin-bound account-proxy token in escaped page metadata that only the same-origin script reads; switching or stopping the server revokes it. Separate skin origins prevent a stale tab from reading another skin's token. Token injection accepts loopback and IP addresses currently assigned to the device, including Ethernet and secondary adapters; arbitrary hostnames and stale addresses are rejected. If local interface enumeration is unavailable, the WiFi address cached for the server link is used as a fallback. A hostname that resolves to one of those addresses — a router DNS record, an mDNS name, a hosts file entry — reaches the entry redirect and receives the script tag, but never the token, which stays restricted to loopback and literal device addresses so the DNS-rebinding boundary holds. A skin that needs the account-proxy token must therefore be opened by loopback or device IP; a skin that only needs `window.decentApp` also works when opened by name. The script response also uses `Cross-Origin-Resource-Policy: same-origin`. In the embedded webview the callback closes the skin and reveals the Decent dashboard. In an external browser it is a no-op. The script works with `script-src 'self'`; policies that reject all same-origin scripts, such as `script-src 'none'` or nonce-only policies without `'self'`, also reject this API.
+**Return to the dashboard:** Port 3000 is a stable no-store entry point that redirects to the selected skin's origin, normally retained across restarts as described in [Skin Origins and Browser Storage](#skin-origins-and-browser-storage). The active origin loads the tokenless `/__decent/skin-api.js` from an absolute same-origin URL, which exposes `window.decentApp.exitToDashboard()` and `window.decentApp.switchSkin(skinId)`, described in [Switching Skins from an Embedded Skin](#switching-skins-from-an-embedded-skin). ReaPrime stores a newly rotated, skin-bound account-proxy token in escaped page metadata that only the same-origin script reads; switching or stopping the server revokes it. Separate skin origins prevent a stale tab from reading another skin's token. Token injection accepts loopback and IP addresses currently assigned to the device, including Ethernet and secondary adapters; arbitrary hostnames and stale addresses are rejected. If local interface enumeration is unavailable, the WiFi address cached for the server link is used as a fallback. A hostname that resolves to one of those addresses — a router DNS record, an mDNS name, a hosts file entry — reaches the entry redirect and receives the script tag, but never the token, which stays restricted to loopback and literal device addresses so the DNS-rebinding boundary holds. A skin that needs the account-proxy token must therefore be opened by loopback or device IP; a skin that only needs `window.decentApp` also works when opened by name. The script response also uses `Cross-Origin-Resource-Policy: same-origin`. In the embedded webview the callback closes the skin and reveals the Decent dashboard. In an external browser it is a no-op. The same script exposes `window.decentApp.exitApp()`, for example after asking the machine to sleep. It returns `false` and does nothing outside the embedded WebView. Like `switchSkin`, it navigates the top frame to `/__decent/exit-app?nonce=<nonce>` on its own origin, and Decaid accepts the request only with the active `SkinView`'s main-frame nonce, so a cross-origin subframe cannot trigger it. On Android it moves Decaid to the background like the Home button, so machine connections and wake schedules keep running and reopening Decaid returns to the skin. Desktop builds quit. iOS does not let apps close themselves, so the call does nothing there. The script works with `script-src 'self'`; policies that reject all same-origin scripts, such as `script-src 'none'` or nonce-only policies without `'self'`, also reject this API.
 
 The embedded webview also shows a platform-specific navigation guide when a skin opens. On Windows, choose **Back to Dashboard** from the system menu, available from the window icon or by right-clicking the title bar. Disable or restore the guide in **Settings** under **General** with **Skin navigation guide**.
 
+Unread native notifications show a circular bell with a numeric badge in the
+skin Scaffold's bottom-right floating-button slot, with safe-area spacing. The
+bell leaves 64 logical pixels below it to clear bottom-row skin controls. The
+bell opens a compact snapshot of the notifications unread at opening, capped at
+480 logical pixels wide. Reading hides the bell but keeps the open snapshot
+visible. New arrivals and changed revisions remain unread until the next opening.
+Go to notification center closes the compact list, exits the skin to the
+dashboard, and opens the full center after the WebView is removed. The center
+is also always accessible from the launcher. The full center shows all
+current conditions, read and unread, with approved actions. It is capped at 720
+logical pixels wide. Both views keep their heading and X fixed above scrolling
+rows and are limited to 85% of available height. Opening or closing the compact
+list does not resize, remount or navigate the WebView. Back, Escape, outside
+taps and X close only the notification view.
+There are no generic trash, dismissal or Dismiss all controls.
+The heading's close tooltip uses Flutter's localized label; the native app
+currently enables English only, independently of each skin's language support.
+The originating service or plugin withdraws resolved conditions; no history is
+retained. Reading never resolves a condition or resumes uploads. Skins gain
+no notification API, and existing navigation-guide SnackBars keep their actions.
+Opening the list marks only its initial snapshot read; closing it does not mark
+later arrivals or changes read. An explicit Skip this version action skips only
+the displayed, confirmed update. A restored, unconfirmed app update
+replaces View/Download with one "Check for updates" button using the same manual
+app-update service as Settings. Checking disables that button; failure keeps the
+notice and allows retry. Confirmation restores View/Download/Skip, a newer update
+replaces the entry, and a successful obsolete/no-update result removes it.
+Opening the list does not trigger a check or change the background schedule.
+Plugin notices cannot acquire this trusted host control.
+Android's Download action closes the
+list before opening download confirmation. Cancelling that confirmation retains
+the update notice, and installation still requires a separate action.
+
 **Server control endpoints:**
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/webui/server/status` | Current status (`{serving, path, port, ip}`) |
-| POST | `/api/v1/webui/server/start` | Start serving the default skin through the port 3000 entry point |
-| POST | `/api/v1/webui/server/stop` | Stop serving |
-| POST | `/api/v1/webui/skins/update` | Check all remote skin sources for updates |
+| Method | Path | Token | Description |
+|--------|------|-------|-------------|
+| GET | `/api/v1/webui/server/status` | no | Current status (`{serving, path, port, ip}`) |
+| POST | `/api/v1/webui/server/start` | yes | Start serving the default skin through the port 3000 entry point |
+| POST | `/api/v1/webui/server/stop` | yes | Stop serving |
+| POST | `/api/v1/webui/skins/update` | yes | Check all remote skin sources for updates |
 
-The start endpoint uses `defaultSkinId` from settings. To switch skins: set the default via `PUT /api/v1/webui/skins/default`, then restart the server.
+The start endpoint uses `defaultSkinId` from settings. To switch skins: set the default via `PUT /api/v1/webui/skins/default`, then restart the server. All three steps need an `extensions:manage` bearer token.
+
+### REST Management Routes
+
+These routes need `Authorization: Bearer <token>` with the `extensions:manage`
+scope. Without it they answer 401; with a token of another scope, such as the
+skin's injected account-proxy token, 403.
+
+| Method | Path |
+|--------|------|
+| PUT | `/api/v1/webui/skins/default` |
+| POST | `/api/v1/webui/skins/install/github-release` |
+| POST | `/api/v1/webui/skins/install/github-branch` |
+| POST | `/api/v1/webui/skins/install/url` |
+| POST | `/api/v1/webui/skins/update` |
+| DELETE | `/api/v1/webui/skins/{id}` |
+| POST | `/api/v1/webui/server/start` |
+| POST | `/api/v1/webui/server/stop` |
+| POST | `/api/v1/settings` with `webUiPath`, a changed `defaultSkinId` or `automaticUpdateCheck` turned on in the body |
+| POST | `/api/v1/plugins/install`, `/install/github-release`, `/install/github-branch`, `/update` |
+| POST | `/api/v1/plugins/{id}/enable`, `/disable`, `/settings`, `/update/approve` |
+| PUT | `/api/v1/plugins/{id}/source` |
+| DELETE | `/api/v1/plugins/{id}` |
+
+Reading routes (`GET /api/v1/webui/skins`, `GET /api/v1/webui/server/status`,
+`GET /api/v1/plugins` and so on) stay open.
+
+To get a token, create one in the app: **Decent Account** page, **API access
+tokens**, **Create**, turn on **Manage plugins and skins**. It is shown once. For
+development, headless testing and automation, give the app a random value of at
+least 32 characters at launch, in the `DECAID_EXTENSIONS_TOKEN` environment
+variable or with `--extensions-token <value>`; it is valid for that process
+only. Other local users can read command-line arguments, so prefer the variable
+where the value has to stay private (see `doc/Api.md`). The examples below
+assume the token is in `$TOKEN`.
 
 ### For User-Installable Skins (via REST API)
 
@@ -3539,6 +3819,7 @@ Users can also install skins dynamically via REST API without using the Settings
 **Install from GitHub Release:**
 ```bash
 curl -X POST http://localhost:8080/api/v1/webui/skins/install/github-release \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "repo": "username/my-skin-repo",
@@ -3550,6 +3831,7 @@ curl -X POST http://localhost:8080/api/v1/webui/skins/install/github-release \
 **Install from GitHub Branch:**
 ```bash
 curl -X POST http://localhost:8080/api/v1/webui/skins/install/github-branch \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "repo": "username/my-skin-repo",
@@ -3560,6 +3842,7 @@ curl -X POST http://localhost:8080/api/v1/webui/skins/install/github-branch \
 **Install from URL:**
 ```bash
 curl -X POST http://localhost:8080/api/v1/webui/skins/install/url \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://example.com/skin.zip"
@@ -3578,7 +3861,8 @@ curl http://localhost:8080/api/v1/webui/skins/my-skin-id
 
 **Remove Skin (user-installed only):**
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/webui/skins/my-skin-id
+curl -X DELETE http://localhost:8080/api/v1/webui/skins/my-skin-id \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 **Get Default Skin:**
@@ -3589,6 +3873,7 @@ curl http://localhost:8080/api/v1/webui/skins/default
 **Set Default Skin:**
 ```bash
 curl -X PUT http://localhost:8080/api/v1/webui/skins/default \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"skinId": "my-skin-id"}'
 ```
@@ -3597,7 +3882,7 @@ The default skin preference:
 - Defaults to `streamline-project` if no preference is set
 - Persists across app restarts
 - Automatically saved when user selects a skin in Settings view
-- Can be changed via API or Settings plugin
+- Can be changed via API (with an `extensions:manage` token) or in the app's Settings view; the Settings plugin's web page can no longer change it
 
 ---
 
@@ -3641,9 +3926,11 @@ Decaid tracks skin metadata in `.rea_metadata.json`:
 
 **Update Detection:**
 - User-installed skins are checked for updates via `updateAllSkins()`, which
-  runs on the app's periodic update check, from `POST /api/v1/webui/skins/update`,
-  from the web settings plugin's "Check for Skin Updates", and from the native
-  skin page's cogwheel menu under **Check for updates**.
+  runs on the app's periodic update check, from `POST /api/v1/webui/skins/update`
+  (which needs an `extensions:manage` token), and from the native skin page's
+  cogwheel menu under **Check for updates**. The web settings plugin's "Check
+  for Skin Updates" button no longer triggers it: the plugin's page holds no
+  token, so its request is refused with 401.
 - During an update check on the native skin page, the cogwheel shows progress
   and **Check for updates** is disabled until the check finishes, including
   after a failure. The menu can still be opened to access installation.

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:logging/logging.dart';
 import 'package:reaprime/src/models/device/device.dart' as device;
 import 'package:reaprime/src/models/device/ble_service_identifier.dart';
@@ -72,7 +73,10 @@ class UnifiedDe1Transport {
   ByteData? get latestStateInfo => _stateSubject.valueOrNull;
   Stream<ByteData> get shotSample => _shotSampleSubject.asBroadcastStream();
   Stream<ByteData> get shotSettings => _shotSettingsSubject.asBroadcastStream();
-  Stream<ByteData> get waterLevels => _waterLevelsSubject.asBroadcastStream();
+  Stream<ByteData> get waterLevels => _waterLevelsSubject.stream;
+
+  @visibleForTesting
+  bool get debugHasWaterLevelsListener => _waterLevelsSubject.hasListener;
   Stream<ByteData> get mmr => _mmrSubject.asBroadcastStream();
   Stream<ByteData> get fwMapRequest => _fwMapRequestSubject.asBroadcastStream();
   // Bengle 0xA014 fused puck-estimator sample (16 bytes, +5-byte Rev-2 tail).
@@ -898,9 +902,11 @@ class UnifiedDe1Transport {
     }
     try {
       _log.fine('about to write to ${endpoint.name}');
-      _log.fine(
-        'payload: ${data.map((el) => el.toRadixString(16).padLeft(2, '0')).join(' ')}',
-      );
+      if (endpoint != Endpoint.writeToMMR) {
+        _log.fine(
+          'payload: ${data.map((el) => el.toRadixString(16).padLeft(2, '0')).join(' ')}',
+        );
+      }
       switch (transportType) {
         case TransportType.ble:
           if (endpoint.uuid == null) {

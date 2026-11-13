@@ -100,6 +100,27 @@ Older firmware ignores the request while refilling but keeps it latched, then
 sleeps immediately after refill. The firmware itself suppresses sleep while a
 refill kit is active.
 
+## Refill threshold is volatile
+
+The `WaterLevels` (`A011`) refill threshold is not kept by the firmware across a
+power cycle; the machine comes back with its built-in default. de1app resends
+its saved `water_refill_point` on every connection. Decaid saves the value
+written through `POST /api/v1/machine/waterLevels` in the per-machine
+`MachineSettingsStore` bucket and rewrites it in the connect-time defaults,
+after flow calibration. Without a saved value nothing is written.
+
+## Refill stopped substate
+
+The DE1 main state value `0x11` is `Refill`, while substate value `0x11` is
+`Have we given up on a refill?`. These are independent firmware values. Decaid
+maps the pair to `needsWater`/`refillStopped`; `Refill` with `NoState` or
+`UserNotPresent` remains `needsWater`/`idle`.
+
+This mapping is not evidence that any historical incident had the stopped
+substate, and no hardware evidence was gathered for this change. Decaid does
+not infer the condition from tank levels or timers, retry automatically, or
+document the needs-water request as a verified refill-kit retry.
+
 ## Group-head controller start restriction
 
 When `MachineInfo.groupHeadControllerPresent` is true, DE1 firmware requires
@@ -124,8 +145,18 @@ descriptors are available, otherwise `serial-<basename>`. Candidates are
 deduplicated before probing, and the identity is reused for scan dedup,
 `Device.deviceId`, remembered devices, and API inventory. The legacy
 `serial-<basename>` alias remains accepted for quick connect and migrates to
-the canonical id after a successful connection. Android keeps its existing
-`UsbDevice.deviceId`-suffixed identities.
+the canonical id after a successful connection. On Android, a readable USB
+descriptor serial is canonical. If it is unavailable, the session uses
+`usb-{vid}-{pid}-unknown-{physicalId}` so distinct same-VID/PID attachments do
+not collide. This fallback is not remembered, preferred, or used for the
+`device:` machine-settings fallback; a later serial is adopted only after safe
+disconnect and redetection. Physical ownership also prevents descriptor timing
+from creating duplicate machines or Bengle tap transports during one
+attachment. Learned descriptor identity resolves remembered inventory and preferred
+selection without relabeling a live transport. If neither a physical attachment ID
+nor a descriptor serial is available, detection waits rather than aliasing
+independent devices by VID/PID. Android keeps the descriptor serial canonical
+after it is readable.
 
 - `<F>` MMR write frames are exactly 20 bytes. Short payloads are zero-padded
   without changing their length byte; oversized payloads fail.
@@ -217,6 +248,35 @@ available through `rawMachineInfo`.
 Bengle and unknown-SKU records are excluded. A rejected account session is not
 identity authority; logout or successful account replacement clears cached
 machine records and mappings.
+
+## Managed firmware model eligibility
+
+The bundled DE1 images use the same upstream image-routing policy as de1app. In
+[`de1_comms.tcl` at the 1352 artifact provenance commit](https://github.com/decentespresso/de1app/blob/74cacdcd2106f968c89c3a94c0fbcb615234913a/de1plus/de1_comms.tcl#L808-L925)
+and the 1358 artifact provenance commit
+([`de1_comms.tcl`](https://github.com/decentespresso/de1app/blob/7e94ef3c7c68a9b9ae7d188e08e3ee3776780489/de1plus/de1_comms.tcl#L837-L954)),
+`fwfile` returns `bootfwupdate.dat` for a DE1-family machine. The historical
+second-image branch is after that return and is explicitly marked obsolete as
+of 2020-06-06; its comments describe a temporary v1.0/v1.1 calibration
+migration restriction, not the current routing policy.
+
+The current upstream routing in commit
+[`d83a7f4`](https://github.com/decentespresso/de1app/blob/d83a7f46341c98c1367bb828b36d282e9214308c/de1plus/de1_comms.tcl#L963-L1000)
+splits out `benglefw.dat` only for Bengle and continues to select
+`bootfwupdate.dat` for every other DE1. The corresponding upstream firmware
+header definition identifies board marker `0xDE100001`, image version, body
+size, CPU byte count, reserved field, checksums, and IV
+([`binary.tcl`](https://github.com/decentespresso/de1app/blob/d83a7f46341c98c1367bb828b36d282e9214308c/de1plus/binary.tcl#L367-L390));
+its parser is at
+[`parse_firmware_file_header`](https://github.com/decentespresso/de1app/blob/d83a7f46341c98c1367bb828b36d282e9214308c/de1plus/binary.tcl#L1547-L1560).
+
+This is bounded upstream-policy evidence for treating canonical `DE1`,
+`DE1Plus`, and `DE1Cafe` as DE1-image models alongside the existing models. It
+is not a flash-safety proof: physical legacy-board flashing, bootloader
+behavior, reboot, post-update build, and machine operability remain unvalidated
+in this change. Managed eligibility therefore continues to require the
+canonical model name, manifest integrity and header checks, and never permits
+Bengle, `Unknown`, or unrecognized models.
 
 ## Hot water stop-at-weight
 
