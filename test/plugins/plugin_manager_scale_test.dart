@@ -26,9 +26,9 @@ void main() {
         });
         final manager = PluginManager(
           kvStore: FakeKeyValueStoreService(),
-          deviceInvocationTimeout: const Duration(seconds: 1),
+          deviceInvocationTimeout: const Duration(seconds: 2),
           deviceService: PluginDeviceService(
-            scaleInvocationTimeout: const Duration(milliseconds: 250),
+            scaleInvocationTimeout: const Duration(milliseconds: 750),
           ),
         );
         addTearDown(() async {

@@ -163,7 +163,9 @@ class _QuietSerialDe1 extends SerialTransport {
       response[1] = request[1];
       response[2] = request[2];
       response[3] = request[3];
-      scheduleMicrotask(() => input.add('[E]${_hexString(response)}\n'));
+      scheduleMicrotask(() {
+        if (!input.isClosed) input.add('[E]${_hexString(response)}\n');
+      });
     }
   }
 }
@@ -356,6 +358,10 @@ void main() {
     final serial = _QuietSerialDe1();
     final de1 = UnifiedDe1(transport: serial);
     addTearDown(de1.dispose);
+    addTearDown(controller.dispose);
+    final defaultsSettled = controller.initSettled.firstWhere(
+      (generation) => generation != null,
+    )..ignore();
 
     // A serial machine never pushes K; the transport seeds the subject
     // from its local mirror, so the controller can write defaults and
@@ -388,5 +394,6 @@ void main() {
       greaterThan(fanIndex),
       reason: 'device writes stay serialized: fan before steam',
     );
+    await defaultsSettled.timeout(const Duration(seconds: 8));
   });
 }
