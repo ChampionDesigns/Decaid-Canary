@@ -39,13 +39,18 @@ void main() {
     required bool blockOnNoScale,
     required bool scaleConnected,
     required bool cleaningProfile,
+    bool machineConnected = true,
   }) async {
     final deviceController = DeviceController([MockDeviceDiscoveryService()]);
     await deviceController.initialize();
     controller = De1Controller(controller: deviceController);
     machine = _RecordingMockDe1();
-    controller.adoptDevice(machine);
-    await controller.initSettled.firstWhere((generation) => generation != null);
+    if (machineConnected) {
+      controller.adoptDevice(machine);
+      await controller.initSettled.firstWhere(
+        (generation) => generation != null,
+      );
+    }
 
     final mockSettings = MockSettingsService();
     await mockSettings.setBlockOnNoScale(blockOnNoScale);
@@ -105,6 +110,42 @@ void main() {
         },
       );
     }
+
+    test('answers 400 for an unknown name before the no-scale block', () async {
+      await wire(
+        blockOnNoScale: true,
+        scaleConnected: false,
+        cleaningProfile: false,
+      );
+      final res = await requestState('brew');
+      expect(res.statusCode, 400);
+      final body = jsonDecode(await res.readAsString()) as Map<String, dynamic>;
+      expect(body.containsKey('type'), isFalse);
+      expect(machine.requestedStates, isEmpty);
+    });
+
+    test('answers 400 for an unknown name with no machine connected', () async {
+      await wire(
+        blockOnNoScale: false,
+        scaleConnected: true,
+        cleaningProfile: false,
+        machineConnected: false,
+      );
+      final res = await requestState('brew');
+      expect(res.statusCode, 400);
+    });
+
+    test('answers 500 for a known name with no machine connected', () async {
+      await wire(
+        blockOnNoScale: false,
+        scaleConnected: true,
+        cleaningProfile: false,
+        machineConnected: false,
+      );
+      final res = await requestState('idle');
+      expect(res.statusCode, 500);
+      expect(machine.requestedStates, isEmpty);
+    });
 
     for (final name in [
       'idle',
