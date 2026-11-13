@@ -580,12 +580,36 @@ Returns current machine state snapshot.
 - `pouring` - Extracting espresso
 - `pouringDone` - Shot complete
 - `cleaningStart` - Starting cleaning
-- `cleaingGroup` - Cleaning group head
+- `cleaningGroup` - Cleaning group head
 - `cleanSoaking` - Soaking during clean
 - `cleaningSteam` - Steam cleaning
 - `pausedSteam` - Steam paused between pours
 - `puffing` - Steam purge after steam stops
 - `refillStopped` - Refill kit has given up; reports with the `needsWater` state
+- `pumpZeroing` - Waiting for the pump boards to zero
+- `errorNaN` - A calculation gave NaN
+- `errorInf` - A calculation gave infinity
+- `errorGeneric` - Error with no more specific description
+- `errorAcc` - ACC not responding, unlocked, or incorrectly programmed
+- `errorTSensor` - Temperature sensor error
+- `errorPSensor` - Pressure sensor error
+- `errorWLevel` - Water level sensor error
+- `errorDip` - DIP switches hold the machine in the error state
+- `errorAssertion` - Firmware assertion failed
+- `errorUnsafe` - Unsafe value assigned to a variable
+- `errorInvalidParam` - Invalid parameter passed to a function
+- `errorFlash` - Error accessing external flash
+- `errorOOM` - Could not allocate memory
+- `errorDeadline` - Realtime deadline missed
+- `errorHiCurrent` - Measured current is out of bounds
+- `errorLoCurrent` - Not enough current, although a load is on
+- `errorBootFill` - Could not reach pressure in the boot pressure test, possibly no water
+- `errorNoAC` - No AC power
+- `errorPumpZero` - Pump zeroing failed
+- `errorPumpNeedsCalibration` - Pump needs calibration
+- `errorFrontSwitchOff` - Front switch off
+- `errorPumpFault` - Pump reported a fault
+- `errorPumpSilent` - Pump board does not respond
 
 #### Request State Change
 ```http
