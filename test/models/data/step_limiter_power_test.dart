@@ -94,6 +94,27 @@ void main() {
         ),
       );
     });
+
+    for (final (limiter, field) in [
+      (<String, dynamic>{'value': 'NaN', 'range': 1}, 'value'),
+      (<String, dynamic>{'value': 'Infinity', 'range': 1}, 'value'),
+      (<String, dynamic>{'value': 6, 'range': 'NaN'}, 'range'),
+      (<String, dynamic>{'value': 6, 'range': '-Infinity'}, 'range'),
+      (<String, dynamic>{'value': double.infinity, 'range': 1}, 'value'),
+    ]) {
+      test('a non-finite limiter $limiter refuses by naming "$field"', () {
+        expect(
+          () => ProfileStep.fromJson(powerStepJson(limiter: limiter)),
+          throwsA(
+            isA<FormatException>().having(
+              (e) => e.message,
+              'message',
+              'limiter "$field" must be a finite number',
+            ),
+          ),
+        );
+      });
+    }
   });
 
   group('encoder bytes for an accepted limiter', () {
