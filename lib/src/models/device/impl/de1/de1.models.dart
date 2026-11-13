@@ -163,6 +163,7 @@ enum De1SubState {
   pausedSteam(0x12, 'Are we paused in steam?'),
   userNotPresent(0x13, 'User is not present.'),
   puffing(0x14, 'Puffing.'),
+  pumpZeroing(0x15, 'Waiting for the pump boards to zero.'),
 
   errorNaN(200, 'Something died with a NaN.'),
   errorInf(201, 'Something died with an Inf.'),
@@ -187,7 +188,12 @@ enum De1SubState {
     216,
     'Could not get up to pressure during boot pressure test, possibly no water.',
   ),
-  errorNoAC(217, 'Front button off.');
+  errorNoAC(217, 'No AC power.'),
+  errorPumpZero(218, 'Pump zeroing failed.'),
+  errorPumpNeedsCalibration(219, 'Pump needs calibration.'),
+  errorFrontSwitchOff(220, 'Front switch off.'),
+  errorPumpFault(221, 'Pump reported a fault.'),
+  errorPumpSilent(222, 'Pump board does not respond.');
 
   final int hexValue;
   final String description;

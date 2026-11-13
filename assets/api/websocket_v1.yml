@@ -828,12 +828,36 @@ components:
         - pouring
         - pouringDone
         - cleaningStart
-        - cleaingGroup
+        - cleaningGroup
         - cleanSoaking
         - cleaningSteam
         - pausedSteam
         - puffing
         - refillStopped
+        - pumpZeroing
+        - errorNaN
+        - errorInf
+        - errorGeneric
+        - errorAcc
+        - errorTSensor
+        - errorPSensor
+        - errorWLevel
+        - errorDip
+        - errorAssertion
+        - errorUnsafe
+        - errorInvalidParam
+        - errorFlash
+        - errorOOM
+        - errorDeadline
+        - errorHiCurrent
+        - errorLoCurrent
+        - errorBootFill
+        - errorNoAC
+        - errorPumpZero
+        - errorPumpNeedsCalibration
+        - errorFrontSwitchOff
+        - errorPumpFault
+        - errorPumpSilent
       example: preparingForShot
     ShotSettings:
       type: object
