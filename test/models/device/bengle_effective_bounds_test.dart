@@ -183,7 +183,7 @@ void main() {
       expect(
         [BengleMmr.scaleCalCmd.min, BengleMmr.scaleCalCmd.max],
         [0, 3],
-        reason: 'ScaleCalCmd 4 and 5 end in the Error step (System.cpp:2427)',
+        reason: 'the firmware ends ScaleCalCmd 4 and 5 in its error step',
       );
       expect(
         [BengleMmr.scaleCalWeight.min, BengleMmr.scaleCalWeight.max],

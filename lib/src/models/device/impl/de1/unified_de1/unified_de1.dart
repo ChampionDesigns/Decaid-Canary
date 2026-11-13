@@ -9,6 +9,7 @@ import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/de1_firmwaremodel.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/bengle_interface.dart';
+import 'package:reaprime/src/models/device/firmware_wake_entry.dart';
 import 'package:reaprime/src/models/device/de1_rawmessage.dart';
 import 'package:reaprime/src/models/device/device.dart';
 import 'package:reaprime/src/models/device/device_implementation.dart';
@@ -1032,8 +1033,8 @@ class UnifiedDe1 implements De1Interface {
   }
 
   @protected
-  ({int? min, int? max}) mmrItemWriteBound(MMRItem item) =>
-      (min: item.min, max: item.max);
+  MmrWriteBound mmrItemWriteBound(MMRItem item) =>
+      isBengle ? bengleWriteBound(item) : (min: item.min, max: item.max);
 
   @protected
   Future<void> writeMmrInt(MmrAddress addr, int value) async {
