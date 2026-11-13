@@ -30,9 +30,6 @@ class Bengle extends UnifiedDe1
   String get name => "Bengle";
 
   @override
-  MmrWriteBound mmrItemWriteBound(MMRItem item) => bengleWriteBound(item);
-
-  @override
   Future<void> setCupWarmerTemperature(double celsius) =>
       writeMmrScaled(BengleMmr.matSetPoint, celsius);
 

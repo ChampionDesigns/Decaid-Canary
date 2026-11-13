@@ -1032,8 +1032,8 @@ class UnifiedDe1 implements De1Interface {
   }
 
   @protected
-  ({int? min, int? max}) mmrItemWriteBound(MMRItem item) =>
-      (min: item.min, max: item.max);
+  MmrWriteBound mmrItemWriteBound(MMRItem item) =>
+      isBengle ? bengleWriteBound(item) : (min: item.min, max: item.max);
 
   @protected
   Future<void> writeMmrInt(MmrAddress addr, int value) async {
