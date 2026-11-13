@@ -17,23 +17,22 @@ class UnstorableWakeWindowException implements Exception {
 }
 
 FirmwareWakeWindow firmwareStorableWakeWindow(FirmwareWakeWindow window) {
-  final sent = FirmwareWakeWindow(
+  if (window.dow < 0 ||
+      window.dow > kFirmwareWakeMaxDow ||
+      window.startMin < 0 ||
+      window.startMin >= window.endMin ||
+      window.endMin > kFirmwareWakeMaxEndMin) {
+    throw UnstorableWakeWindowException(window);
+  }
+  return FirmwareWakeWindow(
     dow: window.dow,
     startMin: window.startMin,
     endMin: _storableEndMin(window),
   );
-  if (sent.dow < 0 ||
-      sent.dow > kFirmwareWakeMaxDow ||
-      sent.startMin < 0 ||
-      sent.startMin >= sent.endMin ||
-      sent.endMin > kFirmwareWakeMaxEndMin) {
-    throw UnstorableWakeWindowException(window);
-  }
-  return sent;
 }
 
 int _storableEndMin(FirmwareWakeWindow window) {
   final end = window.endMin;
   if (window.pack() < _float32ExactIntegerLimit || end.isEven) return end;
-  return end + 1 <= kFirmwareWakeMaxEndMin ? end + 1 : end - 1;
+  return end + 1;
 }

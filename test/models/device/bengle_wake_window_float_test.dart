@@ -69,7 +69,7 @@ void main() {
       var sentCount = 0;
       var refusedCount = 0;
       for (var dow = 0; dow <= 6; dow++) {
-        for (var end = 0; end <= kFirmwareWakeMaxEndMin; end++) {
+        for (var end = 0; end <= kFirmwareWakeMaxEndMin + 1; end++) {
           for (final start in {0, end - 1, end - 2, 420}) {
             if (start < 0) continue;
             final window = FirmwareWakeWindow(
@@ -82,6 +82,11 @@ void main() {
               sent = firmwareStorableWakeWindow(window);
             } on UnstorableWakeWindowException catch (e) {
               expect(e.window, window);
+              expect(
+                start >= end || end > kFirmwareWakeMaxEndMin,
+                isTrue,
+                reason: '$window was refused',
+              );
               refusedCount++;
               continue;
             }
@@ -129,13 +134,15 @@ void main() {
       }
     });
 
-    test('an odd end past the largest end moves one minute earlier', () {
-      expect(
-        firmwareStorableWakeWindow(
-          const FirmwareWakeWindow(dow: 6, startMin: 0, endMin: 1441),
-        ),
-        const FirmwareWakeWindow(dow: 6, startMin: 0, endMin: 1440),
-      );
+    test('an end past the largest end is refused on every day', () {
+      for (var dow = 0; dow <= 6; dow++) {
+        final window = FirmwareWakeWindow(dow: dow, startMin: 0, endMin: 1441);
+        expect(
+          () => firmwareStorableWakeWindow(window),
+          throwsA(isA<UnstorableWakeWindowException>()),
+          reason: '$window',
+        );
+      }
     });
 
     test('a window outside the firmware table is refused', () {
@@ -215,6 +222,42 @@ void main() {
         for (final w in windows) w.pack(),
       ]);
     });
+
+    for (final dow in const [4, 6]) {
+      test(
+        'dow $dow with end 1441 is refused before the first MMR write',
+        () async {
+          final transport = FakeBleTransport();
+          final bengle = await _connectedBengle(transport);
+          final refused = FirmwareWakeWindow(
+            dow: dow,
+            startMin: 0,
+            endMin: 1441,
+          );
+
+          await expectLater(
+            bengle.pushFirmwareWakeSchedule(
+              secondsSinceSundayLocal: 0,
+              windows: [refused],
+            ),
+            throwsA(
+              isA<UnstorableWakeWindowException>().having(
+                (e) => e.window,
+                'window',
+                refused,
+              ),
+            ),
+          );
+
+          expect(
+            transport.writes.where(
+              (w) => w.characteristicUUID == Endpoint.writeToMMR.uuid,
+            ),
+            isEmpty,
+          );
+        },
+      );
+    }
 
     test('a refused window fails the push before the first MMR write, so the '
         'table in the machine stays as it was', () async {
