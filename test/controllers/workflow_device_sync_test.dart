@@ -17,6 +17,7 @@ import 'package:reaprime/src/controllers/connection_manager.dart';
 import 'package:reaprime/src/settings/settings_controller.dart';
 
 import '../helpers/fake_ble_transport.dart';
+import '../helpers/fake_time.dart';
 import '../helpers/mock_device_discovery_service.dart';
 import '../helpers/mock_device_scanner.dart';
 import '../helpers/mock_scale_controller.dart';
@@ -611,20 +612,21 @@ void main() {
       await settleConnectPush();
       flaky.totalCalls = 0;
       flaky.failures = 100;
+      final time = FakeTime();
 
-      applyProfile('Same');
-      await Future<void>.delayed(const Duration(milliseconds: 5));
+      time.run(() => applyProfile('Same'));
+      await time.elapse(const Duration(milliseconds: 5));
       expect(flaky.totalCalls, 1);
 
-      applyProfile('Same');
-      await Future<void>.delayed(const Duration(milliseconds: 5));
+      time.run(() => applyProfile('Same'));
+      await time.elapse(const Duration(milliseconds: 5));
       expect(
         flaky.totalCalls,
         1,
         reason: 'identical content must not reset the backoff to now',
       );
 
-      await Future<void>.delayed(const Duration(milliseconds: 40));
+      await time.elapse(const Duration(milliseconds: 40));
       expect(
         flaky.totalCalls,
         greaterThanOrEqualTo(2),
