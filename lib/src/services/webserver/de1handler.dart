@@ -938,8 +938,11 @@ class De1Handler {
     Request request,
     String newState,
   ) async {
+    final requestState = MachineState.values.asNameMap()[newState];
+    if (requestState == null) {
+      return jsonBadRequest({'details': 'Unknown machine state: $newState'});
+    }
     return withDe1((de1) async {
-      var requestState = MachineState.values.byName(newState);
       final blockOnNoScale = _settingsController.blockOnNoScale;
       final scaleConnected =
           _scaleController.currentConnectionState ==
