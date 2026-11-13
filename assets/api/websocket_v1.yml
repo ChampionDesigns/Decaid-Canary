@@ -803,8 +803,10 @@ components:
     MachineState:
       type: string
       enum:
-        - idle
         - booting
+        - busy
+        - idle
+        - schedIdle
         - sleeping
         - heating
         - preheating
@@ -812,12 +814,16 @@ components:
         - hotWater
         - flush
         - steam
+        - steamRinse
         - skipStep
         - cleaning
         - descaling
-        - transportMode
+        - calibration
+        - selfTest
+        - airPurge
         - needsWater
         - error
+        - fwUpgrade
       example: espresso
     MachineSubstate:
       type: string
