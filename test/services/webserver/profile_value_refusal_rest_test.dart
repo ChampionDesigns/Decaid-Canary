@@ -35,7 +35,10 @@ class _EncoderBackedDe1 extends MockDe1 {
   }
 }
 
-Map<String, dynamic> _profileJson({required Object temperature}) => {
+Map<String, dynamic> _profileJson({
+  Object temperature = 92,
+  Object seconds = 30,
+}) => {
   'version': '2',
   'title': 'Out of range',
   'beverage_type': 'espresso',
@@ -55,7 +58,7 @@ Map<String, dynamic> _profileJson({required Object temperature}) => {
       'pump': 'pressure',
       'transition': 'fast',
       'volume': 0,
-      'seconds': 30,
+      'seconds': seconds,
       'temperature': temperature,
       'sensor': 'coffee',
       'pressure': 9.0,
@@ -100,41 +103,58 @@ void main() {
       handler = app.call;
     });
 
-    for (final (label, temperature, shown) in <(String, Object, String)>[
-      ('130', 130, '130.0'),
-      ('"NaN"', 'NaN', 'NaN'),
-    ]) {
-      test(
-        'a step temperature of $label answers 400 and writes nothing',
-        () async {
-          de1.transport.writes.clear();
-          final response = await handler(
-            Request(
-              'POST',
-              Uri.parse('http://localhost/api/v1/machine/profile'),
-              body: jsonEncode(_profileJson(temperature: temperature)),
-              headers: {HttpHeaders.contentTypeHeader: 'application/json'},
-            ),
-          );
+    for (final (label, json, field, shown)
+        in <(String, Map<String, dynamic>, String, String)>[
+          (
+            'a step temperature of 130',
+            _profileJson(temperature: 130),
+            'temperature',
+            '130.0',
+          ),
+          (
+            'a step temperature of "NaN"',
+            _profileJson(temperature: 'NaN'),
+            'temperature',
+            'NaN',
+          ),
+          (
+            'step seconds of -1e308',
+            _profileJson(seconds: -1e308),
+            'seconds',
+            '-1e+308',
+          ),
+        ]) {
+      test('$label answers 400 and writes nothing', () async {
+        de1.transport.writes.clear();
+        final response = await handler(
+          Request(
+            'POST',
+            Uri.parse('http://localhost/api/v1/machine/profile'),
+            body: jsonEncode(json),
+            headers: {HttpHeaders.contentTypeHeader: 'application/json'},
+          ),
+        );
 
-          expect(response.statusCode, 400);
-          final body = jsonDecode(await response.readAsString());
-          expect(body['error'], 'Unsupported profile');
-          expect(
-            body['message'],
-            allOf(contains('step 2'), contains('temperature'), contains(shown)),
-          );
-          expect(de1.setProfileCalls, 1);
-          expect(de1.transport.writes, isEmpty);
-        },
-      );
+        expect(response.statusCode, 400);
+        final body = jsonDecode(await response.readAsString());
+        expect(body['error'], 'Unsupported profile');
+        expect(
+          body['message'],
+          allOf(contains('step 2'), contains(field), contains(shown)),
+        );
+        expect(de1.setProfileCalls, 1);
+        expect(de1.transport.writes, isEmpty);
+      });
     }
   });
 
   group('PUT /api/v1/workflow', () {
-    test(
-      'answers 200 first; WorkflowDeviceSync then tries once and parks',
-      () async {
+    for (final (label, json) in <(String, Map<String, dynamic>)>[
+      ('a step temperature of 130', _profileJson(temperature: 130)),
+      ('step seconds of -1e308', _profileJson(seconds: -1e308)),
+    ]) {
+      test('with $label answers 200 first; WorkflowDeviceSync then tries once '
+          'and parks', () async {
         final sync = WorkflowDeviceSync(
           workflowController: workflow,
           de1Controller: controller,
@@ -157,7 +177,7 @@ void main() {
           Request(
             'PUT',
             Uri.parse('http://localhost/api/v1/workflow'),
-            body: jsonEncode({'profile': _profileJson(temperature: 130)}),
+            body: jsonEncode({'profile': json}),
             headers: {'content-type': 'application/json'},
           ),
         );
@@ -173,7 +193,7 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 200));
         expect(de1.setProfileCalls, 1, reason: 'a refused profile is parked');
         expect(de1.transport.writes, isEmpty);
-      },
-    );
+      });
+    }
   });
 }

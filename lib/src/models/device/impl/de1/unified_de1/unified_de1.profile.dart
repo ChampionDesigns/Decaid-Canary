@@ -93,7 +93,7 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       if (!_isHoldStep(step)) {
         requireNumber(_targetField(step), step.getTarget(), i);
       }
-      if (step.seconds.isNaN || step.seconds == double.negativeInfinity) {
+      if (!_encodesSeconds(step.seconds)) {
         refuse('seconds', step.seconds, 'cannot be encoded', i);
       }
       requireNumber('exit value', step.exit?.value ?? 0, i);
@@ -116,6 +116,9 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       refuse('tank temperature', profile.tankTemperature, 'cannot be encoded');
     }
   }
+
+  bool _encodesSeconds(double seconds) =>
+      !seconds.isNaN && (seconds >= 12.75 || (0.5 + seconds * 10).isFinite);
 
   String _targetField(ProfileStep step) => switch (step) {
     ProfileStepFlow() => 'flow',

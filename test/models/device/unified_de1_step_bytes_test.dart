@@ -10,6 +10,7 @@ import '../../helpers/fake_ble_transport.dart';
 
 const _setpointByte = 2;
 const _temperatureByte = 3;
+const _secondsByte = 4;
 const _exitByte = 5;
 
 int _baseByte(double value, double scale) => (0.5 + value * scale).toInt();
@@ -336,6 +337,12 @@ void main() {
           double.negativeInfinity,
           _pressureStep(1, seconds: double.negativeInfinity),
         ),
+        ('seconds', -1e308, _pressureStep(1, seconds: -1e308)),
+        (
+          'seconds',
+          -double.maxFinite,
+          _pressureStep(1, seconds: -double.maxFinite),
+        ),
         ('volume', nan, _pressureStep(1, volume: nan)),
         ('volume', double.infinity, _pressureStep(1, volume: double.infinity)),
         (
@@ -360,6 +367,20 @@ void main() {
           _refusal(null, 'tank temperature', nan),
         );
       });
+
+      for (final (label, seconds) in <(String, double)>[
+        ('1e308', 1e308),
+        ('the largest double', double.maxFinite),
+        ('+Infinity', double.infinity),
+      ]) {
+        test('$label seconds in a later step uploads as 255', () async {
+          final frames = await _upload(machine.build, [
+            _pressureStep(0),
+            _pressureStep(1, seconds: seconds),
+          ]);
+          expect(frames[1]?[_secondsByte], 255);
+        });
+      }
 
       test(
         'a NaN limiter range under a 0 limiter value still uploads',
