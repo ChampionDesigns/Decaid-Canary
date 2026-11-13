@@ -126,6 +126,12 @@ void main() {
           ),
           ('step seconds of -1', _profileJson(seconds: -1), 'seconds', '-1'),
           ('a step volume of -5', _profileJson(volume: -5), 'volume', '-5'),
+          (
+            'a step volume of 2000',
+            _profileJson(volume: 2000),
+            'volume',
+            '2000',
+          ),
         ]) {
       test('$label answers 400 and writes nothing', () async {
         de1.transport.writes.clear();
@@ -157,6 +163,7 @@ void main() {
       ('step seconds of -1e308', _profileJson(seconds: -1e308)),
       ('step seconds of -1', _profileJson(seconds: -1)),
       ('a step volume of -5', _profileJson(volume: -5)),
+      ('a step volume of 2000', _profileJson(volume: 2000)),
     ]) {
       test('with $label answers 200 first; WorkflowDeviceSync then tries once '
           'and parks', () async {

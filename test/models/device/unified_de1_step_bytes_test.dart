@@ -348,6 +348,9 @@ void main() {
         ),
         ('volume', nan, _pressureStep(1, volume: nan)),
         ('volume', -5.0, _pressureStep(1, volume: -5)),
+        ('volume', 1024.0, _pressureStep(1, volume: 1024)),
+        ('volume', 2000.0, _pressureStep(1, volume: 2000)),
+        ('volume', 65536.0, _pressureStep(1, volume: 65536)),
         (
           'volume',
           -double.maxFinite,
@@ -400,12 +403,23 @@ void main() {
         expect(frames[1]?.sublist(_volumeByte, _volumeByte + 2), [0x04, 0x00]);
       });
 
-      test('the largest double volume uploads as FF FF', () async {
+      test('the largest double volume is refused', () async {
+        await _expectRefused(
+          machine.build,
+          _profile([
+            _pressureStep(0),
+            _pressureStep(1, volume: double.maxFinite),
+          ]),
+          _refusal(2, 'volume', double.maxFinite),
+        );
+      });
+
+      test('1023 volume uploads as 07 FF', () async {
         final frames = await _upload(machine.build, [
           _pressureStep(0),
-          _pressureStep(1, volume: double.maxFinite),
+          _pressureStep(1, volume: 1023),
         ]);
-        expect(frames[1]?.sublist(_volumeByte, _volumeByte + 2), [0xFF, 0xFF]);
+        expect(frames[1]?.sublist(_volumeByte, _volumeByte + 2), [0x07, 0xFF]);
       });
 
       test(

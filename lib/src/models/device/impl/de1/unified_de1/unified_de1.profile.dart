@@ -8,6 +8,7 @@ part of 'unified_de1.dart';
 const double _bengleMaxFlowMlPerSec = 20.0;
 
 const double _maxStepTemperature = 127.5;
+const int _maxStepVolume = 1023;
 
 class ProfileValueUnsupportedException extends ProfileModeUnsupportedException
     implements UnsupportedError {
@@ -101,8 +102,8 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       requireNotNegative('seconds', step.seconds, i);
       requireNumber('exit value', step.exit?.value ?? 0, i);
       requireNotNegative('volume', step.volume, i);
-      if (step.volume == double.infinity) {
-        refuse('volume', step.volume, 'cannot be encoded', i);
+      if (step.volume > _maxStepVolume) {
+        refuse('volume', step.volume, 'is above $_maxStepVolume ml', i);
       }
       final limiter = step.limiter;
       if (limiter != null && limiter.value != 0) {
