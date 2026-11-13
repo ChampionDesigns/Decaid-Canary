@@ -6,6 +6,7 @@ import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/errors.dart';
+
 import '../../helpers/fake_ble_transport.dart';
 
 const _setpointByte = 2;
