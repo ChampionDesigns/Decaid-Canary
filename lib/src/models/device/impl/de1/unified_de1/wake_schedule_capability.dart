@@ -15,7 +15,7 @@ mixin WakeScheduleCapability on UnifiedDe1 {
     await writeMmrInt(BengleMmr.scheduleControl, 0);
     await writeMmrInt(
       BengleMmr.setLocalTimeOfWeek,
-      secondsSinceSundayLocal.clamp(0, 604800),
+      secondsSinceSundayLocal.clamp(0, 604799),
     );
     for (final window in windows.take(kFirmwareMaxWakeWindows)) {
       await writeMmrInt(BengleMmr.scheduleEntry, window.pack());

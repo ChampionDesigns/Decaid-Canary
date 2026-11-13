@@ -36,7 +36,7 @@ void main() {
     expect(await bengle.getStopAtWeightTarget(), 42.5);
   });
 
-  test('clamps to the firmware EndOfShotWeight range 0..10000 g', () async {
+  test('clamps to the firmware EndOfShotWeight range 0..3000 g', () async {
     final transport = FakeBleTransport()
       ..queueOnConnectResponses(v13Model: 128)
       ..queuePaletteHydrationResponses();
@@ -45,9 +45,9 @@ void main() {
     addTearDown(bengle.dispose);
     transport.writes.clear();
 
-    expect(BengleScaleMmr.endOfShotWeight.max, 1000000);
+    expect(BengleScaleMmr.endOfShotWeight.max, 300000);
 
-    await bengle.setStopAtWeightTarget(10000.0);
+    await bengle.setStopAtWeightTarget(3000.0);
     final upperWrite = transport.writes.singleWhere(
       (entry) => entry.characteristicUUID == Endpoint.writeToMMR.uuid,
     );
@@ -56,21 +56,21 @@ void main() {
       0x80,
       0x38,
       0x64,
-      0x40,
-      0x42,
-      0x0F,
+      0xE0,
+      0x93,
+      0x04,
       0x00,
     ]);
 
     transport.writes.clear();
-    await bengle.setStopAtWeightTarget(20000.0);
+    await bengle.setStopAtWeightTarget(5000.0);
     final clampedWrite = transport.writes.singleWhere(
       (entry) => entry.characteristicUUID == Endpoint.writeToMMR.uuid,
     );
     expect(
       clampedWrite.data.sublist(0, 8),
       upperWrite.data.sublist(0, 8),
-      reason: 'over-range targets clamp to 10000 g before hitting the wire',
+      reason: 'over-range targets clamp to 3000 g before hitting the wire',
     );
   });
 }
