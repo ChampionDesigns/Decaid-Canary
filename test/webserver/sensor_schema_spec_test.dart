@@ -74,9 +74,8 @@ void main() {
   group('puck-estimator sensor in the sensor schemas', () {
     final channels = RegExp(r"DataChannel\(\s*key: '(\w+)'")
         .allMatches(
-          File(
-            'lib/src/models/device/impl/bengle/bengle_puck_estimator.dart',
-          ).readAsStringSync(),
+          File('lib/src/models/device/impl/bengle/bengle_puck_estimator.dart')
+              .readAsStringSync(),
         )
         .map((m) => m.group(1)!)
         .toList();

@@ -35,9 +35,8 @@ List<int> _mmrWritesTo(FakeBleTransport transport, int address) {
           entry.data[1] == (address >> 16) & 0xFF &&
           entry.data[2] == (address >> 8) & 0xFF &&
           entry.data[3] == address & 0xFF)
-        ByteData.sublistView(
-          Uint8List.fromList(entry.data.sublist(4, 8)),
-        ).getUint32(0, Endian.little),
+        ByteData.sublistView(Uint8List.fromList(entry.data.sublist(4, 8)))
+            .getUint32(0, Endian.little),
   ];
 }
 
