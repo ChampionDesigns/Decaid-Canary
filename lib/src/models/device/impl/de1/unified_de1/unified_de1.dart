@@ -449,7 +449,7 @@ class UnifiedDe1 implements De1Interface, CanonicalDeviceIdentity {
     _refillKitDetected = _unpackMMRInt(
       await _mmrRead(MMRItem.refillKitPresent),
     );
-    final profileModeCaps = await _readProfileModeCaps();
+    final profileModeCaps = isBengle ? await _readProfileModeCaps() : 0;
     try {
       _cachedFlowEstimation = await getFlowEstimation();
     } catch (e) {
