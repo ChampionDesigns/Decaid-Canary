@@ -262,8 +262,9 @@ class _RefusingDe1 extends TestDe1 {
 }
 
 class _GatedRefusingDe1 extends TestDe1 {
-  _GatedRefusingDe1({required this.refuseTitle});
+  _GatedRefusingDe1({required this.refuseTitle, this.refuseWith});
   final String refuseTitle;
+  final Exception Function(Profile profile)? refuseWith;
   final List<Profile> setProfileCalls = [];
   final List<Completer<void>> _gates = [];
 
@@ -278,6 +279,8 @@ class _GatedRefusingDe1 extends TestDe1 {
     _gates.add(gate);
     await gate.future;
     if (profile.title == refuseTitle) {
+      final refusal = refuseWith;
+      if (refusal != null) throw refusal(profile);
       throw const ProfileModeUnsupportedException(
         'This machine does not support the Lever pump mode used by this '
         'profile.',
@@ -1556,6 +1559,69 @@ void main() {
 
       refusing.setConnectionState(ConnectionState.disconnected);
       await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(cleared, 1);
+    });
+
+    test('a value refusal surfaces once and a newer selection still '
+        'uploads', () async {
+      final gated = _GatedRefusingDe1(
+        refuseTitle: 'Too hot',
+        refuseWith: (profile) => ProfileValueUnsupportedException(
+          field: 'temperature',
+          value: 120,
+          problem: 'is above the machine limit',
+          stepNumber: 1,
+          stepName: 'preinfusion',
+          profileTitle: profile.title,
+        ),
+      );
+      final controller = await connect(gated);
+      final errors = <ConnectionError>[];
+      var cleared = 0;
+      final s = WorkflowDeviceSync(
+        workflowController: wf,
+        de1Controller: controller,
+        retryDelays: const [Duration(milliseconds: 20)],
+        onUploadError: errors.add,
+        onUploadErrorCleared: () => cleared++,
+      );
+      activeSync = s;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      while (gated.pendingUploads > 0) {
+        gated.completeNext();
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      gated.setProfileCalls.clear();
+
+      wf.setWorkflow(wf.currentWorkflow.copyWith(profile: _profile('Too hot')));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Adaptive')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(gated.setProfileCalls.map((p) => p.title), ['Too hot']);
+
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(errors.length, 1, reason: 'the value refusal is shown once');
+      expect(errors.single.kind, ConnectionErrorKind.profileUploadFailed);
+      expect(
+        errors.single.message,
+        contains('temperature 120.0 is above the machine limit'),
+      );
+      expect(gated.setProfileCalls.map((p) => p.title), [
+        'Too hot',
+        'Adaptive',
+      ], reason: 'the newer selection uploads after a value refusal');
+
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(gated.setProfileCalls.map((p) => p.title), [
+        'Too hot',
+        'Adaptive',
+      ], reason: 'Too hot is not retried');
+      expect(gated.pendingUploads, 0);
+      expect(errors.length, 1);
       expect(cleared, 1);
     });
   });

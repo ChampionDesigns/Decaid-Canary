@@ -116,9 +116,7 @@ class WorkflowDeviceSync {
           if (generation != _generation) return;
           _refusedProfile = profile;
           _lastPushedProfile = null;
-          _log.warning(
-            'setProfile refused (unsupported pump step types): ${e.message}',
-          );
+          _log.warning('setProfile refused by the machine model: ${e.message}');
           _surfaceRefusal(e);
           continue;
         } on DeviceNotConnectedException {
