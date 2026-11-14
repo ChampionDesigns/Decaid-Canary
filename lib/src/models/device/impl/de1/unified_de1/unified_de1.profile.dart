@@ -9,6 +9,7 @@ const double _bengleMaxFlowMlPerSec = 20.0;
 
 const double _maxStepTemperature = 127.5;
 const int _maxStepVolume = 1023;
+const double _maxPowerExitWatts = 25.5;
 
 class ProfileValueUnsupportedException extends ProfileModeUnsupportedException
     implements UnsupportedError {
@@ -110,6 +111,18 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       }
       requireNotNegative('seconds', step.seconds, i);
       requireNumber('exit value', step.exit?.value ?? 0, i);
+      final exit = step.exit;
+      if (exit != null && exit.type == ExitType.power) {
+        final watts = exit.value;
+        if (!(watts >= 0 && watts <= _maxPowerExitWatts)) {
+          refuse(
+            'power exit value',
+            watts,
+            'is outside 0 to $_maxPowerExitWatts W',
+            i,
+          );
+        }
+      }
       requireNotNegative('volume', step.volume, i);
       if (step.volume > _maxStepVolume) {
         refuse('volume', step.volume, 'is above $_maxStepVolume ml', i);

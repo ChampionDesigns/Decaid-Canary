@@ -206,6 +206,78 @@ void main() {
     });
   });
 
+  group('POST /api/v1/machine/profile power exit', () {
+    late Handler handler;
+
+    setUp(() async {
+      final settingsController = SettingsController(MockSettingsService());
+      await settingsController.loadSettings();
+      final app = Router().plus;
+      De1Handler(
+        controller: controller,
+        settingsController: settingsController,
+        scaleController: TestScaleController(TestScale()),
+        workflowController: workflow,
+      ).addRoutes(app);
+      handler = app.call;
+    });
+
+    test(
+      'a 30 W power exit on a Bengle answers 400 and writes nothing',
+      () async {
+        de1.transport.queueOnConnectResponses(
+          v13Model: 128,
+          profileModeCaps: 0xF,
+        );
+        await de1.machine.onConnect();
+        expect(de1.machine.isBengle, isTrue);
+        de1.transport.writes.clear();
+
+        final response = await handler(
+          Request(
+            'POST',
+            Uri.parse('http://localhost/api/v1/machine/profile'),
+            body: jsonEncode({
+              'version': '2',
+              'title': 'Power exit too high',
+              'beverage_type': 'espresso',
+              'steps': <dynamic>[
+                {
+                  'name': 'pour',
+                  'pump': 'pressure',
+                  'transition': 'fast',
+                  'volume': 0,
+                  'seconds': 30,
+                  'temperature': 92,
+                  'sensor': 'coffee',
+                  'pressure': 9.0,
+                  'exit': {'type': 'power', 'condition': 'over', 'value': 30},
+                },
+              ],
+              'tank_temperature': 90.0,
+              'target_volume_count_start': 0,
+            }),
+            headers: {HttpHeaders.contentTypeHeader: 'application/json'},
+          ),
+        );
+
+        expect(response.statusCode, 400);
+        final body = jsonDecode(await response.readAsString());
+        expect(body['error'], 'Unsupported profile');
+        expect(
+          body['message'],
+          allOf(
+            contains('step 1'),
+            contains('power exit value'),
+            contains('30'),
+          ),
+        );
+        expect(de1.setProfileCalls, 1);
+        expect(de1.transport.writes, isEmpty);
+      },
+    );
+  });
+
   group('PUT /api/v1/workflow', () {
     for (final (label, json) in <(String, Map<String, dynamic>)>[
       ('a step temperature of 130', _profileJson(temperature: 130)),
