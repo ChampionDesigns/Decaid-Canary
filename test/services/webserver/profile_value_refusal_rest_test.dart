@@ -155,6 +155,55 @@ void main() {
         expect(de1.transport.writes, isEmpty);
       });
     }
+
+    test('a power step with limiter value -1 on a Bengle answers 400 and '
+        'writes nothing', () async {
+      de1.transport.queueOnConnectResponses(
+        v13Model: 128,
+        profileModeCaps: 0x7,
+      );
+      await de1.machine.onConnect();
+      expect(de1.machine.isBengle, isTrue);
+      de1.transport.writes.clear();
+
+      final response = await handler(
+        Request(
+          'POST',
+          Uri.parse('http://localhost/api/v1/machine/profile'),
+          body: jsonEncode({
+            'version': '2',
+            'title': 'Power cap below zero',
+            'beverage_type': 'espresso',
+            'steps': <dynamic>[
+              {
+                'name': 'power pour',
+                'pump': 'power',
+                'transition': 'fast',
+                'volume': 0,
+                'seconds': 25,
+                'temperature': 93,
+                'sensor': 'coffee',
+                'power': 2.0,
+                'limiter': {'value': -1, 'range': 0},
+              },
+            ],
+            'tank_temperature': 90.0,
+            'target_volume_count_start': 0,
+          }),
+          headers: {HttpHeaders.contentTypeHeader: 'application/json'},
+        ),
+      );
+
+      expect(response.statusCode, 400);
+      final body = jsonDecode(await response.readAsString());
+      expect(body['error'], 'Unsupported profile');
+      expect(
+        body['message'],
+        allOf(contains('step 1'), contains('limiter value'), contains('-1')),
+      );
+      expect(de1.setProfileCalls, 1);
+      expect(de1.transport.writes, isEmpty);
+    });
   });
 
   group('PUT /api/v1/workflow', () {

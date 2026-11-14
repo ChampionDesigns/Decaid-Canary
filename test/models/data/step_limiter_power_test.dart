@@ -251,5 +251,58 @@ void main() {
         expect(frames[33], [33, 0, 0, 5, 0x5A, 0, 0, 0], reason: '$limiter');
       }
     });
+
+    for (final transition in [TransitionType.fast, TransitionType.hold]) {
+      for (final value in [0.0, -1.0, 0.01, 0.04, double.infinity]) {
+        test('Bengle: a ${transition.name} power step with limiter value '
+            '$value is refused before any write', () async {
+          final transport = FakeBleTransport();
+          addTearDown(transport.dispose);
+          final de1 = UnifiedDe1(transport: transport);
+          transport.queueMmrResponseInt(MMRItem.calFlowEst, 100);
+          transport.queueOnConnectResponses(
+            v13Model: 128,
+            profileModeCaps: 0x7,
+          );
+          await de1.onConnect();
+          transport.writes.clear();
+
+          await expectLater(
+            de1.setProfile(
+              profileOf([
+                pressureStep(formB),
+                powerStep(
+                  StepLimiter(value: value, range: 0),
+                  transition: transition,
+                ),
+              ]),
+            ),
+            throwsA(
+              isA<ProfileValueUnsupportedException>()
+                  .having((e) => e.field, 'field', 'limiter value')
+                  .having((e) => e.stepNumber, 'stepNumber', 2),
+            ),
+          );
+          expect(transport.writes, isEmpty);
+        });
+      }
+
+      test('Bengle: a ${transition.name} power step with limiter value 0.05 '
+          'encodes ModeMaxP 1', () async {
+        final frames = await extFrames(
+          profileOf([
+            pressureStep(formB),
+            powerStep(
+              const StepLimiter(value: 0.05, range: 0),
+              transition: transition,
+            ),
+          ]),
+          bengle: true,
+        );
+
+        expect(frames[33]![4], 1);
+        expect(frames[33]![3], transition == TransitionType.hold ? 5 : 1);
+      });
+    }
   });
 }
