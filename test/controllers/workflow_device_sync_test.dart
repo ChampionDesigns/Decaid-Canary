@@ -238,8 +238,9 @@ class _NotConnectedDe1 extends TestDe1 {
 /// `UnifiedDe1._assertProfileModeSupported` throwing before any BLE write, so
 /// the workflow-sync path must PARK instead of retrying forever.
 class _RefusingDe1 extends TestDe1 {
-  _RefusingDe1({required this.refuseTitle});
+  _RefusingDe1({required this.refuseTitle, this.transientFailures = 0});
   final String refuseTitle;
+  int transientFailures;
   int totalCalls = 0;
   final List<Profile> setProfileCalls = [];
 
@@ -247,7 +248,39 @@ class _RefusingDe1 extends TestDe1 {
   Future<void> setProfile(Profile profile) async {
     totalCalls++;
     setProfileCalls.add(profile);
+    if (profile.title != refuseTitle && transientFailures > 0) {
+      transientFailures--;
+      throw Exception('simulated BLE write timeout');
+    }
     if (profile.title == refuseTitle) {
+      throw const ProfileModeUnsupportedException(
+        'This machine does not support the Lever pump mode used by this '
+        'profile.',
+      );
+    }
+  }
+}
+
+class _GatedRefusingDe1 extends TestDe1 {
+  _GatedRefusingDe1({required this.refuseTitle, this.refuseWith});
+  final String refuseTitle;
+  final Exception Function(Profile profile)? refuseWith;
+  final List<Profile> setProfileCalls = [];
+  final List<Completer<void>> _gates = [];
+
+  int get pendingUploads => _gates.length;
+
+  void completeNext() => _gates.removeAt(0).complete();
+
+  @override
+  Future<void> setProfile(Profile profile) async {
+    setProfileCalls.add(profile);
+    final gate = Completer<void>();
+    _gates.add(gate);
+    await gate.future;
+    if (profile.title == refuseTitle) {
+      final refusal = refuseWith;
+      if (refusal != null) throw refusal(profile);
       throw const ProfileModeUnsupportedException(
         'This machine does not support the Lever pump mode used by this '
         'profile.',
@@ -1363,6 +1396,233 @@ void main() {
         'Power exit demo',
         'Adaptive',
       ], reason: 'a workflow change clears the park and re-attempts');
+    });
+
+    test('a refusal of an in-flight profile still uploads the newer '
+        'selection', () async {
+      final gated = _GatedRefusingDe1(refuseTitle: 'Lever demo');
+      final controller = await connect(gated);
+      final s = WorkflowDeviceSync(
+        workflowController: wf,
+        de1Controller: controller,
+        retryDelays: const [Duration(milliseconds: 20)],
+      );
+      activeSync = s;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      while (gated.pendingUploads > 0) {
+        gated.completeNext();
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      gated.setProfileCalls.clear();
+
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Lever demo')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(gated.setProfileCalls.map((p) => p.title), ['Lever demo']);
+
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Adaptive')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(gated.setProfileCalls.length, 1);
+
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(gated.setProfileCalls.map((p) => p.title), [
+        'Lever demo',
+        'Adaptive',
+      ], reason: 'the newer selection must not be stranded by the refusal');
+
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(gated.setProfileCalls.map((p) => p.title), [
+        'Lever demo',
+        'Adaptive',
+      ], reason: 'Adaptive uploads once and Lever demo is not retried');
+      expect(gated.pendingUploads, 0);
+    });
+
+    test('a refusal surfaces once via onUploadError with its reason, is not '
+        'retried, and a good selection clears it', () async {
+      final refusing = _RefusingDe1(refuseTitle: 'Lever demo');
+      final controller = await connect(refusing);
+      final errors = <ConnectionError>[];
+      var cleared = 0;
+      final s = WorkflowDeviceSync(
+        workflowController: wf,
+        de1Controller: controller,
+        retryDelays: const [
+          Duration(milliseconds: 20),
+          Duration(milliseconds: 40),
+        ],
+        onUploadError: errors.add,
+        onUploadErrorCleared: () => cleared++,
+      );
+      activeSync = s;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      refusing.totalCalls = 0;
+      refusing.setProfileCalls.clear();
+
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Lever demo')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(refusing.totalCalls, 1, reason: 'no retry of a refusal');
+      expect(errors.length, 1, reason: 'the refusal is shown exactly once');
+      expect(errors.single.kind, ConnectionErrorKind.profileUploadFailed);
+      expect(
+        errors.single.message,
+        contains('does not support the Lever pump mode'),
+      );
+      expect(cleared, 0);
+
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Adaptive')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(refusing.setProfileCalls.map((p) => p.title), [
+        'Lever demo',
+        'Adaptive',
+      ]);
+      expect(cleared, 1);
+      expect(errors.length, 1);
+    });
+
+    test('a transient failure after a refusal replaces the refusal '
+        'message', () async {
+      final refusing = _RefusingDe1(refuseTitle: 'Lever demo');
+      final controller = await connect(refusing);
+      final errors = <ConnectionError>[];
+      var cleared = 0;
+      final s = WorkflowDeviceSync(
+        workflowController: wf,
+        de1Controller: controller,
+        retryDelays: const [Duration(milliseconds: 20)],
+        onUploadError: errors.add,
+        onUploadErrorCleared: () => cleared++,
+      );
+      activeSync = s;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Lever demo')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(errors.length, 1);
+
+      refusing.transientFailures = 1;
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Adaptive')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(errors.length, 2, reason: 'the stale refusal must not hide it');
+      expect(errors.last.message, contains('retrying automatically'));
+      expect(cleared, 0);
+
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(refusing.setProfileCalls.last.title, 'Adaptive');
+      expect(cleared, 1);
+      expect(errors.length, 2);
+    });
+
+    test('a transient failure then a refusal shows the refusal, and a '
+        'disconnect clears it', () async {
+      final refusing = _RefusingDe1(
+        refuseTitle: 'Lever demo',
+        transientFailures: 1,
+      );
+      final controller = await connect(refusing);
+      final errors = <ConnectionError>[];
+      var cleared = 0;
+      final s = WorkflowDeviceSync(
+        workflowController: wf,
+        de1Controller: controller,
+        retryDelays: const [Duration(milliseconds: 20)],
+        onUploadError: errors.add,
+        onUploadErrorCleared: () => cleared++,
+      );
+      activeSync = s;
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(errors.length, 1, reason: 'the on-connect push failed once');
+
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Lever demo')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(errors.length, 2);
+      expect(
+        errors.last.message,
+        contains('does not support the Lever pump mode'),
+      );
+      expect(cleared, 0);
+
+      refusing.setConnectionState(ConnectionState.disconnected);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(cleared, 1);
+    });
+
+    test('a value refusal surfaces once and a newer selection still '
+        'uploads', () async {
+      final gated = _GatedRefusingDe1(
+        refuseTitle: 'Too hot',
+        refuseWith: (profile) => ProfileValueUnsupportedException(
+          field: 'temperature',
+          value: 120,
+          problem: 'is above the machine limit',
+          stepNumber: 1,
+          stepName: 'preinfusion',
+          profileTitle: profile.title,
+        ),
+      );
+      final controller = await connect(gated);
+      final errors = <ConnectionError>[];
+      var cleared = 0;
+      final s = WorkflowDeviceSync(
+        workflowController: wf,
+        de1Controller: controller,
+        retryDelays: const [Duration(milliseconds: 20)],
+        onUploadError: errors.add,
+        onUploadErrorCleared: () => cleared++,
+      );
+      activeSync = s;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      while (gated.pendingUploads > 0) {
+        gated.completeNext();
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      gated.setProfileCalls.clear();
+
+      wf.setWorkflow(wf.currentWorkflow.copyWith(profile: _profile('Too hot')));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      wf.setWorkflow(
+        wf.currentWorkflow.copyWith(profile: _profile('Adaptive')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(gated.setProfileCalls.map((p) => p.title), ['Too hot']);
+
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(errors.length, 1, reason: 'the value refusal is shown once');
+      expect(errors.single.kind, ConnectionErrorKind.profileUploadFailed);
+      expect(
+        errors.single.message,
+        contains('temperature 120.0 is above the machine limit'),
+      );
+      expect(gated.setProfileCalls.map((p) => p.title), [
+        'Too hot',
+        'Adaptive',
+      ], reason: 'the newer selection uploads after a value refusal');
+
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(gated.setProfileCalls.map((p) => p.title), [
+        'Too hot',
+        'Adaptive',
+      ], reason: 'Too hot is not retried');
+      expect(gated.pendingUploads, 0);
+      expect(errors.length, 1);
+      expect(cleared, 1);
     });
   });
 }

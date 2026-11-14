@@ -56,6 +56,7 @@ class WorkflowDeviceSync {
   int _attempt = 0;
 
   bool _errorSurfaced = false;
+  bool _refusalSurfaced = false;
   bool _disposed = false;
 
   static const int _retryLogHeartbeat = 10;
@@ -108,16 +109,16 @@ class WorkflowDeviceSync {
           _attempt = 0;
           if (_errorSurfaced) {
             _errorSurfaced = false;
+            _refusalSurfaced = false;
             onUploadErrorCleared?.call();
           }
         } on ProfileModeUnsupportedException catch (e) {
           if (generation != _generation) return;
           _refusedProfile = profile;
           _lastPushedProfile = null;
-          _log.warning(
-            'setProfile refused (unsupported pump step types): ${e.message}',
-          );
-          return;
+          _log.warning('setProfile refused by the machine model: ${e.message}');
+          _surfaceRefusal(e);
+          continue;
         } on DeviceNotConnectedException {
           _log.fine('DE1 not connected; skipping profile push');
           return;
@@ -134,8 +135,9 @@ class WorkflowDeviceSync {
           } else {
             _log.fine(message, e);
           }
-          if (!_errorSurfaced) {
+          if (!_errorSurfaced || _refusalSurfaced) {
             _errorSurfaced = true;
+            _refusalSurfaced = false;
             onUploadError?.call(
               ConnectionError(
                 kind: ConnectionErrorKind.profileUploadFailed,
@@ -158,6 +160,21 @@ class WorkflowDeviceSync {
         unawaited(_drain());
       }
     }
+  }
+
+  void _surfaceRefusal(ProfileModeUnsupportedException refusal) {
+    _errorSurfaced = true;
+    _refusalSurfaced = true;
+    onUploadError?.call(
+      ConnectionError(
+        kind: ConnectionErrorKind.profileUploadFailed,
+        severity: ConnectionErrorSeverity.warning,
+        timestamp: DateTime.now().toUtc(),
+        deviceId: _de1.connectedDe1OrNull?.deviceId,
+        deviceName: _de1.connectedDe1OrNull?.name,
+        message: 'Profile not sent to the machine: ${refusal.message}',
+      ),
+    );
   }
 
   Duration _scheduleRetry(int generation) {
@@ -185,6 +202,7 @@ class WorkflowDeviceSync {
       _attempt = 0;
       if (_errorSurfaced) {
         _errorSurfaced = false;
+        _refusalSurfaced = false;
         onUploadErrorCleared?.call();
       }
       return;
@@ -203,6 +221,7 @@ class WorkflowDeviceSync {
     _initSettledSub = null;
     if (_errorSurfaced) {
       _errorSurfaced = false;
+      _refusalSurfaced = false;
       onUploadErrorCleared?.call();
     }
   }
