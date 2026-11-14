@@ -85,6 +85,15 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       if (value < 0) refuse(field, value, 'is below 0', step);
     }
 
+    void requirePressureCap(double value, int step) {
+      if (!value.isFinite) {
+        refuse('limiter value', value, 'is not a finite number', step);
+      }
+      if (_encodeFlowPressure(value) == 0) {
+        refuse('limiter value', value, 'encodes to a pressure cap of 0', step);
+      }
+    }
+
     for (var i = 0; i < profile.steps.length; i++) {
       final step = profile.steps[i];
       final temperature = step.temperature;
@@ -106,11 +115,11 @@ extension UnifiedDe1Profile on UnifiedDe1 {
         refuse('volume', step.volume, 'is above $_maxStepVolume ml', i);
       }
       final limiter = step.limiter;
-      if (limiter != null && limiter.value != 0) {
+      if (step is ProfileStepPower) {
+        requirePressureCap(limiter?.value ?? 0, i);
+      } else if (limiter != null && limiter.value != 0) {
         requireNumber('limiter value', limiter.value, i);
-        if (step is! ProfileStepPower) {
-          requireNumber('limiter range', limiter.range, i);
-        }
+        requireNumber('limiter range', limiter.range, i);
       }
       if (step is ProfileStepLever) {
         requireNumber('lever spring', step.leverSpring, i);
