@@ -92,7 +92,7 @@ void main() {
         NativeNotification(
           namespace: namespace,
           sourceId: UpdateNotifications.sourceId,
-          sourceName: 'Decaid',
+          sourceName: 'Decide',
           id: '99.0.0',
           message: 'Update available: 99.0.0',
           actions: [
