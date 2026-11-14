@@ -44,7 +44,7 @@ Future<Bengle> _connectedBengle(FakeBleTransport transport) async {
 
 void main() {
   group('firmwareStorableWakeWindow', () {
-    test('the Codex example: Thursday 07:00-07:01 packs to an unstorable '
+    test('Thursday 07:00-07:01 packs to an unstorable '
         'value without the policy', () {
       const window = FirmwareWakeWindow(dow: 4, startMin: 420, endMin: 421);
       expect(window.pack(), 17637797);
@@ -52,7 +52,7 @@ void main() {
       expect(_decode(_storedByFirmware(window.pack())).endMin, 420);
     });
 
-    test('the Codex example becomes Thursday 07:00-07:02', () {
+    test('Thursday 07:00-07:01 becomes Thursday 07:00-07:02', () {
       const window = FirmwareWakeWindow(dow: 4, startMin: 420, endMin: 421);
       final sent = firmwareStorableWakeWindow(window);
       expect(
@@ -183,7 +183,7 @@ void main() {
   });
 
   group('pushFirmwareWakeSchedule sends only storable entries', () {
-    test('the Codex example sends a non-empty Thursday window', () async {
+    test('Thursday 07:00-07:01 sends a non-empty Thursday window', () async {
       final transport = FakeBleTransport();
       final bengle = await _connectedBengle(transport);
 
