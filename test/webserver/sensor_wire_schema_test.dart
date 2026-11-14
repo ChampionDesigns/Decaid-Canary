@@ -434,9 +434,9 @@ void main() {
   }
 
   Future<Map<String, String>> manifestTypes(Sensor sensor) async {
-    final manifest =
-        await getJson('/api/v1/sensors/${Uri.encodeComponent(sensor.deviceId)}')
-            as Map<String, dynamic>;
+    final manifest = await getJson(
+      '/api/v1/sensors/${Uri.encodeComponent(sensor.deviceId)}',
+    ) as Map<String, dynamic>;
     return {
       for (final c in manifest['data'] as List)
         (c as Map)['key'] as String: c['type'] as String,
@@ -663,11 +663,9 @@ void main() {
       await sensorController.register(bare);
       await sensorController.register(unschemed);
       for (final sensor in [await puckEstimator(bengle), r2, bare, unschemed]) {
-        final served =
-            await getJson(
-                  '/api/v1/sensors/${Uri.encodeComponent(sensor.deviceId)}',
-                )
-                as Map<String, dynamic>;
+        final served = await getJson(
+          '/api/v1/sensors/${Uri.encodeComponent(sensor.deviceId)}',
+        ) as Map<String, dynamic>;
         expect(served.keys.toSet(), sensor.info.toJson().keys.toSet());
         expect(
           (schema['properties'] as YamlMap).keys.toSet(),
@@ -687,11 +685,9 @@ void main() {
 
     test('a channel type outside the DataChannel enum is rejected', () async {
       final sensor = await puckEstimator(MockBengle(deviceId: 'DE1-1234'));
-      final served =
-          await getJson(
-                '/api/v1/sensors/${Uri.encodeComponent(sensor.deviceId)}',
-              )
-              as Map<String, dynamic>;
+      final served = await getJson(
+        '/api/v1/sensors/${Uri.encodeComponent(sensor.deviceId)}',
+      ) as Map<String, dynamic>;
       final full = _schemas(_rest);
       expect(_check(served, full['SensorManifest'] as YamlMap, full), isEmpty);
       final narrowed = _restSchemasWithChannelTypes(['string', 'boolean']);

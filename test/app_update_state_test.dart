@@ -9,8 +9,7 @@ void main() {
         currentVersion: '0.6.1',
         latestVersion: '0.6.2',
         releaseNotes: 'notes',
-        releaseUrl:
-            'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/v0.6.2',
+        releaseUrl: 'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/v0.6.2',
         installable: true,
         progress: null,
         error: null,
@@ -21,8 +20,7 @@ void main() {
         'currentVersion': '0.6.1',
         'latestVersion': '0.6.2',
         'releaseNotes': 'notes',
-        'releaseUrl':
-            'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/v0.6.2',
+        'releaseUrl': 'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/v0.6.2',
         'installable': true,
         'progress': null,
         'error': null,
