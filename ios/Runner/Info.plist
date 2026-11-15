@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Decaid</string>
+	<string>Decide</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Decaid</string>
+	<string>Decide</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -27,7 +27,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Decaid connects to your DE1 espresso machine and scales over Bluetooth to control shots and read live data.</string>
+	<string>Decide connects to your DE1 espresso machine and scales over Bluetooth to control shots and read live data.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Needed for local storage</string>
 	<key>NSDownloadsFolderUsageDescription</key>
@@ -35,7 +35,7 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2025-2026 Decent Espresso. Licensed under GPL v3.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Decaid uses your local network to reach your espresso machine and scales, and to find nearby wireless scales.</string>
+	<string>Decide uses your local network to reach your espresso machine and scales, and to find nearby wireless scales.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_decentscale._tcp</string>
@@ -46,6 +46,8 @@
 	<string>Needed to include sound when you choose to record a video using a skin's system camera picker. Live microphone access from skins is not allowed.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Needed to import photos for shot notes and feedback</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Decaid uses a networking library to report its local Wi-Fi address for access to its interface and API on your local network. The library references location services; Decaid does not collect or track your location.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

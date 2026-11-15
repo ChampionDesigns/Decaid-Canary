@@ -1,17 +1,11 @@
 plugins {
     id("com.android.application")
-    // START: FlutterFire Configuration
-    id("com.google.gms.google-services")
-    id("com.google.firebase.firebase-perf")
-    id("com.google.firebase.crashlytics")
-    // END: FlutterFire Configuration
-    // id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
-    namespace = "net.tadel.reaprime"
+    namespace = "com.decentespresso.decaid.canary"
     compileSdk = 36
     // ndkVersion = flutter.ndkVersion
 		ndkVersion = "28.2.13676358"
@@ -28,7 +22,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "net.tadel.reaprime"
+        applicationId = "com.decentespresso.decaid.canary"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28
@@ -41,27 +35,21 @@ android {
         versionName = flutter.versionName
     }
 
+    val releaseKeystore = file("canary-release.keystore")
     signingConfigs {
-            create("release") {
-                storeFile = file("debug.keystore")
-                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "android"
-                keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "androiddebugkey"
-                keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "android"
-            }
-            getByName("debug") {
-                storeFile = file("debug.keystore")
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
-            }
+        create("release") {
+            storeFile = releaseKeystore
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = "canary"
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
         }
+    }
 
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
-        }
-        getByName("debug") {
-            signingConfig = signingConfigs.getByName("debug")
+            if (releaseKeystore.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 }

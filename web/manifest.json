@@ -1,11 +1,11 @@
 {
-    "name": "Decaid",
-    "short_name": "Decaid",
+    "name": "Decide",
+    "short_name": "Decide",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#hexcode",
     "theme_color": "#hexcode",
-    "description": "Decaid - Gateway for Decent Espresso Machines",
+    "description": "Decide - Gateway for Decent Espresso Machines",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

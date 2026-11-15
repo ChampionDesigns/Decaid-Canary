@@ -40,9 +40,8 @@ class BleAdmissionTransport extends BLETransport {
         if (state == ConnectionState.disconnected && _claim != null) {
           unawaited(
             disconnectConfirmed().catchError((Object error) {
-              Logger(
-                'BleAdmissionTransport',
-              ).warning('Native BLE ownership retained: $id', error);
+              Logger('BleAdmissionTransport')
+                  .warning('Native BLE ownership retained: $id', error);
             }),
           );
         }
@@ -50,9 +49,8 @@ class BleAdmissionTransport extends BLETransport {
     } catch (_) {
       unawaited(
         disconnectConfirmed().catchError((Object error) {
-          Logger(
-            'BleAdmissionTransport',
-          ).warning('Failed connect ownership retained: $id', error);
+          Logger('BleAdmissionTransport')
+              .warning('Failed connect ownership retained: $id', error);
         }),
       );
       rethrow;
@@ -99,6 +97,9 @@ class BleAdmissionTransport extends BLETransport {
 
   @override
   Future<List<String>> discoverServices() => _owned(transport.discoverServices);
+  @override
+  Future<List<String>> discoverCharacteristics(String serviceUUID) =>
+      _owned(() => transport.discoverCharacteristics(serviceUUID));
   @override
   Future<Uint8List> read(
     String serviceUUID,

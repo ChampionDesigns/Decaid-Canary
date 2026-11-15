@@ -9,14 +9,17 @@ import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/de1_firmwaremodel.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/bengle_interface.dart';
+import 'package:reaprime/src/models/device/firmware_wake_entry.dart';
 import 'package:reaprime/src/models/device/de1_rawmessage.dart';
 import 'package:reaprime/src/models/device/device.dart';
+import 'package:reaprime/src/models/device/device_identity.dart';
 import 'package:reaprime/src/models/device/device_implementation.dart';
 import 'package:reaprime/src/models/device/firmware_update_state.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.utils.dart';
 import 'package:reaprime/src/models/device/impl/de1/mmr_address.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_shot_sample.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/calibration_codec.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1_transport.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle_mmr.dart';
@@ -44,6 +47,7 @@ part 'led_strip_capability.dart';
 part 'scale_calibration_capability.dart';
 part 'cup_warmer_capability.dart';
 part 'wake_schedule_capability.dart';
+part 'puck_estimator_capability.dart';
 
 final class _FirmwareCancellationToken {
   final Completer<void> _cancelled = Completer<void>();
@@ -56,10 +60,11 @@ final class _FirmwareCancellationToken {
   }
 }
 
-class UnifiedDe1 implements De1Interface {
+class UnifiedDe1 implements De1Interface, CanonicalDeviceIdentity {
   static final BleServiceIdentifier advertisingIdentifier =
       BleServiceIdentifier.short('ffff');
   final UnifiedDe1Transport _transport;
+  final CanonicalDeviceIdentity? _transportIdentity;
   final _firmwareMmrGate = _FirmwareMmrGate();
   final Duration firmwareEraseTimeout;
   final Duration firmwareVerificationTimeout;
@@ -76,7 +81,10 @@ class UnifiedDe1 implements De1Interface {
     this.firmwareEraseTimeout = const Duration(seconds: 60),
     this.firmwareVerificationTimeout = const Duration(seconds: 120),
     this.calibrationTimeout = const Duration(seconds: 4),
-  }) : _transport = UnifiedDe1Transport(transport: transport);
+  }) : _transport = UnifiedDe1Transport(transport: transport),
+       _transportIdentity = transport is CanonicalDeviceIdentity
+           ? transport as CanonicalDeviceIdentity
+           : null;
 
   @override
   Stream<ConnectionState> get connectionState => _transport.connectionState;
@@ -133,6 +141,9 @@ class UnifiedDe1 implements De1Interface {
 
   @override
   String get deviceId => _transport.id;
+
+  @override
+  String? get canonicalDeviceId => _transportIdentity?.canonicalDeviceId;
 
   @override
   DeviceImplementation get implementation => DeviceImplementation.unifiedDe1;
@@ -401,6 +412,16 @@ class UnifiedDe1 implements De1Interface {
   @protected
   int get connectedModelValue => _connectedModelValue!;
 
+  /// True when this machine should be driven as a Bengle — by the class picked
+  /// at discovery OR by the v13Model the firmware reported. Either alone is
+  /// insufficient: a `Bengle` instance has not read v13Model before onConnect,
+  /// and a name-picked `UnifiedDe1` that turns out to report v13Model >= 128
+  /// still speaks protocol v2 on the wire. Reads false until onConnect has
+  /// learned the model, which is why the profile gate is fail-closed.
+  bool get isBengle =>
+      isBengleModelValue(_connectedModelValue ?? 0) ||
+      implementation == DeviceImplementation.bengle;
+
   @override
   Future<void> onConnect() async {
     initRawStream();
@@ -428,6 +449,7 @@ class UnifiedDe1 implements De1Interface {
     _refillKitDetected = _unpackMMRInt(
       await _mmrRead(MMRItem.refillKitPresent),
     );
+    final profileModeCaps = isBengle ? await _readProfileModeCaps() : 0;
     try {
       _cachedFlowEstimation = await getFlowEstimation();
     } catch (e) {
@@ -442,6 +464,7 @@ class UnifiedDe1 implements De1Interface {
       extra: {
         'refillKit': (_refillKitDetected & 0x01) != 0,
         'voltage': _voltage,
+        'profileModeCaps': profileModeCaps,
       },
     );
 
@@ -451,6 +474,46 @@ class UnifiedDe1 implements De1Interface {
     _refillKitSetting = De1RefillKitSettings.auto;
 
     await enableUserPresenceFeature();
+  }
+
+  /// The ProfileModeCaps read makes one attempt with this timeout and no
+  /// retries, so a Bengle firmware WITHOUT the register settles to caps 0 and
+  /// frees the serial MMR gate after one attempt instead of holding the
+  /// connect flow for the full MMR-read retry budget.
+  static const _profileModeCapsAttemptTimeout = Duration(seconds: 4);
+
+  /// Outer bound on the ProfileModeCaps read, longer than the one attempt.
+  static const _profileModeCapsReadTimeout = Duration(milliseconds: 4500);
+
+  /// Read the ProfileModeCaps bitmask, fail-closed to 0.
+  /// Every failure mode collapses to 0 (no new modes offered): a missing
+  /// register (timeout/omit on firmware without the capability), a short
+  /// buffer, or a stray word with bits outside the defined 0xF mask. The source
+  /// read's late retry-timeout is swallowed (`catchError`) so it can never
+  /// surface as an unhandled async error after the outer timeout wins.
+  ///
+  /// The mask is 0xF (bit0 Power / bit1 Lever / bit2 HOLD / bit3 power exit) and
+  /// MUST track the highest defined capability bit: a power-exit-capable machine
+  /// returns 0xF, and a mask left at 0x7 would treat that legitimate word as
+  /// garbage and zero it, hiding Power/Lever/HOLD/power-exit entirely. This is
+  /// why the mask MUST widen to 0xF before any firmware advertises bit3. Bits
+  /// above 0xF remain undefined and still fail-close to 0.
+  Future<int> _readProfileModeCaps() async {
+    try {
+      final caps =
+          await _mmrRead(
+                MMRItem.profileModeCaps,
+                timeout: _profileModeCapsAttemptTimeout,
+                retries: 0,
+              )
+              .then(_unpackMMRInt)
+              .catchError((Object _) => 0)
+              .timeout(_profileModeCapsReadTimeout, onTimeout: () => 0);
+      if (caps < 0 || (caps & ~0xF) != 0) return 0;
+      return caps;
+    } catch (_) {
+      return 0;
+    }
   }
 
   Future<void> onDisconnect() async {}
@@ -592,7 +655,92 @@ class UnifiedDe1 implements De1Interface {
     return upload;
   }
 
+  /// Refuse to upload a profile that uses a per-frame Power/Lever step, a HOLD
+  /// transition, or a cross-variable power exit to a machine that cannot run it
+  /// — either the device is not a Bengle (the modes reinterpret the base-frame
+  /// U8D1 SetVal as watts / P0, latch a live measurement for HOLD, or compare
+  /// hydraulic watts for a power exit — all protocol-v2 semantics) or its
+  /// firmware did not advertise the matching capability bit (bit0 Power, bit1
+  /// Lever, bit2 HOLD, bit3 power exit). A HOLD-capable machine returns 0x7, a
+  /// power-exit-capable machine 0xF; stock firmware and every DE1 return 0 (see
+  /// [onConnect]), so this fail-closes. A power exit is an orthogonal per-step
+  /// property (any step type can carry one), so it gets its own predicate and
+  /// its own bit — pressure/flow cross-exits stay ungated, since they already
+  /// run on a stock DE1. Thrown as a [ProfileModeUnsupportedException] (a
+  /// PERMANENT refusal for the connection) so the REST boundary surfaces a clean
+  /// 400 instead of a silent mis-command (watts read as bar, a P0 as constant
+  /// pressure), and so `WorkflowDeviceSync` parks instead of retrying forever.
+  void _assertProfileModeSupported(Profile profile) {
+    final hasPower = profile.steps.any((s) => s is ProfileStepPower);
+    final hasLever = profile.steps.any((s) => s is ProfileStepLever);
+    final hasHold = profile.steps.any(
+      (s) => s.transition == TransitionType.hold && s is! ProfileStepLever,
+    );
+    final hasPowerExit = profile.steps.any(
+      (s) => s.exit?.type == ExitType.power,
+    );
+    if (!hasPower && !hasLever && !hasHold && !hasPowerExit) return;
+
+    if (hasHold &&
+        profile.steps.isNotEmpty &&
+        profile.steps.first.transition == TransitionType.hold &&
+        profile.steps.first is! ProfileStepLever) {
+      throw ProfileModeUnsupportedException(
+        'The first step of profile "${profile.title}" uses a HOLD transition, '
+        'but HOLD latches the value achieved at the exit of the PREVIOUS step '
+        'and the first step has no previous step. Remove HOLD from the first '
+        'step (it can only follow another step).',
+      );
+    }
+
+    String andJoin(List<String> xs) => xs.length <= 1
+        ? xs.join()
+        : '${xs.sublist(0, xs.length - 1).join(', ')} and ${xs.last}';
+    String describe(List<String> pumpModes, bool hold, bool powerExit) {
+      final parts = <String>[
+        if (pumpModes.isNotEmpty)
+          '${andJoin(pumpModes)} pump mode${pumpModes.length > 1 ? 's' : ''}',
+        if (hold) 'HOLD transition',
+        if (powerExit) 'power exit condition',
+      ];
+      return parts.join(' and the ');
+    }
+
+    if (!isBengle) {
+      final desc = describe(
+        [if (hasPower) 'Power', if (hasLever) 'Lever'],
+        hasHold,
+        hasPowerExit,
+      );
+      final count =
+          (hasPower ? 1 : 0) +
+          (hasLever ? 1 : 0) +
+          (hasHold ? 1 : 0) +
+          (hasPowerExit ? 1 : 0);
+      throw ProfileModeUnsupportedException(
+        'This machine is not a Bengle; the $desc used by profile '
+        '"${profile.title}" require${count == 1 ? 's' : ''} Bengle firmware '
+        '(protocol v2).',
+      );
+    }
+    final caps = (machineInfo.extra['profileModeCaps'] as int?) ?? 0;
+    final missingModes = <String>[];
+    if (hasPower && (caps & 0x1) == 0) missingModes.add('Power');
+    if (hasLever && (caps & 0x2) == 0) missingModes.add('Lever');
+    final missingHold = hasHold && (caps & 0x4) == 0;
+    final missingPowerExit = hasPowerExit && (caps & 0x8) == 0;
+    if (missingModes.isEmpty && !missingHold && !missingPowerExit) return;
+    throw ProfileModeUnsupportedException(
+      'This machine does not support the '
+      '${describe(missingModes, missingHold, missingPowerExit)} '
+      'used by profile "${profile.title}" — the firmware did not advertise the '
+      'capability (ProfileModeCaps bit missing). Update the machine firmware '
+      'to run these profiles.',
+    );
+  }
+
   Future<void> _uploadProfileLocked(Profile profile) async {
+    _assertProfileModeSupported(profile);
     if (_currentProfile == profile) {
       return;
     }
@@ -815,6 +963,10 @@ class UnifiedDe1 implements De1Interface {
   Future<void> enableBengleShotSample() =>
       _transport.subscribeBengleShotSample();
 
+  /// Returns true when the estimator stream is live on this connection.
+  @protected
+  Future<bool> enableEstimator() => _transport.subscribeEstimator();
+
   @protected
   Future<void> writeEndpoint(
     LogicalEndpoint endpoint,
@@ -860,6 +1012,8 @@ class UnifiedDe1 implements De1Interface {
           return _transport.bengleShotSample;
         case Endpoint.calibration:
           return _transport.calibration;
+        case Endpoint.estimator:
+          return _transport.estimator;
         default:
           throw UnimplementedError(
             'UnifiedDe1.notificationsFor: Endpoint.${endpoint.name} is '
@@ -892,6 +1046,10 @@ class UnifiedDe1 implements De1Interface {
     final raw = await _mmrReadRaw(addr.address);
     return _unpackMMRInt(raw).toDouble() * addr.readScale;
   }
+
+  @protected
+  MmrWriteBound mmrItemWriteBound(MMRItem item) =>
+      isBengle ? bengleWriteBound(item) : (min: item.min, max: item.max);
 
   @protected
   Future<void> writeMmrInt(MmrAddress addr, int value) async {

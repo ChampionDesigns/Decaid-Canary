@@ -63,6 +63,47 @@ class MachineSnapshot {
     required this.steamTemperature,
   });
 
+  /// Shared gate for the derived channels: returns [value] only when
+  /// `flow >= 0.3 mL/s && pressure >= 0.3 bar` (below that the ratios are
+  /// numerically meaningless noise) and inputs and result are finite. The
+  /// finite guard is mandatory: `jsonEncode` throws on NaN/Infinity and
+  /// [toJson] is streamed on the live `/ws/v1/machine/snapshot` websocket.
+  double? _derivedOrNull(double value) {
+    if (flow < 0.3 || pressure < 0.3) return null;
+    if (!flow.isFinite || !pressure.isFinite || !value.isFinite) return null;
+    return value;
+  }
+
+  /// Puck hydraulic resistance **R = P / F²** in bar·s²/mL², DERIVED.
+  ///
+  /// How strongly the puck resists water flow; rises as the puck compacts
+  /// or clogs, drops on channeling/erosion. `null` (and omitted from
+  /// [toJson]) unless flow ≥ 0.3 mL/s and pressure ≥ 0.3 bar.
+  ///
+  /// Measured equivalent: `r2` on the puck-estimator sensor (the firmware's
+  /// n=2 resistance fit). Prefer it when present.
+  double? get puckResistanceDerived => _derivedOrNull(pressure / (flow * flow));
+
+  /// Hydraulic load impedance **Z = P / F** in bar·s/mL, DERIVED.
+  ///
+  /// Pressure-to-flow ratio at the current operating point (the "AC"
+  /// analogue of [puckResistanceDerived]). Same ≥ 0.3 gating.
+  ///
+  /// Measured equivalent: `r1` on the puck-estimator sensor (the firmware's
+  /// n=1 resistance fit). Prefer it when present.
+  double? get loadImpedanceDerived => _derivedOrNull(pressure / flow);
+
+  /// Hydraulic power delivered to the puck **W = 0.1 · P · F** in watts,
+  /// DERIVED (1 bar × 1 mL/s = 0.1 W; espresso is roughly 0.5–4 W).
+  ///
+  /// Same ≥ 0.3 gating as [puckResistanceDerived].
+  ///
+  /// Measured equivalent: `hydraulicPowerMeasured` on the puck-estimator
+  /// sensor, present when the machine reports BengleEstSample rev ≥ 3. Prefer
+  /// it when present — it uses Q_puck, so it is the power actually delivered
+  /// rather than the power supplied.
+  double? get hydraulicPowerDerived => _derivedOrNull(0.1 * pressure * flow);
+
   MachineSnapshot copyWith({
     DateTime? timestamp,
     MachineStateSnapshot? state,
@@ -108,6 +149,12 @@ class MachineSnapshot {
       'targetGroupTemperature': targetGroupTemperature,
       'profileFrame': profileFrame,
       'steamTemperature': steamTemperature,
+      if (puckResistanceDerived != null)
+        'puckResistanceDerived': puckResistanceDerived,
+      if (loadImpedanceDerived != null)
+        'loadImpedanceDerived': loadImpedanceDerived,
+      if (hydraulicPowerDerived != null)
+        'hydraulicPowerDerived': hydraulicPowerDerived,
     };
   }
 
@@ -117,9 +164,11 @@ class MachineSnapshot {
       state: MachineStateSnapshot(
         state: MachineState.values.firstWhere(
           (e) => e.name == json["state"]["state"],
+          orElse: () => MachineState.error,
         ),
         substate: MachineSubstate.values.firstWhere(
           (e) => e.name == json["state"]["substate"],
+          orElse: () => MachineSubstate.idle,
         ),
       ),
       flow: json["flow"],
@@ -176,6 +225,8 @@ enum MachineSubstate {
 
   /// The purge after steam stops on time or on milk temperature.
   puffing,
+  refillStopped,
+  pumpZeroing,
 
   errorNaN,
   errorInf,
@@ -195,6 +246,11 @@ enum MachineSubstate {
   errorLoCurrent,
   errorBootFill,
   errorNoAC,
+  errorPumpZero,
+  errorPumpNeedsCalibration,
+  errorFrontSwitchOff,
+  errorPumpFault,
+  errorPumpSilent,
 }
 
 class MachineStateSnapshot {

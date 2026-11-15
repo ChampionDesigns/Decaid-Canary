@@ -95,7 +95,7 @@ class ShotImporter {
         ? ' This looks like a De1App history_v2 shot — use "Import from De1App" instead.'
         : '';
     throw UserFacingFormatException(
-      'Not a Decaid shot export (missing or invalid: ${missingFields.join(', ')}).$hint',
+      'Not a Decide shot export (missing or invalid: ${missingFields.join(', ')}).$hint',
     );
   }
 }

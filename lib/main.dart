@@ -7,7 +7,6 @@ import 'package:collection/collection.dart';
 import 'package:hive_ce_flutter/hive_flutter.dart';
 import 'package:path/path.dart' as p;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
@@ -19,6 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:reaprime/src/account/account_consent_prompter.dart';
 import 'package:reaprime/src/controllers/battery_controller.dart';
 import 'package:reaprime/src/controllers/bengle_probe_bridge.dart';
+import 'package:reaprime/src/controllers/bengle_puck_estimator_bridge.dart';
 import 'package:reaprime/src/controllers/bengle_saw_bridge.dart';
 import 'package:reaprime/src/controllers/bengle_steam_stop_bridge.dart';
 import 'package:reaprime/src/controllers/hot_water_sequencer.dart';
@@ -45,7 +45,7 @@ import 'package:reaprime/src/models/device/simulated_device.dart';
 import 'package:reaprime/src/plugins/plugin_device_service.dart';
 import 'package:reaprime/src/plugins/plugin_loader_service.dart';
 import 'package:reaprime/src/plugins/plugin_source_service.dart';
-import 'package:reaprime/src/services/android_updater.dart';
+import 'package:reaprime/src/notifications/notification_center.dart';
 import 'package:reaprime/src/services/github_rate_limit.dart';
 import 'package:reaprime/src/services/wifi/wifi_scale_discovery_service.dart';
 import 'package:reaprime/src/services/database/database.dart' hide Workflow;
@@ -55,6 +55,7 @@ import 'package:reaprime/src/services/database/mappers/steam_mapper.dart';
 import 'package:reaprime/src/services/database/mappers/bean_mapper.dart';
 import 'package:reaprime/src/services/database/mappers/grinder_mapper.dart';
 import 'package:reaprime/src/services/storage/app_directories.dart';
+import 'package:reaprime/src/services/storage/windows_preferences.dart';
 import 'package:reaprime/src/services/storage/drift_bean_storage.dart';
 import 'package:reaprime/src/services/storage/drift_grinder_storage.dart';
 import 'package:reaprime/src/services/storage/drift_profile_storage.dart';
@@ -70,6 +71,7 @@ import 'package:reaprime/src/services/account/proxy_token_service.dart';
 import 'package:reaprime/src/services/account/proxy_token_store.dart';
 import 'package:reaprime/src/controllers/account_tokens_controller.dart';
 import 'package:reaprime/src/services/account/credential_store_factory.dart';
+import 'package:reaprime/src/services/account/development_identity.dart';
 import 'package:reaprime/src/services/app_log_upload_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
@@ -88,7 +90,6 @@ import 'package:reaprime/src/services/update_check_service.dart';
 import 'package:reaprime/src/webui_support/webui_service.dart';
 import 'package:reaprime/src/cli/cli_args.dart';
 import 'package:reaprime/src/webui_support/webui_storage.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'package:reaprime/src/controllers/scan_state_guardian.dart';
@@ -100,12 +101,7 @@ import 'src/services/network/multicast_lock_service.dart';
 import 'src/settings/machine_settings_store.dart';
 import 'src/settings/settings_controller.dart';
 import 'src/settings/settings_service.dart';
-import 'src/settings/update_dialog.dart';
 import 'src/services/serial/serial_service.dart';
-
-import 'package:firebase_core/firebase_core.dart';
-
-import 'firebase_options.dart';
 
 import 'package:reaprime/src/services/telemetry/telemetry_service.dart';
 import 'package:reaprime/src/services/telemetry/boot_timing.dart';
@@ -244,9 +240,27 @@ Future<void> persistSkinPortAssignments(Map<String, int> assignments) async {
   );
 }
 
+Future<void> prepareShotUploadStartup(
+  SettingsController settings, {
+  required bool forceOnboarding,
+  required bool bypassOnboarding,
+}) async {
+  if (!settings.shotUploadStepSeen &&
+      await persistedShotUploadAutoUploadEnabled()) {
+    await settings.setShotUploadStepSeen(true);
+  }
+  if (bypassOnboarding && !forceOnboarding) {
+    await settings.setShotUploadStepSeen(true);
+  }
+  if (forceOnboarding) {
+    await settings.setShotUploadStepSeen(false);
+  }
+}
+
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
-  final cliArgs = parseCliArgs(args);
+  if (Platform.isWindows) await initializeWindowsPreferences();
+  final cliArgs = parseCliArgs(args, environment: Platform.environment);
   if (cliArgs.printStoragePaths) {
     await _printStoragePaths();
   }
@@ -283,14 +297,13 @@ void main(List<String> args) async {
   final logDir = await AppDirectories.logs;
   await Directory(logDir).create(recursive: true);
 
-  RotatingFileAppender(
-    baseFilePath: '$logDir/log.txt',
-  ).attachToLogger(Logger.root);
+  RotatingFileAppender(baseFilePath: '$logDir/log.txt')
+      .attachToLogger(Logger.root);
 
   final webViewLogService = WebViewLogService(logDirectoryPath: logDir);
   await webViewLogService.initialize();
 
-  Logger.root.info("==== Decent starting ====");
+  Logger.root.info("==== Decide starting ====");
   BootTiming.start();
 
   unawaited(MulticastLockService().acquire());
@@ -301,19 +314,6 @@ void main(List<String> args) async {
   Logger.root.info(
     "version: ${BuildInfo.version}, platform: ${Platform.operatingSystem}",
   );
-
-  final isDebugOrSimulate =
-      kDebugMode || const String.fromEnvironment("simulate").isNotEmpty;
-  if (!Platform.isLinux && !Platform.isWindows && !isDebugOrSimulate) {
-    try {
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
-      );
-    } catch (e, st) {
-      log.warning('Firebase initialization failed', e, st);
-    }
-  }
-  BootTiming.mark('firebase_done');
 
   final logBuffer = LogBuffer();
   final errorReportThrottle = ErrorReportThrottle();
@@ -491,6 +491,12 @@ void main(List<String> args) async {
   );
 
   // ignore: unused_local_variable
+  final benglePuckEstimatorBridge = BenglePuckEstimatorBridge(
+    de1Controller: de1Controller,
+    sensorController: sensorController,
+  );
+
+  // ignore: unused_local_variable
   final steamSequencer = SteamSequencer(
     de1Controller: de1Controller,
     sensorController: sensorController,
@@ -520,17 +526,50 @@ void main(List<String> args) async {
   AccountTokensController? accountTokensController;
   CredentialStore? credentialStore;
   AccountConsentGate? consentGate;
+  AccountConsentStore? accountConsentStore;
   final proxyTokenService = ProxyTokenService();
+  final extensionsToken = cliArgs.extensionsToken;
+  if (extensionsToken != null &&
+      !proxyTokenService.registerProcessToken(
+        extensionsToken,
+        ProxyCaller(
+          id: 'cli',
+          scopes: const {ProxyTokenService.scopeExtensionsManage},
+          label: cliArgs.extensionsTokenSource,
+        ),
+      )) {
+    log.severe(
+      '${cliArgs.extensionsTokenSource} ignored: it must be at least '
+      '${ProxyTokenService.minimumProcessTokenLength} characters with no '
+      'spaces or commas',
+    );
+  }
   if (cliArgs.noAccount) {
     log.info('--no-account: skipping credential store and account service');
     decentAccountService = null;
     decentProxyService = null;
   } else {
-    credentialStore = await createCredentialStore();
+    final useDevelopmentIdentity =
+        cliArgs.dummyAccount && developmentIdentityEnabled;
+    if (cliArgs.dummyAccount && !developmentIdentityEnabled) {
+      log.warning(
+        '--dummy-account is disabled; use a debug build with '
+        '--dart-define=DECAID_ENABLE_DUMMY_ACCOUNT=true',
+      );
+    }
+    credentialStore = await createCredentialStore(
+      developmentIdentity: useDevelopmentIdentity,
+    );
+    if (useDevelopmentIdentity) {
+      log.info('--dummy-account: using an isolated in-memory identity');
+      await credentialStore.write(key: 'email', value: 'demo@example.com');
+      await credentialStore.write(key: 'password', value: 'demo-password');
+    }
     final consentPrompter = AccountConsentPrompter(
       navigatorKey: NavigationService.navigatorKey,
     );
     final consentStore = AccountConsentStore(credentialStore: credentialStore);
+    accountConsentStore = consentStore;
     final gate = AccountConsentGate(
       store: consentStore,
       prompt: consentPrompter.prompt,
@@ -542,20 +581,28 @@ void main(List<String> args) async {
       'DECENT_BASE_URL',
       defaultValue: 'https://decentespresso.com',
     );
+    final accountHttpClient = useDevelopmentIdentity
+        ? DevelopmentIdentityHttpClient()
+        : IOClient(
+            HttpClient()..connectionTimeout = const Duration(seconds: 30),
+          );
+    final proxyHttpClient = useDevelopmentIdentity
+        ? DevelopmentIdentityHttpClient()
+        : http.Client();
     decentAccountService = DecentAccountService(
-      httpClient: IOClient(
-        HttpClient()..connectionTimeout = const Duration(seconds: 30),
-      ),
+      httpClient: accountHttpClient,
       credentialStore: credentialStore,
       baseUrl: decentBaseUrl,
     );
     decentProxyService = DecentProxyService(
-      httpClient: http.Client(),
+      httpClient: proxyHttpClient,
       credentialStore: credentialStore,
       requireConsent: gate.requireConsent,
       baseUrl: decentBaseUrl,
       onAuthFailure: () => decentAccountService!.reportAuthenticationFailure(),
       isAuthKnownInvalid: decentAccountService.isAuthKnownInvalid,
+      authenticationGeneration: () =>
+          decentAccountService!.authenticationGeneration,
     );
     accountTokensController = AccountTokensController(
       tokenService: proxyTokenService,
@@ -600,11 +647,16 @@ void main(List<String> args) async {
   };
   webUIService.skinProxyTokenRevoker = proxyTokenService.revokeSkinToken;
 
+  final notificationCenter = NotificationCenter(
+    preferences: await SharedPreferences.getInstance(),
+  );
   pluginService = PluginLoaderService(
+    notifications: notificationCenter,
     kvStore: HiveStoreService(defaultNamespace: "plugins")..initialize(),
     decentProxyService: decentProxyService,
     credentialStore: credentialStore,
     deviceService: pluginDeviceService,
+    decentAccountChanges: decentAccountService?.identityAuthorityChanges,
   );
   await pluginService.pluginManager.attachDe1Controller(de1Controller);
   pluginService.pluginManager.attachWorkflowController(workflowController);
@@ -731,6 +783,11 @@ void main(List<String> args) async {
     };
   });
   await settingsController.loadSettings();
+  await prepareShotUploadStartup(
+    settingsController,
+    forceOnboarding: cliArgs.forceOnboarding,
+    bypassOnboarding: cliArgs.bypassOnboarding,
+  );
   if (macosUpdater != null) {
     try {
       await macosUpdater.configure(
@@ -798,8 +855,6 @@ void main(List<String> args) async {
 
   WidgetsBinding.instance.addObserver(
     AppLifecycleObserver(
-      updateCheckService: updateCheckService,
-      de1Controller: de1Controller,
       displayController: displayController,
       pluginLoaderService: pluginService,
       connectionManager: connectionManager,
@@ -835,11 +890,13 @@ void main(List<String> args) async {
         profileStorageService: profileStorage,
         connectionManager: connectionManager,
         scanStateGuardian: scanStateGuardian,
+        sensorController: sensorController,
         decentAccountService: decentAccountService,
         accountTokensController: accountTokensController,
         appLogUploadService: appLogUploadService,
         batteryController: batteryController,
         displayController: displayController,
+        accountConsentStore: accountConsentStore,
       ),
     ),
   );
@@ -847,23 +904,15 @@ void main(List<String> args) async {
 
 class AppLifecycleObserver with WidgetsBindingObserver {
   final _log = Logger("App Lifecycle");
-  final UpdateCheckService? updateCheckService;
-  final De1Controller? de1Controller;
   final DisplayController? displayController;
   final PluginLoaderService? pluginLoaderService;
   final ConnectionManager? connectionManager;
   final AppLogUploadService? appLogUploadService;
 
   late Timer _memTimer;
-  bool _wasBackgrounded = false;
-  StreamSubscription? _machineStateSubscription;
-  StreamSubscription? _stateStreamSubscription;
-  int? _lastMachineState;
   Future<void>? _detachFuture;
 
   AppLifecycleObserver({
-    this.updateCheckService,
-    this.de1Controller,
     this.displayController,
     this.pluginLoaderService,
     this.connectionManager,
@@ -872,35 +921,6 @@ class AppLifecycleObserver with WidgetsBindingObserver {
     _memTimer = Timer.periodic(Duration(minutes: 5), (t) {
       final rss = ProcessInfo.currentRss / (1024 * 1024);
       _log.info("[MEM] RSS=${rss.toStringAsFixed(1)}MB");
-    });
-
-    if (updateCheckService?.hasAvailableUpdate == true) {
-      Future.delayed(const Duration(seconds: 3), () {
-        _showUpdateNotification();
-      });
-    }
-
-    _machineStateSubscription = de1Controller?.de1.listen((machine) {
-      if (_detachFuture != null) return;
-      _stateStreamSubscription?.cancel();
-
-      if (machine == null) return;
-
-      _stateStreamSubscription = machine.currentSnapshot.listen((snapshot) {
-        if (_detachFuture != null) return;
-        final currentState = snapshot.state.state.index;
-
-        if (_lastMachineState == 0 &&
-            currentState == 2 &&
-            updateCheckService?.hasAvailableUpdate == true) {
-          _log.info(
-            'Machine transitioned from sleep to idle, showing update notification',
-          );
-          _showUpdateNotification();
-        }
-
-        _lastMachineState = currentState;
-      });
     });
   }
 
@@ -912,17 +932,11 @@ class AppLifecycleObserver with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
       _log.info("state: $state");
-      _wasBackgrounded = true;
     }
     if (state == AppLifecycleState.resumed) {
       _log.info("state: resumed");
 
       unawaited(displayController?.onAppResumed() ?? Future<void>.value());
-
-      if (_wasBackgrounded && updateCheckService?.hasAvailableUpdate == true) {
-        _showUpdateNotification();
-      }
-      _wasBackgrounded = false;
     }
   }
 
@@ -943,20 +957,6 @@ class AppLifecycleObserver with WidgetsBindingObserver {
   }
 
   Future<void> _handleDetached() async {
-    final machineSubscription = _machineStateSubscription;
-    _machineStateSubscription = null;
-    try {
-      await machineSubscription?.cancel();
-    } catch (error, stackTrace) {
-      _log.warning('Machine subscription detach failed', error, stackTrace);
-    }
-    final stateSubscription = _stateStreamSubscription;
-    _stateStreamSubscription = null;
-    try {
-      await stateSubscription?.cancel();
-    } catch (error, stackTrace) {
-      _log.warning('State subscription detach failed', error, stackTrace);
-    }
     try {
       await connectionManager?.shutdown();
     } catch (error, stackTrace) {
@@ -970,75 +970,8 @@ class AppLifecycleObserver with WidgetsBindingObserver {
     appLogUploadService?.dispose();
   }
 
-  void _showUpdateNotification() {
-    final context = NavigationService.context;
-    if (context == null || !context.mounted) return;
-
-    final updateInfo = updateCheckService?.availableUpdate;
-    if (updateInfo == null) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-
-    messenger.clearSnackBars();
-
-    final controller = messenger.showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Expanded(child: Text('Update: ${updateInfo.version}')),
-            SnackBarAction(
-              label: 'View',
-              onPressed: () {
-                final releaseUrl = updateCheckService?.getReleaseUrl();
-                if (releaseUrl != null) launchUrl(Uri.parse(releaseUrl));
-              },
-            ),
-            SnackBarAction(
-              label: 'Download',
-              onPressed: () {
-                if (Platform.isAndroid) {
-                  _showAndroidDownloadDialog(context, updateInfo);
-                } else {
-                  final releaseUrl = updateCheckService?.getReleaseUrl();
-                  if (releaseUrl != null) {
-                    launchUrl(Uri.parse(releaseUrl));
-                  }
-                }
-              },
-            ),
-          ],
-        ),
-        showCloseIcon: true,
-        duration: const Duration(days: 1),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-
-    controller.closed.then((reason) {
-      if (reason == SnackBarClosedReason.dismiss) {
-        updateCheckService?.skipCurrentUpdate();
-      }
-    });
-  }
-
-  void _showAndroidDownloadDialog(BuildContext context, UpdateInfo updateInfo) {
-    final updater = AndroidUpdater(owner: 'tadelv', repo: 'reaprime');
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AndroidQuickUpdateDialog(
-        updateInfo: updateInfo,
-        onDownload: (info, onProgress) =>
-            updater.downloadUpdate(info, onProgress: onProgress),
-        onInstall: updater.installUpdate,
-      ),
-    );
-  }
-
   void dispose() {
     _memTimer.cancel();
-    _machineStateSubscription?.cancel();
-    _stateStreamSubscription?.cancel();
   }
 }
 
@@ -1063,11 +996,13 @@ class AppRoot extends StatefulWidget {
   final ProfileStorageService? profileStorageService;
   final ConnectionManager connectionManager;
   final ScanStateGuardian scanStateGuardian;
+  final SensorController? sensorController;
   final DecentAccountService? decentAccountService;
   final AccountTokensController? accountTokensController;
   final AppLogUploadService? appLogUploadService;
   final BatteryController? batteryController;
   final DisplayController displayController;
+  final AccountConsentStore? accountConsentStore;
 
   const AppRoot({
     super.key,
@@ -1086,6 +1021,7 @@ class AppRoot extends StatefulWidget {
     required this.presenceController,
     required this.connectionManager,
     required this.scanStateGuardian,
+    this.sensorController,
     this.updateCheckService,
     this.macosUpdater,
     this.beanStorage,
@@ -1096,6 +1032,7 @@ class AppRoot extends StatefulWidget {
     this.appLogUploadService,
     this.batteryController,
     required this.displayController,
+    this.accountConsentStore,
   });
 
   static void restart(BuildContext context) {
@@ -1183,11 +1120,13 @@ class _AppRootState extends State<AppRoot> {
         profileStorageService: widget.profileStorageService,
         connectionManager: widget.connectionManager,
         scanStateGuardian: widget.scanStateGuardian,
+        sensorController: widget.sensorController,
         decentAccountService: widget.decentAccountService,
         accountTokensController: widget.accountTokensController,
         appLogUploadService: widget.appLogUploadService,
         batteryController: widget.batteryController,
         displayController: widget.displayController,
+        accountConsentStore: widget.accountConsentStore,
       ),
     );
 
@@ -1239,17 +1178,17 @@ class _AppRootState extends State<AppRoot> {
   List<PlatformMenuItem> _buildPlatformMenus() {
     return [
       PlatformMenu(
-        label: 'Decaid',
+        label: 'Decide',
         menus: [
           PlatformMenuItemGroup(
             members: [
-              PlatformMenuItem(label: 'About Decaid', onSelected: null),
+              PlatformMenuItem(label: 'About Decide', onSelected: null),
             ],
           ),
           PlatformMenuItemGroup(
             members: [
               PlatformMenuItem(
-                label: 'Quit Decaid',
+                label: 'Quit Decide',
                 shortcut: const SingleActivator(
                   LogicalKeyboardKey.keyQ,
                   meta: true,

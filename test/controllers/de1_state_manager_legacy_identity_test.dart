@@ -681,6 +681,13 @@ void main() {
     await pumpUntil(tester, () async {});
 
     expect(find.text('Link your Decent account'), findsOneWidget);
+    expect(
+      find.text(
+        'This machine does not report a serial number or machine model. '
+        'Link your Decent account so Decide can identify it.',
+      ),
+      findsOneWidget,
+    );
 
     await tester.tap(find.text('Not now'));
     await pumpUntil(tester, () async {});

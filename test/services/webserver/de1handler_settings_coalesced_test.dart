@@ -84,6 +84,36 @@ void main() {
     handler = app.call;
   }
 
+  int? serialReadAddress(String command) => command.startsWith('<E>')
+      ? int.parse(command.substring(5, 11), radix: 16)
+      : null;
+
+  Future<void> answerShotSettingsRefresh(int firstWrite) async {
+    var searchFrom = firstWrite;
+    for (final (item, value) in [
+      (MMRItem.targetSteamFlow, 150),
+      (MMRItem.hotWaterFlowRate, 250),
+      (MMRItem.flushFlowRate, 123),
+      (MMRItem.flushTimeout, 100),
+      (MMRItem.flushTemp, 955),
+    ]) {
+      int indexOfRead() => serialTransport.writes.indexWhere(
+        (command) => serialReadAddress(command) == item.address,
+        searchFrom,
+      );
+      final waited = Stopwatch()..start();
+      while (indexOfRead() < 0 && waited.elapsed < const Duration(seconds: 5)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      final index = indexOfRead();
+      expect(index, greaterThanOrEqualTo(searchFrom), reason: item.name);
+      searchFrom = index + 1;
+      serialTransport.injectSerial(
+        '[E]${_hex(_serialMmrResponse(item.address, [value]))}\n',
+      );
+    }
+  }
+
   Future<void> wireWithSerialBengle({String? bengleCoalescedSettings}) async {
     final deviceController = DeviceController([MockDeviceDiscoveryService()]);
     await deviceController.initialize();
@@ -122,6 +152,7 @@ void main() {
       MMRItem.cpuFirmwareBuild: 472,
       MMRItem.heaterV: 230,
       MMRItem.refillKitPresent: 0,
+      MMRItem.profileModeCaps: 0,
       MMRItem.calFlowEst: 1000,
     }.entries) {
       await respondToMmr(entry.key.address, entry.value);
@@ -129,6 +160,7 @@ void main() {
     for (final address in [0x00803898, 0x008038A0, 0x0080389C, 0x008038A4]) {
       await respondToMmr(address, 0);
     }
+    final writesBeforeShotSettingsRefresh = serialTransport.writes.length;
     await connecting;
 
     final settingsController = SettingsController(MockSettingsService());
@@ -150,6 +182,7 @@ void main() {
     final app = Router().plus;
     de1Handler.addRoutes(app);
     handler = app.call;
+    await answerShotSettingsRefresh(writesBeforeShotSettingsRefresh);
     serialTransport.writes.clear();
   }
 

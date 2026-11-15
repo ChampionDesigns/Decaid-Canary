@@ -1,4 +1,30 @@
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/mmr_address.dart';
+
+typedef MmrWriteBound = ({int? min, int? max});
+
+const Map<MMRItem, MmrWriteBound> bengleMmrItemBounds = {
+  MMRItem.tankTemp: (min: 0, max: 60),
+  MMRItem.heaterUp1Flow: (min: 5, max: 80),
+  MMRItem.heaterUp2Flow: (min: 5, max: 80),
+  MMRItem.waterHeaterIdleTemp: (min: 5, max: 1000),
+  MMRItem.targetSteamFlow: (min: 40, max: 400),
+  MMRItem.steamStartSecs: (min: 10, max: 400),
+  MMRItem.heaterUp2Timeout: (min: 5, max: 300),
+  MMRItem.flushFlowRate: (min: 10, max: 80),
+  MMRItem.flushTemp: (min: 10, max: 990),
+  MMRItem.flushTimeout: (min: 10, max: 2500),
+  MMRItem.hotWaterFlowRate: (min: 0, max: 80),
+  MMRItem.steamPurgeMode: (min: 0, max: 1),
+  MMRItem.allowUSBCharging: (min: 0, max: 1),
+  MMRItem.appFeatureFlags: (min: 0, max: 0xFFFFFF),
+  MMRItem.refillKitPresent: (min: 0, max: 2),
+  MMRItem.userPresent: (min: 0, max: 1),
+};
+
+MmrWriteBound bengleWriteBound(MmrAddress address) =>
+    (address is MMRItem ? bengleMmrItemBounds[address] : null) ??
+    (min: address.min, max: address.max);
 
 enum BengleMmr implements MmrAddress {
   matSetPoint(
@@ -12,14 +38,14 @@ enum BengleMmr implements MmrAddress {
     writeScale: 1.0,
   ),
 
-  scaleCalCmd(0x00803880, 4, MmrValueKind.int32, 'ScaleCalCmd', min: 0, max: 5),
+  scaleCalCmd(0x00803880, 4, MmrValueKind.int32, 'ScaleCalCmd', min: 0, max: 3),
   scaleCalState(0x00803884, 4, MmrValueKind.int32, 'ScaleCalState'),
   scaleCalWeight(
     0x00803888,
     4,
     MmrValueKind.scaledFloat,
     'ScaleCalWeight',
-    min: 0,
+    min: 10,
     max: 100000,
     readScale: 0.1,
     writeScale: 10.0,
@@ -100,7 +126,7 @@ enum BengleMmr implements MmrAddress {
     MmrValueKind.int32,
     'SetLocalTimeOfWeek',
     min: 0,
-    max: 604800,
+    max: 604799,
   ),
   scheduleEntry(
     0x008038C4,
@@ -125,7 +151,7 @@ enum BengleMmr implements MmrAddress {
     MmrValueKind.scaledFloat,
     'MatCurrentTemp',
     min: 0,
-    max: 16000,
+    max: 1600,
     readScale: 0.1,
     writeScale: 10.0,
   ),

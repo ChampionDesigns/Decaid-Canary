@@ -2,13 +2,13 @@
 
 Thanks for contributing. This guide tells you what's required to land a PR — items marked **(required)** are hard gates, not suggestions.
 
-> **Naming note:** The display name is **Decaid**. The Dart package, bundle ID, database, and plugin extension retain legacy identifiers for compatibility. See the naming table in [`CLAUDE.md`](CLAUDE.md) before renaming anything.
+> **Naming note:** The display name is **Decaid-Canary** (canary fork of upstream Decaid). The Dart package, database, and plugin extension retain legacy identifiers for compatibility; platform bundle IDs are fork-owned (`com.decentespresso.decaid.canary` Android, `com.decentespresso.decaid-canary` Apple/Linux). See the naming table in [`AGENTS.md`](AGENTS.md) before renaming anything.
 
 ## Quick Reference
 
 | What | Where |
 |------|-------|
-| Architecture & conventions | [`CLAUDE.md`](CLAUDE.md) |
+| Architecture & conventions | [`AGENTS.md`](AGENTS.md) |
 | PR template | [`.github/pull_request_template.md`](.github/pull_request_template.md) |
 | API specs (authoritative) | `assets/api/rest_v1.yml`, `assets/api/websocket_v1.yml` |
 | API docs | [`doc/Api.md`](doc/Api.md) |
@@ -26,7 +26,7 @@ Thanks for contributing. This guide tells you what's required to land a PR — i
 
 ## Local Setup
 
-Requirements: Flutter 3.44.2 (project/CI development version; see [README prerequisites](README.md#prerequisites) for the Dart SDK constraint), the [GitHub CLI](https://cli.github.com) (`gh`, authenticated — used to fetch the DYE2 bundled plugin), `jq` (validates the fetched plugin's manifest).
+Requirements: the Flutter SDK pinned in `.github/workflows/pr-checks.yml` (restated in [README prerequisites](README.md#prerequisites) along with the Dart SDK constraint), the [GitHub CLI](https://cli.github.com) (`gh`, authenticated — used to fetch the DYE2 bundled plugin), `jq` (validates the fetched plugin's manifest).
 
 ```bash
 flutter pub get
@@ -40,7 +40,7 @@ See [`CLAUDE.md`](CLAUDE.md) for the full command reference.
 
 ## Branching & PRs
 
-- Branch from `main`. Push to your fork, open a PR against `decentespresso/decaid:main`.
+- Branch from `main`. Push to your fork, open a PR against `ChampionDesigns/Decaid-Canary:main`.
 - One feature or fix per PR. No bundling unrelated changes.
 - External contributions must reference an **open, accepted issue** using `Fixes #123`, `Closes #123`, `Resolves #123`, or `Related #123`. The issue must carry either the `ready-for-agent` or `ready-for-human` label when the PR is opened.
 - Do not finish an implementation first and then open an issue only to satisfy the PR gate. The issue-first process exists so the proposed change can be considered before code review becomes necessary.
@@ -92,7 +92,7 @@ flutter test                             # all must pass
 ./scripts/fetch_dye2_plugin.sh           # assets/plugins/dye2.reaplugin/ must exist
 ```
 
-`dart format` is currently **advisory** in CI — the codebase predates the Dart 3.7 "tall style" formatter. Format your own changes (`dart format lib test`) but don't reformat untouched files in the same PR.
+`dart format` is **enforced** in CI on the Dart files your PR changed, using the SDK pinned in `.github/workflows/pr-checks.yml`. Use the merge-base-plus-untracked Dart formatting command in [`AGENTS.md` → Verification, step 1](AGENTS.md#verification) so in-progress edits and committed branch changes are covered without reformatting untouched files. A local SDK that differs from the pinned one reflows code CI would leave alone, so check out the pinned version (see [README prerequisites](README.md#prerequisites)) instead of matching your local formatter.
 
 ### 5. Architecture Boundaries (required)
 

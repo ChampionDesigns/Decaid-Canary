@@ -41,7 +41,9 @@ unpaired UTF-16 surrogates because URI encoding replaces them with U+FFFD;
 valid surrogate pairs, encoded control characters, and whitespace round-trip.
 Host-assigned UUID resource IDs,
 plugin management/KV/skin/file/command paths, and account-proxy normalization
-retain their existing route contracts.
+retain their existing path-encoding contracts. Plugin and skin management
+routes additionally require an `extensions:manage` token; see Extension
+Management Authorization.
 
 ### Patch Nullability
 
@@ -152,6 +154,30 @@ The canonicalisation itself lives in one place, `LedStripState.canonical()` in
 starting palette with it too, so a mock cannot hold or store a palette the machine
 could not produce.
 
+## Water Levels GET (issue #1028)
+
+`GET /api/v1/machine/waterLevels` answers the latest `De1WaterLevels` from
+`De1Interface.waterLevels`, the stream `/ws/v1/machine/waterLevels` forwards.
+The BLE connect path subscribes to water-level notifications but never reads the
+characteristic, unlike shot settings, so between connect and the machine's first
+notification there is no value to answer with. The request waits up to 4 seconds
+for that notification, the same budget as the serial latest-frame read, then
+answers `504` through `EndpointUnavailableException`. The DE1 notifies whenever
+the reading changes, and sensor jitter keeps it changing: on a DE1Pro the
+longest measured gap was 1.9 seconds. Keep the timeout: without it a machine that
+never reports would hang the request. The timeout sits on the stream, before
+`.first`, so a timed-out request cancels its subscription; `Future.timeout` after
+`.first` would leave it listening until the next frame.
+
+`UnifiedDe1Transport.waterLevels` returns the subject's `.stream`, not
+`asBroadcastStream()`. Each `asBroadcastStream()` call builds a wrapper that keeps
+its source subscription after its last listener cancels, so every `.first` read
+left a listener on the subject until disconnect, and a polled GET grew that set
+without bound. The remaining getters, except `bengleShotSample`, still use
+`asBroadcastStream()`. `shotSettings` (`De1Controller._readShotSettings`) and
+`calibration` (the calibration GET) also have per-request `.first` readers and
+leak the same way; they are left for a follow-up.
+
 ## WebSocket Conventions
 
 - WebSocket topics are path-based: `/ws/v1/machine/state`, `/ws/v1/machine/shotState`, `/ws/v1/scale/snapshot`, etc.
@@ -189,6 +215,72 @@ the legacy singular stream retains its existing `WeightSnapshot` payload.
 
 A hostname that resolves to a device address does pass the port-3000 entry redirect and receive the tokenless script tag (issue #699). The redirect only echoes the requested host on the current generation's port, and before 0.8.2 the entry served those requests as static files anyway; `window.decentApp` carries no secret and no-ops outside the embedded webview. Resolutions are cached per served generation under a short TTL and re-checked against the live interface list on every request, so a lookup that recovers, an address that moves, or an interface that disappears reclassifies without waiting for a restart. The cache is bounded so spoofed Host headers cannot grow it without limit or force a lookup per request.
 
+## Extension Management Authorization
+
+### Problem
+
+Plugin and skin management routes were open to any LAN client and to any
+plugin that can reach the local API (issue #1031).
+
+### Solution
+
+`lib/src/services/webserver/extension_management_auth.dart` holds the whole
+policy: `extensionManagementRoutes` (18 method + `shelf_router` patterns) and
+`extensionManagementAuthMiddleware`, installed in `buildWebServerHandler` right
+after `proxyAuthMiddleware`. A matching request needs a bearer scoped
+`extensions:manage`: 401 for a missing, malformed, unknown or revoked bearer,
+403 for a known token without the scope. Tokens come from the native API
+tokens section, or for development and automation from `--extensions-token` or
+the `DECAID_EXTENSIONS_TOKEN` environment variable at launch.
+
+### Design Choices
+
+- Matching builds a real `shelf_router` `Router` from the table, so encoding,
+  case and trailing slashes are judged as the handlers' router judges them and
+  method-specific entries leave plugin endpoints with reserved names alone.
+- The middleware is installed even without a `ProxyTokenService`; then only
+  in-process grants pass, so the routes fail closed.
+- Body-dependent gates (`POST /api/v1/settings` with `webUiPath`, a changed
+  `defaultSkinId` or `automaticUpdateCheck` turned on; import and pull-sync of a
+  changed `defaultSkinId` or `automaticUpdateCheck: true`) read the middleware's
+  recorded decision through `requireExtensionManagement` /
+  `mayManageExtensions`. A handler reached without the middleware is refused.
+- Plugins with `manage.extensions` get an in-process `ExtensionManagementGrant`
+  in the shelf request context via `host.localApi`, never a bearer. A network
+  caller cannot populate the context, and the grant's `isActive` is checked on
+  every request.
+- `host.localApi` is an allowlist, not a path prefix. `PluginLocalApiBridge`
+  dispatches only `extensionManagementRoutes`, `extensionManagementReadRoutes`
+  (the plugin, skin and skin-server `GET` routes) and `POST /api/v1/settings`
+  with a body of only `extensionManagementSettingsKeys`, matched with the same
+  `shelf_router` matcher as the middleware. Everything else is rejected before
+  dispatch, so the bridge does not stand in for `api`: it never dispatches to
+  machine control or plugin-defined endpoints, and `fetch` never carries a
+  grant. `webUiPath` is gated for token holders but is not one of the
+  bridge's keys, because it serves an arbitrary folder on the skin port. A new
+  management route must be added to one of those lists to be reachable from a
+  plugin. This bounds the plugin's own calls only: a plugin that can write
+  plugin source and approve updates can install one holding `api`, or add
+  `api` to itself with one source write, which issue #1031 accepts as the
+  delegated authority of the permission.
+- A bearer the token service recognises is removed from the request before
+  handlers run, so plugin-defined endpoints never see it.
+- The scope is independent of `account:proxy`; each middleware checks its own.
+
+When adding a plugin or skin mutation route, add it to
+`extensionManagementRoutes` and declare `security: [extensionsManage]` with
+401/403 in `rest_v1.yml`; `test/api/extension_management_spec_test.dart`
+fails until both agree or the route is listed as reviewed-open there, and
+`test/webserver/extension_management_route_coverage_test.dart` fails for any
+mutating route `PluginsHandler` or `WebUIHandler` registers that is in neither
+list, whether or not the spec mentions it.
+
+### Focused Tests
+
+```sh
+flutter test test/webserver/extension_management_auth_test.dart test/webserver/extension_management_route_coverage_test.dart test/api/extension_management_spec_test.dart
+```
+
 ## Decent Binary Protocol
 
 The protocol is DE1-specific. See
@@ -209,7 +301,8 @@ Workflow JSON has both `context` (new: `WorkflowContext` with `grinderModel`, `c
 3. Register in `webserver_service.dart` `_init()`.
 4. Update `assets/api/rest_v1.yml` (or `websocket_v1.yml`) in the same commit.
 5. Update `doc/Api.md` if user-facing.
-6. Smoke-test via `scripts/sb-dev.sh` + `curl`/`websocat`.
+6. A route that installs, configures or removes plugins or skins goes in `extensionManagementRoutes` and gets the `extensionsManage` security in the spec (enforced by `test/api/extension_management_spec_test.dart`).
+7. Smoke-test via `scripts/sb-dev.sh` + `curl`/`websocat`.
 
 ## Focused Tests
 
@@ -318,6 +411,20 @@ flutter test test/unit/services/webserver/port_binding_test.dart
 flutter test test/unit/services/webserver/api_docs_server_port_test.dart
 flutter test test/unit/ui/webserver_port_conflict_app_test.dart
 ```
+
+## Profile Step Limiters
+
+A step limiter is `{value, range}`. Both fields are required numbers.
+`StepLimiter.fromJson` refuses a missing, `null` or non-numeric `value` with
+`FormatException: limiter "value" must be a number`, and a missing, `null` or
+non-numeric `range` with `FormatException: limiter "range" must be a number`.
+A field that parses to NaN or an infinity (`"NaN"`, `"Infinity"`, `1e400`) is
+refused with `FormatException: limiter "<field>" must be a finite number`.
+There is no default for either field. An explicit `range: 0` is accepted and
+stored as 0.
+
+`POST /api/v1/profiles` and `PUT /api/v1/profiles/{id}` both answer such a body
+with a 400 and the same message.
 
 ## Keeping Notes Fresh
 

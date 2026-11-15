@@ -17,6 +17,11 @@ class _EmptyTransport extends FakeBleTransport {
   String get id => '';
 }
 
+class _SessionTransport extends FakeBleTransport {
+  @override
+  String get id => 'usb-2e8a-a-unknown-7';
+}
+
 const _shotSettings = <int>[
   0,
   150,
@@ -107,7 +112,33 @@ List<int> _flowRegisterWrites(FakeBleTransport transport) {
       .toList();
 }
 
+List<int> _refillLevelWrites(FakeBleTransport transport) {
+  return transport.writes
+      .where((write) => write.characteristicUUID == Endpoint.waterLevels.uuid)
+      .map(
+        (write) =>
+            ByteData.sublistView(write.data).getUint16(2, Endian.big) ~/ 256,
+      )
+      .toList();
+}
+
 void main() {
+  test('absent refill level does not write water levels at connect', () async {
+    final harness = await _connect();
+    addTearDown(harness.controller.dispose);
+
+    expect(_refillLevelWrites(harness.transport), isEmpty);
+  });
+
+  test('saved refill level is rewritten at connect', () async {
+    final settings = MemoryMachineSettingsStore();
+    await settings.update('serial:12345', refillLevel: 12);
+    final harness = await _connect(settings: settings);
+    addTearDown(harness.controller.dispose);
+
+    expect(_refillLevelWrites(harness.transport), [12]);
+  });
+
   test(
     'unknown machine identity preserves calibration without a write',
     () async {
@@ -119,25 +150,48 @@ void main() {
     },
   );
 
-  test(
-    'missing serial and transport identity preserve calibration without a write',
-    () async {
-      final settings = MemoryMachineSettingsStore();
-      await settings.update('serial:12345', flowCalibration: 1.25);
-      await settings.update('', flowCalibration: 1.5);
-      expect(await settings.read(''), isNull);
-      final harness = await _connect(
-        settings: settings,
-        transport: _EmptyTransport(),
-        serialN: 0,
-        calFlowEst: 1700,
-      );
-      addTearDown(harness.controller.dispose);
+  test('missing serial and transport identity preserve calibration without a write', () async {
+    final settings = MemoryMachineSettingsStore();
+    await settings.update('serial:12345', flowCalibration: 1.25);
+    await settings.update('', flowCalibration: 1.5);
+    expect(await settings.read(''), isNull);
+    final harness = await _connect(
+      settings: settings,
+      transport: _EmptyTransport(),
+      serialN: 0,
+      calFlowEst: 1700,
+    );
+    addTearDown(harness.controller.dispose);
 
-      expect(_flowRegisterWrites(harness.transport), isEmpty);
-      expect(harness.controller.connectedDe1OrNull?.cachedFlowEstimation, 1.7);
-    },
-  );
+    expect(_flowRegisterWrites(harness.transport), isEmpty);
+    expect(harness.controller.connectedDe1OrNull?.cachedFlowEstimation, 1.7);
+  });
+
+  for (final serial in [0, 12345]) {
+    test(
+      'session USB identity uses only verified MMR serial $serial for settings',
+      () async {
+        final settings = MemoryMachineSettingsStore();
+        await settings.update(
+          'device:usb-2e8a-a-unknown-7',
+          flowCalibration: 1.5,
+        );
+        await settings.update('serial:12345', flowCalibration: 1.25);
+        final harness = await _connect(
+          settings: settings,
+          transport: _SessionTransport(),
+          serialN: serial,
+          calFlowEstSequence: serial == 0 ? [1000] : [1000, 1250],
+        );
+        addTearDown(harness.controller.dispose);
+        expect(settings.reads, isNot(contains('device:usb-2e8a-a-unknown-7')));
+        expect(
+          _flowRegisterWrites(harness.transport),
+          serial == 0 ? isEmpty : [1250],
+        );
+      },
+    );
+  }
 
   test('absent calibration override does not write flow at connect', () async {
     final harness = await _connect();

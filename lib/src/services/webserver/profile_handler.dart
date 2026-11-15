@@ -3,8 +3,7 @@ part of '../webserver_service.dart';
 class ProfileHandler {
   final ProfileController _controller;
 
-  ProfileHandler({required ProfileController controller})
-    : _controller = controller;
+  ProfileHandler({required this._controller});
 
   void addRoutes(RouterPlus app) {
     app.get('/api/v1/profiles', _handleGetAll);
@@ -130,6 +129,8 @@ class ProfileHandler {
     } on ArgumentError catch (e) {
       return jsonBadRequest({'error': 'Invalid request', 'message': '$e'});
     } on FormatException catch (e) {
+      return jsonBadRequest({'error': 'Invalid request', 'message': '$e'});
+    } on TypeError catch (e) {
       return jsonBadRequest({'error': 'Invalid request', 'message': '$e'});
     } catch (e, st) {
       log.severe('Error in _handleCreate', e, st);

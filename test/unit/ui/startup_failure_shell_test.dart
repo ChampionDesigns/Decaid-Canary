@@ -34,11 +34,11 @@ void main() {
       );
       expect(theme.colorScheme.primary, DecentColors.teal);
       expect(
-        textColor('Another Decaid app is running'),
+        textColor('Another Decide app is running'),
         dark ? const Color(0xFFFFB4AB) : DecentColors.destructive,
       );
       expect(
-        textColor('Close the other Decaid app, then open this one again.'),
+        textColor('Close the other Decide app, then open this one again.'),
         dark ? DecentColors.offWhite : DecentColors.destructive,
       );
       expect(

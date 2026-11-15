@@ -1,3 +1,4 @@
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
@@ -68,8 +69,37 @@ Profile _gentleAndSweet() => Profile(
   ],
 );
 
+void _fakeTimeTest(String description, Future<void> Function() body) {
+  test(description, () => _runInFakeTime(body));
+}
+
+Future<void> _runInFakeTime(Future<void> Function() body) async {
+  const step = Duration(milliseconds: 10);
+  const limit = Duration(seconds: 30);
+  final fake = FakeAsync();
+  var done = false;
+  Object? error;
+  StackTrace? stackTrace;
+  fake.run((_) {
+    body().then(
+      (_) => done = true,
+      onError: (Object e, StackTrace s) {
+        error = e;
+        stackTrace = s;
+        done = true;
+      },
+    );
+  });
+  while (!done && fake.elapsed < limit) {
+    fake.elapse(step);
+    await Future<void>.delayed(Duration.zero);
+  }
+  if (error != null) Error.throwWithStackTrace(error!, stackTrace!);
+  if (!done) fail('test body did not finish in $limit of simulated time');
+}
+
 void main() {
-  test('simulated shot curves resemble a real pull', () async {
+  _fakeTimeTest('simulated shot curves resemble a real pull', () async {
     final machine = MockDe1(
       simulationTickInterval: const Duration(milliseconds: 10),
     );
@@ -132,7 +162,7 @@ void main() {
     );
   });
 
-  test('hot water preserves profile telemetry', () async {
+  _fakeTimeTest('hot water preserves profile telemetry', () async {
     final machine = MockDe1(
       simulationTickInterval: const Duration(milliseconds: 10),
     );
@@ -215,7 +245,7 @@ void main() {
     }
   });
 
-  test('successive shots have different puck responses', () async {
+  _fakeTimeTest('successive shots have different puck responses', () async {
     final machine = MockDe1(
       simulationTickInterval: const Duration(milliseconds: 10),
     );

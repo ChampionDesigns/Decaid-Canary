@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:logging/logging.dart';
 import 'package:reaprime/src/models/device/device.dart' as device;
 import 'package:reaprime/src/models/device/firmware_update_state.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
@@ -229,6 +230,152 @@ void main() {
 
     await cancellation;
     expect(de1.firmwareUpdateState, FirmwareUpdateState.idle);
+  });
+
+  test('diagnostic trace compares success with injected requested-state '
+      'sleep-write timeout', () async {
+    final previousRootLevel = Logger.root.level;
+    Logger.root.level = Level.ALL;
+    final logs = <LogRecord>[];
+    final logSubscription = Logger.root.onRecord.listen(logs.add);
+    addTearDown(() async {
+      await logSubscription.cancel();
+      Logger.root.level = previousRootLevel;
+    });
+
+    final successTransport = BarrierBleTransport();
+    addTearDown(successTransport.dispose);
+    successTransport.queueOnConnectResponses(v13Model: 3, calFlowEst: 0);
+    final successDe1 = UnifiedDe1(
+      transport: successTransport,
+      firmwareEraseTimeout: const Duration(seconds: 1),
+      firmwareVerificationTimeout: const Duration(seconds: 1),
+    );
+    await successDe1.onConnect();
+    successTransport.trace.clear();
+    successTransport.queueMmrResponseInt(MMRItem.calFlowEst, 1000);
+    expect(await successDe1.getFlowEstimation(), 1.0);
+    successTransport.queueFirmwareMapResponse([0, 0, 0, 1, 0xff, 0xff, 0xff]);
+    final uploadBarrier = Completer<void>();
+    successTransport.pauseNextWrite(Endpoint.writeToMMR.uuid, uploadBarrier);
+    final success = successDe1.updateFirmware(
+      Uint8List(16),
+      onProgress: (_) {},
+    );
+    await _waitForState(successDe1, FirmwareUpdateState.uploading);
+    uploadBarrier.complete();
+    await Future<void>.delayed(Duration.zero);
+    successTransport.emitFirmwareMapResponse([0, 0, 0, 1, 0xff, 0xff, 0xfd]);
+    await success;
+    final imageWriteLogs = logs
+        .where(
+          (record) =>
+              record.loggerName.startsWith('UnifiedDe1Transport-') &&
+              record.level == Level.FINE,
+        )
+        .toList();
+    expect(
+      imageWriteLogs.any(
+        (record) => record.message.contains('about to write to writeToMMR'),
+      ),
+      isTrue,
+    );
+    expect(
+      imageWriteLogs.any(
+        (record) => record.message.contains(
+          '10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00',
+        ),
+      ),
+      isFalse,
+    );
+
+    final failureTransport = FakeBleTransport(traceEnabled: true);
+    addTearDown(failureTransport.dispose);
+    failureTransport.queueOnConnectResponses(v13Model: 3, calFlowEst: 0);
+    failureTransport.requestedStateSleepWriteTimeout = const Duration(
+      seconds: 2,
+    );
+    final failureDe1 = UnifiedDe1(
+      transport: failureTransport,
+      firmwareEraseTimeout: const Duration(seconds: 1),
+      firmwareVerificationTimeout: const Duration(seconds: 1),
+    );
+    await failureDe1.onConnect();
+    failureTransport.trace.clear();
+    failureTransport.queueMmrResponseInt(MMRItem.calFlowEst, 1000);
+    expect(await failureDe1.getFlowEstimation(), 1.0);
+    failureTransport.writes.clear();
+
+    Object? failure;
+    try {
+      await failureDe1.updateFirmware(Uint8List(16), onProgress: (_) {});
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure, isA<FirmwareUpdateStageException>());
+    final failureStage = failure as FirmwareUpdateStageException;
+    expect(failureStage.stage, 'sleep');
+    expect(failureStage.cause, isA<TimeoutException>());
+    expect(
+      failureStage.stackTrace.toString(),
+      contains('FakeBleTransport.write'),
+    );
+    expect(failureStage.toString(), failureStage.cause.toString());
+    final stageFailureLog = logs.singleWhere(
+      (record) => record.message.contains('firmware stage=sleep failed'),
+    );
+    expect(stageFailureLog.message, contains('stage=sleep'));
+    expect(stageFailureLog.message, contains('cause=TimeoutException'));
+    expect(stageFailureLog.error, isA<TimeoutException>());
+    expect(stageFailureLog.stackTrace, isNotNull);
+    expect(failureDe1.firmwareUpdateState, FirmwareUpdateState.idle);
+    expect(
+      failureTransport.trace.any(
+        (event) => event.contains('write endpoint=requestedState'),
+      ),
+      isTrue,
+    );
+    expect(
+      failureTransport.writes.any(
+        (write) => write.characteristicUUID == Endpoint.fwMapRequest.uuid,
+      ),
+      isFalse,
+    );
+    expect(
+      failureTransport.writes.any(
+        (write) => write.characteristicUUID == Endpoint.writeToMMR.uuid,
+      ),
+      isFalse,
+    );
+
+    failureTransport.writes.clear();
+    failureTransport.requestedStateSleepWriteTimeout = null;
+    failureTransport.queueFirmwareMapResponse([0, 0, 0, 1, 0xff, 0xff, 0xff]);
+    failureTransport.queueFirmwareMapResponse([0, 0, 0, 1, 0xff, 0xff, 0xfd]);
+    final subsequentImage = Uint8List.fromList(
+      List<int>.generate(16, (index) => index + 1),
+    );
+    await failureDe1.updateFirmware(subsequentImage, onProgress: (_) {});
+    expect(failureDe1.firmwareUpdateState, FirmwareUpdateState.idle);
+    expect(failureTransport.connectCalls, 1);
+    final subsequentMapWrites = failureTransport.writes
+        .where(
+          (write) => write.characteristicUUID == Endpoint.fwMapRequest.uuid,
+        )
+        .toList();
+    expect(subsequentMapWrites, hasLength(2));
+    expect(
+      subsequentMapWrites.where((write) => write.data[2] == 1),
+      hasLength(1),
+    );
+    final subsequentImageWrites = failureTransport.writes
+        .where((write) => write.characteristicUUID == Endpoint.writeToMMR.uuid)
+        .toList();
+    expect(subsequentImageWrites, hasLength(1));
+    expect(
+      subsequentImageWrites.single.data,
+      orderedEquals([16, 0, 0, 0, ...subsequentImage]),
+    );
   });
 }
 

@@ -130,6 +130,10 @@ Discovery services are responsible for scanning and creating device instances. E
   - Notification liveness uses the existing snapshot watchdog and normal
     `ConnectionManager` reconnect lifecycle. Serial has no separate keepalive
     or reconnect loop.
+  - SensorBasket serial discovery accepts finite and non-finite values in all
+    four telemetry slots and firmware whitespace variants. Invalid channel
+    readings remain present as `null` in sensor snapshots; valid values and
+    channel keys are unchanged.
   - A DE1 pushes `K` (shot settings) only when the settings change, and
     hardware verification on a stock DE1 over USB showed it never pushes a
     `[K]` on connect, re-arm or write. The app therefore owns the frame on
@@ -227,11 +231,25 @@ earlier attach broadcast.
 
 `UsbAttachProbe` is a second optional capability for the originating serial
 service. `SerialServiceAndroid.connectAttachedMachine` correlates the attach
-event with a newly listed USB device (by stable ID when Android supplied one,
-otherwise only devices not already connected), runs the normal serial admission
+event with a newly listed USB device (by physical attachment when Android
+supplies its ID, otherwise by stable ID or an unclaimed enumeration candidate), runs the normal serial admission
 and detection, and connects the device only when it is a supported machine
-(`De1Interface`). Scales, sensors, debug ports, keyboards, and other USB
-devices are rejected and their transports disposed. The typed result
+(`De1Interface`). Android USB IDs use the readable descriptor serial as the
+canonical identity. While that serial is unavailable, an attachment-scoped
+`usb-<vid>-<pid>-unknown-<physicalId>` identity keeps same-VID/PID devices
+separate for the current session; it is never written as a remembered device,
+preferred machine, or device-ID machine-settings fallback. Missing VID/PID
+descriptors use the same session-only policy (`usb-session-<physicalId>`). Repeated enumeration
+for the same physical attachment is reconciled through physical ownership, so a
+later descriptor change does not add a competing inventory item or replace a
+healthy transport. Once an attachment supplies its descriptor serial, inventory and
+preferred resolution recognize that canonical ID without adding its remembered
+record beside the live session. Explicit UI and API preference writes also ignore
+session-only IDs; UI selection remains local and can still connect the device.
+Canonical rebind is deferred until a safe disconnected
+redetection rather than forcing a healthy session to reconnect. Scales, sensors,
+debug ports, keyboards, and other USB devices are rejected and their transports
+disposed. The typed result
 distinguishes a connected machine from "no supported machine attached" from
 "machine detected but connection or identity initialization failed". When
 the originating service only implements the notifier (no probe capability),
@@ -623,10 +641,18 @@ Watch lifecycle details:
   recovery is no longer needed. Ordinary scale-only callers keep their existing
   queue semantics, including when coalesced with wake recovery.
   A supported preferred-scale watch re-arms on wake without a competing burst;
-  watch failure retains the existing backoff fallback. Without a preferred scale,
-  or for serial/WiFi and unsupported-watch platforms, the settled recovery uses
-  the existing scale-only discovery/picker path. `De1StateManager` only handles
+  watch failure retains the existing backoff fallback. Serial/WiFi and
+  unsupported-watch platforms use settled scale-only discovery. With a preferred
+  scale configured, recovery attempts only that scale: alternatives remain in
+  inventory but do not create a picker or cancel retries when the preferred scale
+  is absent or fails to connect. Without a preference, scale-only discovery keeps
+  its normal selection policy. Explicit scans retain their picker behavior, and
+  recovery never supersedes a pending user selection. `De1StateManager` only handles
   physical scale power/display operations and sleep/disconnect expectation marks.
+  This preferred-only rule is limited to scale-only recovery: full automatic
+  startup/machine-recovery scans retain their existing picker policy and may still
+  pause preferred-scale retries when the preferred scale is missing. Broadening
+  that policy is separate from the controlled USB-loss recovery fix.
   Rescheduling a pending legacy reconnect timer on wake preserves its already-counted
   tier; settling does not consume another tier. A genuine scan advances the next
   fallback once, preserving the 5s -> 10s -> 20s progression (60s cap).
@@ -700,7 +726,7 @@ This is the safety net. Device implementations should ALSO catch
 
 Device preferences are stored via `SettingsController`:
 - `preferredMachineId` — auto-set on successful machine connection
-- `preferredScaleId` — auto-set on successful scale connection
+- `preferredScaleId` — auto-set on successful scale connection; session-only USB IDs are not persisted
 - `preferredGrinderDeviceId` — auto-set on successful runtime grinder connection
 - Configurable in Settings → Device Management
 

@@ -1,3 +1,5 @@
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart';
+
 import 'dart:async';
 
 import 'package:clock/clock.dart';
@@ -140,6 +142,9 @@ class _FakeBengle extends MockDe1 implements BengleInterface {
   Stream<bool> get probeAttached => const Stream.empty();
   @override
   Stream<double> get probeTemperature => const Stream.empty();
+
+  @override
+  Stream<BengleEstSample> get puckEstimator => const Stream.empty();
 }
 
 class _TestDe1Controller extends De1Controller {
@@ -163,6 +168,7 @@ class _TestDe1Controller extends De1Controller {
   Future<T> runDeviceWrite<T>(
     Future<T> Function(De1Interface device) write, {
     De1ReplayPolicy replayPolicy = De1ReplayPolicy.never,
+    bool firmwareDiagnostic = false,
   }) async {
     deviceWriteCalls++;
     await beforeDeviceWrite?.call();

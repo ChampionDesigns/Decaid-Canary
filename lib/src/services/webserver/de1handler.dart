@@ -9,19 +9,15 @@ class De1Handler {
   final log = Logger("De1WebHandler");
 
   De1Handler({
-    required De1Controller controller,
-    required SettingsController settingsController,
-    required ScaleController scaleController,
-    required WorkflowController workflowController,
+    required this._controller,
+    required this._settingsController,
+    required this._scaleController,
+    required this._workflowController,
     String bengleCoalescedSettings = const String.fromEnvironment(
       'bengleCoalescedSettings',
       defaultValue: 'fanTank,flush,heater',
     ),
-  }) : _controller = controller,
-       _settingsController = settingsController,
-       _scaleController = scaleController,
-       _workflowController = workflowController,
-       _bengleSettingsGroups = Set.unmodifiable(
+  }) : _bengleSettingsGroups = Set.unmodifiable(
          bengleCoalescedSettings
              .split(',')
              .map((group) => group.trim())
@@ -423,6 +419,13 @@ class De1Handler {
       });
     });
 
+    app.get('/api/v1/machine/waterLevels', (Request _) async {
+      return withDe1((de1) async {
+        final levels = await _latestWaterLevels(de1);
+        return jsonOk(levels.toJson());
+      });
+    });
+
     app.post('/api/v1/machine/waterLevels', (Request r) async {
       final dynamic json;
       try {
@@ -444,10 +447,8 @@ class De1Handler {
       final refillLevel = json['refillLevel'] == null
           ? null
           : (json['refillLevel'] as num).toInt();
-      return withQueuedDe1((de1) async {
-        if (refillLevel != null) {
-          await de1.setRefillLevel(refillLevel);
-        }
+      return _mapDe1WriteErrors(() async {
+        await _controller.updateRefillLevel(refillLevel);
         return jsonAccepted();
       });
     });
@@ -813,6 +814,26 @@ class De1Handler {
     return de1.getAdvancedMachineSettingsSnapshot();
   }
 
+  static const _waterLevelsTimeout = Duration(seconds: 4);
+
+  Future<De1WaterLevels> _latestWaterLevels(De1Interface de1) async {
+    try {
+      return await de1.waterLevels
+          .timeout(
+            _waterLevelsTimeout,
+            onTimeout: (sink) => sink.addError(
+              const EndpointUnavailableException(
+                'waterLevels',
+                _waterLevelsTimeout,
+              ),
+            ),
+          )
+          .first;
+    } on StateError {
+      throw const DeviceNotConnectedException.machine();
+    }
+  }
+
   Response? _bengleFirmwareGate(De1Interface de1, String feature) {
     if (de1 is! BengleInterface) {
       return jsonNotFound({'error': '$feature not supported'});
@@ -917,8 +938,11 @@ class De1Handler {
     Request request,
     String newState,
   ) async {
+    final requestState = MachineState.values.asNameMap()[newState];
+    if (requestState == null) {
+      return jsonBadRequest({'details': 'Unknown machine state: $newState'});
+    }
     return withDe1((de1) async {
-      var requestState = MachineState.values.byName(newState);
       final blockOnNoScale = _settingsController.blockOnNoScale;
       final scaleConnected =
           _scaleController.currentConnectionState ==
@@ -953,22 +977,35 @@ class De1Handler {
   }
 
   Future<Response> _profileHandler(Request request) async {
-    return withDe1((_) async {
-      final payload = await readBoundedRequestBodyString(
-        request,
-        maxBytes: largeRequestBodyBytes,
-        timeout: largeRequestBodyTimeout,
-      );
+    final payload = await readBoundedRequestBodyString(
+      request,
+      maxBytes: largeRequestBodyBytes,
+      timeout: largeRequestBodyTimeout,
+    );
+    Profile profile;
+    try {
+      final Map<String, dynamic> json = jsonDecode(payload);
+      profile = Profile.fromJson(json);
+    } on FormatException catch (e) {
+      return jsonBadRequest({'error': 'Invalid profile', 'message': '$e'});
+    } on ArgumentError catch (e) {
+      return jsonBadRequest({'error': 'Invalid profile', 'message': '$e'});
+    } on TypeError catch (e) {
+      return jsonBadRequest({'error': 'Invalid profile', 'message': '$e'});
+    }
 
-      Map<String, dynamic> json;
+    return withDe1((_) async {
       try {
-        json = jsonDecode(payload);
-      } catch (e) {
-        return jsonBadRequest({'error': 'Invalid JSON body'});
+        await _controller.runDeviceWrite(
+          (device) => device.setProfile(profile),
+        );
+        return jsonOk(null);
+      } on ProfileModeUnsupportedException catch (e) {
+        return jsonBadRequest({
+          'error': 'Unsupported profile',
+          'message': e.message,
+        });
       }
-      Profile profile = Profile.fromJson(json);
-      await _controller.runDeviceWrite((device) => device.setProfile(profile));
-      return jsonOk(null);
     });
   }
 

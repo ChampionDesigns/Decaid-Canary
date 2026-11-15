@@ -32,11 +32,11 @@ enum AppLogUploadResult {
 
 final class AppLogUploadService extends ChangeNotifier {
   AppLogUploadService({
-    required DecentAccountService accountService,
-    required AccountConsentStore consentStore,
-    required String logFilePath,
-    required AppLogMachineIdentity? Function() machineIdentity,
-    required SharedPreferences preferences,
+    required this._accountService,
+    required this._consentStore,
+    required this._logFilePath,
+    required this._machineIdentity,
+    required this._preferences,
     this.initialDelay = const Duration(minutes: 1),
     this.uploadInterval = const Duration(hours: 1),
     this.backlogDelay = const Duration(minutes: 1),
@@ -44,11 +44,7 @@ final class AppLogUploadService extends ChangeNotifier {
     this.softLimitBytes = 700000,
     this.hardLimitBytes = 950000,
     @visibleForTesting this.beforeLogSnapshotValidation,
-  }) : _accountService = accountService,
-       _consentStore = consentStore,
-       _logFilePath = logFilePath,
-       _machineIdentity = machineIdentity,
-       _preferences = preferences;
+  });
 
   static const _consentKey = 'appLogUpload';
   static const _cursorKey = 'appLogUpload.cursor';
@@ -175,7 +171,7 @@ final class AppLogUploadService extends ChangeNotifier {
     } catch (error, stackTrace) {
       _log.warning('App log upload failed', error, stackTrace);
       try {
-        await _setLastResult('Upload failed; Decaid will retry later');
+        await _setLastResult('Upload failed; Decide will retry later');
       } catch (storageError, storageStackTrace) {
         _log.warning(
           'Failed to save app log upload result',

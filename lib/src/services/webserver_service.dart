@@ -20,6 +20,7 @@ import 'package:reaprime/src/models/data/profile_record.dart';
 import 'package:reaprime/src/models/data/shot_state_event.dart';
 import 'package:reaprime/src/models/data/utils.dart';
 import 'package:reaprime/src/models/device/device.dart';
+import 'package:reaprime/src/models/device/device_identity.dart';
 import 'package:reaprime/src/models/device/grinder_device.dart';
 import 'package:reaprime/src/models/device/scale.dart';
 import 'package:reaprime/src/models/device/scale_calibration.dart';
@@ -90,6 +91,7 @@ import 'package:reaprime/src/services/installed_components.dart';
 import 'package:reaprime/src/services/account/decent_account_service.dart';
 import 'package:reaprime/src/services/account/decent_proxy_service.dart';
 import 'package:reaprime/src/services/account/proxy_token_service.dart';
+import 'package:reaprime/src/services/webserver/extension_management_auth.dart';
 import 'package:reaprime/src/services/webserver/proxy_auth_middleware.dart';
 import 'package:reaprime/src/controllers/battery_controller.dart';
 import 'package:reaprime/src/controllers/connection_manager.dart';
@@ -369,45 +371,43 @@ Future<void> startWebServer(
     );
   }
 
-  final server = await serveOrReportPortInUse(
-    _init(
-      deviceHandler,
-      de1Handler,
-      firmwareHandler,
-      scaleHandler,
-      grinderHandler,
-      settingsHandler,
-      sensorsHandler,
-      workflowHandler,
-      shotsHandler,
-      steamsHandler,
-      kvStoreHandler,
-      pluginsHandler,
-      profileHandler,
-      webUIHandler,
-      feedbackHandler,
-      logsHandler,
-      webViewLogsHandler,
-      presenceHandler,
-      displayHandler,
-      accountHandler,
-      accountProxyHandler,
-      derekHandler,
-      proxyTokenService,
-      () => accountProxyCorsAllowedOrigins(webUIService),
-      dataExportHandler,
-      dataSyncHandler,
-      beansHandler,
-      grindersHandler,
-      infoHandler,
-      bleDiagnosticsHandler,
-      debugHandler,
-      wifiScaleHandler,
-      updateHandler,
-    ),
-    '0.0.0.0',
-    8080,
+  final handler = _init(
+    deviceHandler,
+    de1Handler,
+    firmwareHandler,
+    scaleHandler,
+    grinderHandler,
+    settingsHandler,
+    sensorsHandler,
+    workflowHandler,
+    shotsHandler,
+    steamsHandler,
+    kvStoreHandler,
+    pluginsHandler,
+    profileHandler,
+    webUIHandler,
+    feedbackHandler,
+    logsHandler,
+    webViewLogsHandler,
+    presenceHandler,
+    displayHandler,
+    accountHandler,
+    accountProxyHandler,
+    derekHandler,
+    proxyTokenService,
+    () => accountProxyCorsAllowedOrigins(webUIService),
+    dataExportHandler,
+    dataSyncHandler,
+    beansHandler,
+    grindersHandler,
+    infoHandler,
+    bleDiagnosticsHandler,
+    debugHandler,
+    wifiScaleHandler,
+    updateHandler,
   );
+  pluginService.pluginManager.attachLocalApi(handler);
+  final server = await serveOrReportPortInUse(handler, '0.0.0.0', 8080);
   log.info('API Web server running on ${server.address.host}:${server.port}');
 
   await startApiDocsServer();
@@ -449,7 +449,7 @@ Handler _init(
   UpdateHandler? updateHandler,
 ) {
   log.info("called _init");
-  var app = Router().plus;
+  var app = createApiRouter();
 
   deviceHandler.addRoutes(app);
   wifiScaleHandler?.addRoutes(app);
@@ -506,6 +506,53 @@ Handler _init(
 
 Set<String> _noAccountProxyOrigins() => const {};
 
+class ApiDocsConfiguration {
+  const ApiDocsConfiguration();
+
+  int get port => 4001;
+  String get manifestPath => '/api/v1/manifest';
+  String get viewerPath => '/';
+  String get openApiPath => '/rest_v1.yml';
+  String get asyncApiPath => '/websocket_v1.yml';
+  List<String> get assetPaths => [
+    'assets/api/index.html',
+    'assets/api$openApiPath',
+    'assets/api$asyncApiPath',
+  ];
+
+  Map<String, Object> get manifest => {
+    'api': 'v1',
+    'docs': {
+      'port': port,
+      'viewer': viewerPath,
+      'openapi': openApiPath,
+      'asyncapi': asyncApiPath,
+    },
+  };
+
+  String get notFoundHint =>
+      'API docs: same host, port $port; viewer $viewerPath; '
+      'OpenAPI $openApiPath; AsyncAPI $asyncApiPath';
+}
+
+const apiDocsConfiguration = ApiDocsConfiguration();
+
+RouterPlus createApiRouter() {
+  final app = Router(
+    notFoundHandler: (request) {
+      return jsonNotFound({
+        'error': 'Route not found',
+        'hint': apiDocsConfiguration.notFoundHint,
+      });
+    },
+  ).plus;
+  app.get(apiDocsConfiguration.manifestPath, (request) {
+    return jsonOk(apiDocsConfiguration.manifest)
+        .change(headers: {'Cache-Control': 'public, max-age=300'});
+  });
+  return app;
+}
+
 Handler buildWebServerHandler(
   Handler routes, {
   ProxyTokenService? proxyTokenService,
@@ -521,8 +568,7 @@ Handler buildWebServerHandler(
             'Access-Control-Expose-Headers': _corsExposedResponseHeaders.join(
               ', ',
             ),
-            'Access-Control-Allow-Headers':
-                'Accept, Accept-Encoding, Authorization, Content-Type, DNT, Origin, User-Agent, If-None-Match',
+            'Access-Control-Allow-Headers': 'Accept, Accept-Encoding, Authorization, Content-Type, DNT, Origin, User-Agent, If-None-Match',
           },
         ),
       )
@@ -531,6 +577,7 @@ Handler buildWebServerHandler(
             ? (Handler h) => h
             : proxyAuthMiddleware(proxyTokenService),
       )
+      .addMiddleware(extensionManagementAuthMiddleware(proxyTokenService))
       .addMiddleware(requestBodyReadMiddleware())
       .addMiddleware(apiAdmissionMiddleware(admissionGate ?? _apiAdmissionGate))
       .addHandler(routes);
@@ -663,6 +710,12 @@ String _appendVary(String? value, String headerName) {
   return '$value, $headerName';
 }
 
+Handler createApiDocsHandler(String apiDirectory) => createStaticHandler(
+  apiDirectory,
+  defaultDocument: 'index.html',
+  listDirectories: true,
+);
+
 Future<HttpServer?> startApiDocsServer() async {
   final tempDir = await getTemporaryDirectory();
   final apiDir = Directory('${tempDir.path}/api');
@@ -670,13 +723,7 @@ Future<HttpServer?> startApiDocsServer() async {
     apiDir.createSync(recursive: true);
   }
 
-  final assetFiles = [
-    'assets/api/index.html',
-    'assets/api/rest_v1.yml',
-    'assets/api/websocket_v1.yml',
-  ];
-
-  for (final assetPath in assetFiles) {
+  for (final assetPath in apiDocsConfiguration.assetPaths) {
     final data = await rootBundle.load(assetPath);
     final bytes = data.buffer.asUint8List();
     final filename = assetPath.split('/').last;
@@ -684,15 +731,15 @@ Future<HttpServer?> startApiDocsServer() async {
     await file.writeAsBytes(bytes, flush: true);
   }
 
-  final apiHandler = createStaticHandler(
-    apiDir.path,
-    defaultDocument: 'index.html',
-    listDirectories: true,
-  );
+  final apiHandler = createApiDocsHandler(apiDir.path);
 
   final HttpServer apiServer;
   try {
-    apiServer = await serveOrReportPortInUse(apiHandler, '0.0.0.0', 4001);
+    apiServer = await serveOrReportPortInUse(
+      apiHandler,
+      '0.0.0.0',
+      apiDocsConfiguration.port,
+    );
   } on WebServerPortInUse catch (e) {
     log.warning(
       'API docs server not started: port ${e.port} is already in use',

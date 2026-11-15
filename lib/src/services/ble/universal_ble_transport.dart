@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:typed_data';
+
 import 'package:logging/logging.dart';
 import 'package:reaprime/src/models/device/device.dart' as device;
 import 'package:reaprime/src/models/device/transport/ble_transport.dart';
@@ -42,27 +43,18 @@ class UniversalBleTransport extends BLETransport {
 
   UniversalBleTransport({
     required BleDevice device,
-    Future<void> Function()? stopScan,
-    bool requestLargeMtuNonAndroid = false,
-    bool? isAndroidOverride,
-    bool? isLinuxOverride,
-    Duration faultRecoveryGrace = const Duration(seconds: 2),
-    Duration faultRecoveryDisconnectTimeout = const Duration(seconds: 5),
+    this._stopScan,
+    this._requestLargeMtuNonAndroid = false,
+    this._isAndroidOverride,
+    this._isLinuxOverride,
+    this._faultRecoveryGrace = const Duration(seconds: 2),
+    this._faultRecoveryDisconnectTimeout = const Duration(seconds: 5),
     BleLifecycleGate? lifecycleGate,
-    Duration bluezPostConnectDelay = const Duration(milliseconds: 500),
-    Duration bluezScanSettleDelay = const Duration(seconds: 2),
-    Duration bluezCacheRefreshScan = const Duration(seconds: 4),
+    this._bluezPostConnectDelay = const Duration(milliseconds: 500),
+    this._bluezScanSettleDelay = const Duration(seconds: 2),
+    this._bluezCacheRefreshScan = const Duration(seconds: 4),
   }) : _device = device,
-       _stopScan = stopScan,
-       _requestLargeMtuNonAndroid = requestLargeMtuNonAndroid,
-       _isAndroidOverride = isAndroidOverride,
-       _isLinuxOverride = isLinuxOverride,
-       _faultRecoveryGrace = faultRecoveryGrace,
-       _faultRecoveryDisconnectTimeout = faultRecoveryDisconnectTimeout,
-       _lifecycleGate = lifecycleGate ?? BleLifecycleGate(),
-       _bluezPostConnectDelay = bluezPostConnectDelay,
-       _bluezScanSettleDelay = bluezScanSettleDelay,
-       _bluezCacheRefreshScan = bluezCacheRefreshScan {
+       _lifecycleGate = lifecycleGate ?? BleLifecycleGate() {
     _log = Logger("BLETransport-${device.deviceId}");
   }
 
@@ -432,6 +424,24 @@ class UniversalBleTransport extends BLETransport {
     return operation;
   }
 
+  /// serviceUUID -> characteristic UUIDs, both in 128-bit lowercase form, captured at
+  /// discovery. Replaced wholesale on each discovery so a reconnect can never
+  /// leave a stale characteristic looking present.
+  Map<String, List<String>> _characteristicsByService = const {};
+
+  void _cacheCharacteristics(List<BleService> services) {
+    _characteristicsByService = {
+      for (final service in services)
+        BleUuidParser.string(service.uuid): [
+          for (final c in service.characteristics) BleUuidParser.string(c.uuid),
+        ],
+    };
+  }
+
+  @override
+  Future<List<String>> discoverCharacteristics(String serviceUUID) async =>
+      _characteristicsByService[BleUuidParser.string(serviceUUID)] ?? const [];
+
   Future<void> _cancelNotificationListeners() async {
     final listeners = _subscriptions.values.toList(growable: false);
     _subscriptions.clear();
@@ -461,6 +471,7 @@ class UniversalBleTransport extends BLETransport {
       _log.fine(
         "discovered services: ${services.map((e) => e.toString()).toList().join('\n')}",
       );
+      _cacheCharacteristics(services);
       return services.map((s) => s.uuid).toList();
     }
 
@@ -485,6 +496,7 @@ class UniversalBleTransport extends BLETransport {
       timeout: const Duration(seconds: 15),
     );
     _log.fine('discovered ${services.length} services');
+    _cacheCharacteristics(services);
     return services.map((service) => service.uuid).toList();
   }
 

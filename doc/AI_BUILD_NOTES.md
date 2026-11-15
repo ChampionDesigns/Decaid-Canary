@@ -17,7 +17,7 @@ flutter test                                   # All tests
 flutter test test/path/to_test.dart            # Specific file
 flutter test --name "test pattern"             # Specific test
 flutter analyze                                # Static analysis
-dart format lib/ test/                      # Format
+# Format changed Dart files: see AGENTS.md -> Verification step 1.
 
 # Build (Linux via Docker/Colima)
 make build-arm                                 # ARM64 binary
@@ -48,6 +48,7 @@ temporary real-hardware tuning builds where debug endpoints must be reachable.
 - `flutter_with_commit.sh` injects the git commit hash as a compile-time constant via `--dart-define`.
 - CI uses pinned Flutter version. Linux build smoke runs via Docker.
 - Android uses `ForegroundTaskService` for background BLE. Auto-stops 5min after disconnect; auto-restarts on reconnect.
+- Skin `exitApp()` backgrounds Android with `moveTaskToBack(true)` on the `app/lifecycle` channel rather than finishing the activity, so the BLE connection and wake schedules keep running. Desktop quits through `exitApplication(AppExitType.cancelable)`; iOS cannot close itself, so the call does nothing there.
 - `Makefile` targets: `build-arm`, `build-amd`, `dual-build` (Linux only, requires Docker/Colima).
 
 ## Skin Camera Permissions on Apple Platforms
@@ -108,25 +109,11 @@ those runtime paths.
 
 See [`device-notes/bengle.md`](device-notes/bengle.md#ebus-tap).
 
-## Footgun #3: `codesign --deep` destroys Sparkle's Installer XPC
+## Mac App Store: Sparkle entitlements
 
-**Symptom:** After a signed/notarized update, Sparkle's "Update failed" alert or a silent failure to relaunch. The app builds and notarizes fine.
+`com.apple.security.temporary-exception.mach-lookup.global-name` is not permitted in Mac App Store builds. Any future `APP_STORE=true` macOS build must drop the Sparkle keys/entitlements and keep self-update disabled.
 
-**Root cause:** `codesign --deep --force --entitlements <host.plist>` re-signs every nested binary (Sparkle.framework, Installer.xpc, Updater.app, Autoupdate) with the HOST's entitlements. The sandboxed Installer XPC service needs its own embedded entitlements; clobbering them breaks the sandbox escape that replaces the app in `/Applications`. Sparkle explicitly warns against `--deep`.
-
-**Fix:** `scripts/sign_macos_deepest_first.sh` signs Sparkle's nested helpers deepest-first (`Installer.xpc` → `Downloader.xpc` → `Updater.app` → `Autoupdate` → framework → host), each without `--entitlements` so existing embedded entitlements survive; only the host app gets `Release.entitlements`. Gates in `scripts/verify_macos_signature.sh` (Team ID, Hardened Runtime, mach-lookup names, no `get-task-allow`) run before and after notarization.
-
-## Footgun #4: `codesign` does not expand `$(PRODUCT_BUNDLE_IDENTIFIER)`
-
-**Symptom:** The signed app's entitlements contain the literal string `$(PRODUCT_BUNDLE_IDENTIFIER)-spks`, so Sparkle's XPC lookup fails (the XPC registers as `net.tadel.reaprime-spks`).
-
-**Root cause:** `codesign --entitlements` takes the file as-is; Xcode build-variable expansion happens only in Xcode's own signing step. The signing script sed-expands the bundle id before signing (see `scripts/sign_macos_deepest_first.sh`).
-
-**Fix:** Never hand `Release.entitlements` to `codesign` unexpanded. The verification script also greps for the unexpanded variable.
-
-**Note (App Store):** `com.apple.security.temporary-exception.mach-lookup.global-name` is not permitted in Mac App Store builds. Any future `APP_STORE=true` macOS build must drop the Sparkle keys/entitlements and keep self-update disabled.
-
-## Footgun #5: iOS file picker returns unreadable security-scoped folders
+## Footgun #3: iOS file picker returns unreadable security-scoped folders
 
 **Symptom:** On iOS, installing a plugin (or importing a de1app folder, skin live-edit, data restore) via the file picker fails with `PathAccessException: Directory listing failed ... (OS Error: Operation not permitted, errno = 1)`. The picked path lives under `Mobile Documents/com~apple~CloudDocs/...` (iCloud Drive) or another app's sandbox — outside our container.
 
@@ -136,7 +123,7 @@ See [`device-notes/bengle.md`](device-notes/bengle.md#ebus-tap).
 
 **Impact:** iOS only; the channel is a no-op elsewhere (`Platform.isIOS` guard). Do not add new `FilePicker.getDirectoryPath()` consumers without routing them through `SecurityScopedFileService`.
 
-## Footgun #6: macOS App Sandbox grants only the selected save URL, not its siblings
+## Footgun #4: macOS App Sandbox grants only the selected save URL, not its siblings
 
 **Symptom:** an export that stages a temporary file next to the user's chosen
 save path works on Linux, Docker and CI, then fails in the signed macOS build
@@ -157,7 +144,7 @@ a plain `File.rename` as the final step either: it does not overwrite an
 existing destination on Windows, and it crosses directories that the sandbox may
 not permit.
 
-## Footgun #7: A fresh git worktree cannot build Android
+## Footgun #5: A fresh git worktree cannot build Android
 
 **Symptom:** `scripts/sb-dev.sh start --platform <serial>` inside a linked git
 worktree fails with
@@ -172,9 +159,9 @@ the primary checkout; `git worktree add` does not copy it.
 
 ## CLI Parameters
 
-The app supports several command-line flags for headless/calibration-station use. See PR #349 and #352 for full details.
+The app supports several command-line flags for headless/calibration-station use. See PR #349 and #352 for full details. This is an option catalogue, not a runnable script: pass the flags separately as described below the list.
 
-```bash
+```text
 ./flutter_with_commit.sh run --dart-define=simulate=1 \
   --serial                    # Serial-only mode; skip BLE service creation
   --bypass-onboarding         # Skip onboarding, go straight to launcher
@@ -183,15 +170,17 @@ The app supports several command-line flags for headless/calibration-station use
   --skin=<id>                 # Pre-select skin by ID
   --skin-path=<path>          # Pre-select skin by filesystem path
   --no-account                # Skip DecentAccountService (headless Linux with no desktop session)
+  --dummy-account             # Isolated demo identity; debug + explicit dart-define only
   --trust-consent=<key>       # Trust one account-proxy caller for this process; repeatable
   --trust-all-consent         # Trust every account-proxy caller for this process
+  --extensions-token=<value>  # Accept this bearer for plugin and skin management (extensions:manage); 32+ chars
 ```
 
-All flags are optional. Combine as needed. `--no-account` is specifically for headless Linux stations where `libsecret` blocks on XDG secrets portal. `--force-onboarding` is the inverse of `--bypass-onboarding`: it clears the persisted onboarding completion flags so the welcome, login, and import screens show again on the next launch, and it wins if both are passed. Consent keys use `skin:<installed-id>`, `plugin:<id>`, or `api:<token-id>`; API token labels are presentation-only. Both trust flags are session-only and are never persisted. With `flutter run`, pass each app flag separately as `--dart-entrypoint-args=<flag>`; `--dart-define` does not populate `main()` arguments. With `scripts/sb-dev.sh`, pass each app flag separately as `--app-arg <flag>` and repeat `--app-arg` for multiple flags.
+All flags are optional. Combine as needed. `--dummy-account` is safe only with a debug build and `--dart-define=DECAID_ENABLE_DUMMY_ACCOUNT=true`; it uses an in-memory credential store and offline account clients. See [`shot-upload-onboarding.md`](shot-upload-onboarding.md) for isolated persona instructions. `--no-account` is specifically for headless Linux stations where `libsecret` blocks on XDG secrets portal. `--force-onboarding` is the inverse of `--bypass-onboarding`: it clears the persisted onboarding completion flags so the welcome, login, and import screens show again on the next launch, and it wins if both are passed. Consent keys use `skin:<installed-id>`, `plugin:<id>`, or `api:<token-id>`; API token labels are presentation-only. Both trust flags are session-only and are never persisted. `--extensions-token` registers a process-lifetime bearer token with the `extensions:manage` scope, which the plugin and skin management routes require (see `doc/Plugins.md` -> "Authorization"); it is never persisted, and a value shorter than 32 characters or containing spaces or commas is ignored with a severe log line. Generate one with `openssl rand -hex 32`. The `DECAID_EXTENSIONS_TOKEN` environment variable registers the same token without putting it in the process arguments, which other local users can read; the flag wins when both are set. Both are for development, headless testing and automation; a device in service gets a named, revocable token from the native API access tokens section. With `flutter run`, pass each app flag separately as `--dart-entrypoint-args=<flag>`; `--dart-define` does not populate `main()` arguments. With `scripts/sb-dev.sh`, pass each app flag separately as `--app-arg <flag>` and repeat `--app-arg` for multiple flags. Entrypoint arguments reach `main()` on desktop and `flutter-tester`; the Android and iOS launch paths in `flutter_tools` do not forward them, so on a tablet both mechanisms are inert. See `.agents/skills/decent-dev/SKILL.md` for the Android onboarding reset procedure.
 
-## Dev-Loop Skill
+## Dev-Loop Skills
 
-Driving a running app through its lifecycle: `.agents/skills/decent-app/SKILL.md`. Managed by `scripts/sb-dev.sh`:
+Driving a running app through its lifecycle: `.agents/skills/decent-app/SKILL.md`. Changing the code — gate, formatting, worktrees, tablet loop: `.agents/skills/decent-dev/SKILL.md`. A code change verified at runtime uses both. Managed by `scripts/sb-dev.sh`:
 
 ```bash
 scripts/sb-dev.sh start      # Launch in simulate mode
@@ -208,14 +197,14 @@ Prefer `reload` over `hot-restart` — state is preserved.
 
 - Dart-side: `package:logging`, configured in `main.dart`.
 - File log: `getApplicationDocumentsDirectory()/log.txt` (plus rotated `log.txt.1..3`).
-- Android retrieval: `adb shell run-as net.tadel.reaprime cat app_flutter/log.txt` or `adb logcat`.
+- Android retrieval: `adb shell run-as com.decentespresso.decaid.canary cat app_flutter/log.txt` or `adb logcat`.
 
 ## Focused Checks
 
 ```sh
 flutter analyze          # Minimum before any commit
 flutter test             # Full suite before commit/PR
-dart format lib/ test/  # Format check
+# Format changed Dart files: see AGENTS.md -> Verification step 1.
 ```
 
 ## Keeping Notes Fresh

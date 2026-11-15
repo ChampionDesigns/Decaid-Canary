@@ -69,13 +69,16 @@ MachineSubstate mapDe1SubToMachineSubstate(De1SubState de1SubState) {
   switch (de1SubState) {
     case De1SubState.noState:
     case De1SubState.userNotPresent:
-    case De1SubState.refill:
       return MachineSubstate.idle;
+    case De1SubState.refillStopped:
+      return MachineSubstate.refillStopped;
 
     case De1SubState.pausedSteam:
       return MachineSubstate.pausedSteam;
     case De1SubState.puffing:
       return MachineSubstate.puffing;
+    case De1SubState.pumpZeroing:
+      return MachineSubstate.pumpZeroing;
 
     case De1SubState.heatWaterTank:
     case De1SubState.heatWaterHeater:
@@ -145,5 +148,15 @@ MachineSubstate mapDe1SubToMachineSubstate(De1SubState de1SubState) {
       return MachineSubstate.errorBootFill;
     case De1SubState.errorNoAC:
       return MachineSubstate.errorNoAC;
+    case De1SubState.errorPumpZero:
+      return MachineSubstate.errorPumpZero;
+    case De1SubState.errorPumpNeedsCalibration:
+      return MachineSubstate.errorPumpNeedsCalibration;
+    case De1SubState.errorFrontSwitchOff:
+      return MachineSubstate.errorFrontSwitchOff;
+    case De1SubState.errorPumpFault:
+      return MachineSubstate.errorPumpFault;
+    case De1SubState.errorPumpSilent:
+      return MachineSubstate.errorPumpSilent;
   }
 }

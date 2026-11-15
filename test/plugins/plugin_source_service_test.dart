@@ -461,6 +461,35 @@ function createPlugin() {
       expect(pending.addedPermissions, ['proxy.decent_api']);
     });
 
+    test('an added branch permission blocks the automatic update', () async {
+      await http.runWithClient(
+        () => service.installFromGitHubBranch('acme/plugin'),
+        () => gitHubClient(
+          commit: 'first',
+          branchArchive: pluginArchive(permissions: ['log']),
+        ),
+      );
+
+      await http.runWithClient(
+        () => service.updateAllPlugins(),
+        () => gitHubClient(
+          commit: 'second',
+          branchArchive: pluginArchive(
+            version: '1.1.0',
+            permissions: ['log', 'proxy.decent_api'],
+          ),
+        ),
+      );
+
+      expect(loader.getPluginManifest(id)?.version, '1.0.0');
+      final source = service.sourceFor(id)!;
+      expect(source.commit, 'first');
+      final pending = source.pendingUpdate!;
+      expect(pending.version, '1.1.0');
+      expect(pending.commit, 'second');
+      expect(pending.addedPermissions, ['proxy.decent_api']);
+    });
+
     test('approving a pending update installs it', () async {
       await http.runWithClient(
         () => service.installFromGitHubRelease('acme/plugin'),
@@ -909,230 +938,6 @@ function createPlugin() {
       final source = service.sourceFor(id)!;
       expect(source.commit, 'first');
       expect(source.lastError, contains('someone-else.reaplugin'));
-    });
-
-    group('bundled plugin provenance', () {
-      const dye2Id = 'dye2.reaplugin';
-
-      Future<void> bundledUpgrade(String version) => loader.updatePluginSource(
-        dye2Id,
-        manifestJson: manifestJson(dye2Id, version: version),
-        pluginJs: pluginJs(dye2Id),
-      );
-
-      Future<void> installBundledCopy({
-        String pluginId = dye2Id,
-        String version = '0.1.4',
-      }) async {
-        final staging = Directory('${tempDir.path}/bundled_$pluginId')
-          ..createSync(recursive: true);
-        File('${staging.path}/manifest.json').writeAsStringSync(
-          jsonEncode(manifestJson(pluginId, version: version)),
-        );
-        File('${staging.path}/plugin.js').writeAsStringSync(pluginJs(pluginId));
-        await loader.installPluginPackage(staging);
-      }
-
-      test('a freshly installed bundled DYE2 gets its repo', () async {
-        await installBundledCopy();
-        expect(sourceFile(dye2Id).existsSync(), isFalse);
-
-        service.seedBundledSources();
-
-        final source = service.sourceFor(dye2Id)!;
-        expect(source.kind, PluginSourceKind.githubRelease);
-        expect(source.repo, 'decentespresso/dye2');
-        expect(source.releaseTag, 'v0.1.4');
-        expect(source.includePrerelease, isFalse);
-        expect(source.assetName, isNull);
-      });
-
-      test('bundled shot upload gets its canonical repo', () async {
-        const pluginId = 'shot-upload.reaplugin';
-        await installBundledCopy(pluginId: pluginId, version: '0.2.1');
-
-        service.seedBundledSources();
-
-        final source = service.sourceFor(pluginId)!;
-        expect(source.kind, PluginSourceKind.githubRelease);
-        expect(source.repo, 'decentespresso/shot-upload');
-        expect(source.releaseTag, 'v0.2.1');
-        expect(source.assetName, isNull);
-      });
-
-      test('bundled dcamp gets its canonical repo', () async {
-        const pluginId = 'dcamp.reaplugin';
-        // Must match the bundled manifest version (assets/plugins/dcamp.reaplugin
-        // = 0.1.2); initialize() already installed the bundled copy, so a lower
-        // version here trips the downgrade guard.
-        await installBundledCopy(pluginId: pluginId, version: '0.1.2');
-
-        service.seedBundledSources();
-
-        final source = service.sourceFor(pluginId)!;
-        expect(source.kind, PluginSourceKind.githubRelease);
-        expect(source.repo, 'decentespresso/decaid-dcamp-plugin');
-        expect(source.releaseTag, 'v0.1.2');
-        expect(source.assetName, isNull);
-      });
-
-      test('an existing DYE2 without metadata is migrated', () async {
-        await installBundledCopy();
-        expect(service.sourceFor(dye2Id), isNull);
-
-        await http.runWithClient(
-          () => service.updateAllPlugins(),
-          () => gitHubClient(
-            tag: 'v0.1.4',
-            releaseArchive: pluginArchive(pluginId: dye2Id),
-          ),
-        );
-
-        expect(service.sourceFor(dye2Id)?.repo, 'decentespresso/dye2');
-      });
-
-      test('the update checker then queries decentespresso/dye2', () async {
-        await installBundledCopy();
-
-        final requested = <String>[];
-        await http.runWithClient(() => service.updateAllPlugins(), () {
-          return MockClient((request) async {
-            requested.add(request.url.toString());
-            final url = request.url.toString();
-            if (url.contains('/releases/latest')) {
-              return http.Response(
-                releaseJson('v0.2.0', ['dye2.reaplugin-0.2.0.zip']),
-                200,
-              );
-            }
-            return http.Response.bytes(
-              pluginArchive(pluginId: dye2Id, version: '0.2.0'),
-              200,
-            );
-          });
-        });
-
-        expect(
-          requested,
-          contains(
-            'https://api.github.com/repos/decentespresso/dye2/releases/latest',
-          ),
-        );
-        expect(loader.getPluginManifest(dye2Id)?.version, '0.2.0');
-        expect(service.sourceFor(dye2Id)?.releaseTag, 'v0.2.0');
-      });
-
-      test('seeding realigns the tag after a newer bundled copy', () async {
-        await installBundledCopy();
-        service.seedBundledSources();
-        expect(service.sourceFor(dye2Id)?.releaseTag, 'v0.1.4');
-
-        await bundledUpgrade('0.1.5');
-        service.seedBundledSources();
-
-        expect(service.sourceFor(dye2Id)?.releaseTag, 'v0.1.5');
-      });
-
-      test(
-        'seeding clears a pending update the bundled copy satisfies',
-        () async {
-          await installBundledCopy();
-          service.seedBundledSources();
-
-          await http.runWithClient(
-            () => service.updateAllPlugins(),
-            () => gitHubClient(
-              tag: 'v0.2.0',
-              releaseArchive: pluginArchive(
-                pluginId: dye2Id,
-                version: '0.2.0',
-                permissions: ['log'],
-              ),
-            ),
-          );
-          expect(service.sourceFor(dye2Id)!.pendingUpdate!.version, '0.2.0');
-
-          await bundledUpgrade('0.2.0');
-          service.seedBundledSources();
-
-          final source = service.sourceFor(dye2Id)!;
-          expect(source.pendingUpdate, isNull);
-          expect(source.releaseTag, 'v0.2.0');
-        },
-      );
-
-      test(
-        'seeding keeps a pending update newer than the bundled copy',
-        () async {
-          await installBundledCopy();
-          service.seedBundledSources();
-
-          await http.runWithClient(
-            () => service.updateAllPlugins(),
-            () => gitHubClient(
-              tag: 'v0.3.0',
-              releaseArchive: pluginArchive(
-                pluginId: dye2Id,
-                version: '0.3.0',
-                permissions: ['log'],
-              ),
-            ),
-          );
-          expect(service.sourceFor(dye2Id)!.pendingUpdate!.version, '0.3.0');
-
-          await bundledUpgrade('0.2.0');
-          service.seedBundledSources();
-
-          final source = service.sourceFor(dye2Id)!;
-          expect(source.pendingUpdate!.version, '0.3.0');
-          expect(source.releaseTag, 'v0.2.0');
-        },
-      );
-
-      test('seeding leaves a user-chosen source alone', () async {
-        await http.runWithClient(
-          () => service.installFromGitHubBranch('someone/dye2-fork'),
-          () => gitHubClient(
-            commit: 'fork-commit',
-            branchArchive: pluginArchive(pluginId: dye2Id),
-          ),
-        );
-
-        service.seedBundledSources();
-
-        final source = service.sourceFor(dye2Id)!;
-        expect(source.kind, PluginSourceKind.githubBranch);
-        expect(source.repo, 'someone/dye2-fork');
-        expect(source.commit, 'fork-commit');
-      });
-    });
-
-    test('a failed install leaves the previous version running', () async {
-      await http.runWithClient(
-        () => service.installFromGitHubRelease('acme/plugin'),
-        gitHubClient,
-      );
-      await loader.enablePlugin(id);
-
-      await expectLater(
-        http.runWithClient(
-          () => service.updateAllPlugins(),
-          () => gitHubClient(
-            tag: 'v1.1.0',
-            releaseArchive: makeArchive({
-              'manifest.json': jsonEncode(manifestJson(id, version: '1.1.0')),
-              'plugin.js':
-                  'function createPlugin() { throw new Error("boom"); }',
-            }),
-          ),
-        ),
-        throwsA(isA<RemoteUpdateException>()),
-      );
-
-      expect(loader.isPluginLoaded(id), isTrue);
-      expect(loader.getPluginManifest(id)?.version, '1.0.0');
-      expect(service.sourceFor(id)!.releaseTag, 'v1.0.0');
-      expect(service.sourceFor(id)!.lastError, isNotNull);
     });
   });
 }

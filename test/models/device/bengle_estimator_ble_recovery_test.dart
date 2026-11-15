@@ -1,0 +1,365 @@
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart'
+    show bengleEstSampleBytes;
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1_transport.dart';
+import 'package:reaprime/src/models/device/transport/ble_timeout_exception.dart';
+import 'package:reaprime/src/models/device/transport/data_transport.dart';
+import 'package:reaprime/src/services/ble/ble_admission_transport.dart';
+
+import '../../helpers/fake_ble_transport.dart';
+import '../../helpers/gated_ble_link.dart';
+
+class _DroppingTimeoutTransport extends FakeBleTransport {
+  bool _timedOut = false;
+  int estimatorSubscribes = 0;
+  int confirmedDisconnectCalls = 0;
+
+  @override
+  Future<void> disconnect() async {
+    await super.disconnect();
+    subscribers.clear();
+  }
+
+  @override
+  Future<void> disconnectConfirmed() async {
+    confirmedDisconnectCalls++;
+    subscribers.clear();
+  }
+
+  @override
+  Future<void> subscribe(
+    String serviceUUID,
+    String characteristicUUID,
+    void Function(Uint8List) callback,
+  ) async {
+    if (characteristicUUID == Endpoint.estimator.uuid) estimatorSubscribes++;
+    await super.subscribe(serviceUUID, characteristicUUID, callback);
+  }
+
+  @override
+  Future<void> write(
+    String serviceUUID,
+    String characteristicUUID,
+    Uint8List data, {
+    bool withResponse = true,
+    Duration? timeout,
+  }) async {
+    if (!_timedOut) {
+      _timedOut = true;
+      throw BleTimeoutException('write');
+    }
+    await super.write(
+      serviceUUID,
+      characteristicUUID,
+      data,
+      withResponse: withResponse,
+      timeout: timeout,
+    );
+  }
+}
+
+List<int> _sample(int fill) => List<int>.filled(bengleEstSampleBytes, fill);
+
+int _requestedStateWrites(FakeBleTransport t) => t.writes
+    .where((w) => w.characteristicUUID == Endpoint.requestedState.uuid)
+    .length;
+
+Future<void> _timeoutWrite(UnifiedDe1Transport de1) async {
+  await de1.write(Endpoint.requestedState, Uint8List.fromList([0x02]));
+  await Future<void>.delayed(Duration.zero);
+}
+
+class _GatedDiscoveryLink extends GatedBleLink {
+  Completer<void>? staleDiscoveryGate;
+
+  @override
+  Future<List<String>> discoverCharacteristics(String serviceUUID) async {
+    final gate = staleDiscoveryGate;
+    if (gate == null) return super.discoverCharacteristics(serviceUUID);
+    staleDiscoveryGate = null;
+    await gate.future;
+    return const [];
+  }
+}
+
+enum _Link { raw, admission }
+
+DataTransport _over(_Link link, _DroppingTimeoutTransport t) => switch (link) {
+  _Link.raw => t,
+  _Link.admission => BleAdmissionTransport(
+    transport: t,
+    reserve: Object.new,
+    release: (_) {},
+  ),
+};
+
+int _teardowns(_Link link, _DroppingTimeoutTransport t) => switch (link) {
+  _Link.raw => t.disconnectCalls,
+  _Link.admission => t.confirmedDisconnectCalls,
+};
+
+void main() {
+  for (final link in _Link.values) {
+    _recoveryGroup(link);
+  }
+  for (final path in BleLinkPath.values) {
+    _cancelGroup(path);
+    _staleDiscoveryRow(path);
+  }
+}
+
+void _staleDiscoveryRow(BleLinkPath path) {
+  test('a stale estimator restore keeps the app\'s new request '
+      '(${path.name})', () async {
+    final link = _GatedDiscoveryLink()
+      ..presentCharacteristics = [Endpoint.estimator.uuid];
+    addTearDown(link.dispose);
+    final de1 = UnifiedDe1Transport(transport: overBleLink(path, link));
+    int estimatorSubscribes() =>
+        link.subscribeCounts[Endpoint.estimator.uuid] ?? 0;
+    Future<void> timeoutWrite() {
+      link.timeoutsLeft = 1;
+      return de1
+          .write(Endpoint.requestedState, Uint8List.fromList([0x02]))
+          .then<void>((_) {}, onError: (Object _) {});
+    }
+
+    await de1.connect();
+    expect(await de1.subscribeEstimator(), isTrue);
+    final stale = link.staleDiscoveryGate = Completer<void>();
+    final first = timeoutWrite();
+    await settle();
+
+    await de1.disconnect();
+    await de1.connect();
+    expect(await de1.subscribeEstimator(), isTrue);
+    stale.complete();
+    await first;
+    await settle();
+    final before = estimatorSubscribes();
+
+    await timeoutWrite();
+    await settle();
+
+    expect(estimatorSubscribes(), before + 1);
+    expect(link.subscribers.containsKey(Endpoint.estimator.uuid), isTrue);
+  });
+}
+
+void _cancelGroup(BleLinkPath path) {
+  group('estimator after a cancelled BLE recovery (${path.name})', () {
+    late GatedBleLink link;
+    late UnifiedDe1Transport de1;
+    Object? writeError;
+
+    Future<void> timeoutWrite() => de1
+        .write(Endpoint.requestedState, Uint8List.fromList([0x02]))
+        .then<void>((_) {}, onError: (Object e) => writeError = e);
+
+    int estimatorSubscribes() =>
+        link.subscribeCounts[Endpoint.estimator.uuid] ?? 0;
+
+    void expectNoEstimator() {
+      expect(writeError, isA<BleTimeoutException>());
+      expect(link.linked, isFalse);
+      expect(link.subscribers.containsKey(Endpoint.estimator.uuid), isFalse);
+      expect(estimatorSubscribes(), 1);
+      expect(requestedStateWrites(link), 0);
+    }
+
+    setUp(() async {
+      writeError = null;
+      link = GatedBleLink()..presentCharacteristics = [Endpoint.estimator.uuid];
+      de1 = UnifiedDe1Transport(transport: overBleLink(path, link));
+      await de1.connect();
+      expect(await de1.subscribeEstimator(), isTrue);
+    });
+
+    tearDown(() async {
+      if (!link.disposed) await link.dispose();
+    });
+
+    test('app disconnect while the recovery disconnect is pending', () async {
+      final gate = link.teardownGate = Completer<void>();
+      final write = timeoutWrite();
+      await settle();
+      final disconnect = de1.disconnect();
+      await settle();
+      gate.complete();
+      await disconnect;
+      await write;
+      await settle();
+
+      expectNoEstimator();
+    });
+
+    test('app disconnect while the recovery connect is pending', () async {
+      final gate = link.connectGate = Completer<void>();
+      final write = timeoutWrite();
+      await settle();
+      final disconnect = de1.disconnect();
+      await settle();
+      gate.complete();
+      await disconnect;
+      await write;
+      await settle();
+
+      expectNoEstimator();
+    });
+
+    test('dispose while the recovery connect is pending', () async {
+      final gate = link.connectGate = Completer<void>();
+      final write = timeoutWrite();
+      await settle();
+      final dispose = de1.dispose();
+      await settle();
+      gate.complete();
+      await dispose;
+      await write;
+      await settle();
+
+      expectNoEstimator();
+    });
+
+    test('a cancelled estimator restore does not taint the new link', () async {
+      final restore = link.subscribeGates[Endpoint.estimator.uuid] =
+          Completer<void>();
+      final write = timeoutWrite();
+      await settle();
+      expect(estimatorSubscribes(), 2);
+
+      await de1.disconnect();
+      await de1.connect();
+      restore.complete();
+      await write;
+      await settle();
+      expect(writeError, isA<BleTimeoutException>());
+
+      link.timeoutsLeft = 1;
+      await timeoutWrite();
+      await settle();
+
+      expect(estimatorSubscribes(), 2);
+      expect(link.subscribers.containsKey(Endpoint.estimator.uuid), isFalse);
+      expect(requestedStateWrites(link), 1);
+      expect(link.linked, isTrue);
+    });
+
+    test('a later recovery does not restore the cancelled estimator', () async {
+      final gate = link.connectGate = Completer<void>();
+      final write = timeoutWrite();
+      await settle();
+      final disconnect = de1.disconnect();
+      await settle();
+      gate.complete();
+      await disconnect;
+      await write;
+      await settle();
+
+      await de1.connect();
+      link.timeoutsLeft = 1;
+      await timeoutWrite();
+      await settle();
+
+      expect(estimatorSubscribes(), 1);
+      expect(link.subscribers.containsKey(Endpoint.estimator.uuid), isFalse);
+      expect(requestedStateWrites(link), 1);
+    });
+  });
+}
+
+void _recoveryGroup(_Link link) {
+  group('estimator after BLE timeout recovery (${link.name})', () {
+    late _DroppingTimeoutTransport transport;
+    late UnifiedDe1Transport de1;
+    late List<ByteData> samples;
+    late StreamSubscription<ByteData> sub;
+
+    setUp(() async {
+      transport = _DroppingTimeoutTransport()
+        ..presentCharacteristics = [Endpoint.estimator.uuid];
+      de1 = UnifiedDe1Transport(transport: _over(link, transport));
+      samples = [];
+      sub = de1.estimator
+          .where((d) => d.lengthInBytes >= bengleEstSampleBytes)
+          .listen(samples.add);
+      await de1.connect();
+    });
+
+    tearDown(() async {
+      await sub.cancel();
+      await transport.dispose();
+    });
+
+    test('streams again when the machine still offers A014', () async {
+      expect(await de1.subscribeEstimator(), isTrue);
+      transport.emitNotification(Endpoint.estimator, _sample(1));
+      await Future<void>.delayed(Duration.zero);
+      expect(samples, hasLength(1));
+
+      await _timeoutWrite(de1);
+      expect(_teardowns(link, transport), 1);
+
+      transport.emitNotification(Endpoint.estimator, _sample(2));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(samples, hasLength(2));
+      expect(samples.last.getUint8(0), 2);
+      expect(transport.estimatorSubscribes, 2);
+      expect(_requestedStateWrites(transport), 1);
+    });
+
+    test(
+      'skips A014 when it is gone after recovery and retries the write',
+      () async {
+        expect(await de1.subscribeEstimator(), isTrue);
+        transport.presentCharacteristics = const [];
+
+        await _timeoutWrite(de1);
+
+        expect(_teardowns(link, transport), 1);
+        expect(transport.estimatorSubscribes, 1);
+        expect(
+          transport.subscribers.containsKey(Endpoint.estimator.uuid),
+          isFalse,
+        );
+        expect(_requestedStateWrites(transport), 1);
+      },
+    );
+
+    test('a full disconnect clears the estimator request', () async {
+      expect(await de1.subscribeEstimator(), isTrue);
+      await de1.disconnect();
+      await de1.connect();
+
+      await _timeoutWrite(de1);
+
+      expect(_teardowns(link, transport), 2);
+      expect(transport.estimatorSubscribes, 1);
+      expect(
+        transport.subscribers.containsKey(Endpoint.estimator.uuid),
+        isFalse,
+      );
+      expect(_requestedStateWrites(transport), 1);
+    });
+
+    test(
+      'does not subscribe A014 when the estimator was never requested',
+      () async {
+        await _timeoutWrite(de1);
+
+        expect(_teardowns(link, transport), 1);
+        expect(transport.estimatorSubscribes, 0);
+        expect(
+          transport.subscribers.containsKey(Endpoint.estimator.uuid),
+          isFalse,
+        );
+        expect(_requestedStateWrites(transport), 1);
+      },
+    );
+  });
+}

@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "description": "Default espresso profiles bundled with Decaid",
+  "description": "Default espresso profiles bundled with Decaid-Canary",
   "profiles": [
     "7g_basket.json",
     "80s_Espresso.json",
@@ -57,6 +57,7 @@
     "filter3.json",
     "icbinf.json",
     "kalita_20.json",
+    "lever_classic_demo.json",
     "manual_flow.json",
     "manual_pressure.json",
     "psph.json",

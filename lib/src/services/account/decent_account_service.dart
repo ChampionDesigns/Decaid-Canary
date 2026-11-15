@@ -84,14 +84,15 @@ class DecentAccountService {
       StreamController<void>.broadcast(sync: true);
 
   DecentAccountService({
-    required http.Client httpClient,
+    required this._httpClient,
     required CredentialStore credentialStore,
     this.baseUrl = "https://decentespresso.com",
     this.retryInterval = const Duration(seconds: 30),
-  }) : _httpClient = httpClient,
-       _store = credentialStore;
+  }) : _store = credentialStore;
 
   Stream<void> get identityAuthorityChanges => _identityAuthorityChanges.stream;
+
+  int get authenticationGeneration => _authGeneration;
 
   void _notifyIdentityAuthorityChanged() {
     _identityAuthorityChanges.add(null);
@@ -679,9 +680,8 @@ class DecentAccountService {
     if (generation != _authGeneration) {
       throw StateError('account authentication changed');
     }
-    final query = Uri(
-      queryParameters: {'subject': subject, 'body': body},
-    ).query;
+    final query = Uri(queryParameters: {'subject': subject, 'body': body})
+        .query;
     final response = await _authedGet(
       email,
       password,

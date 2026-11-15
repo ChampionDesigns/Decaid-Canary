@@ -26,6 +26,7 @@ class UpdateCheckService {
 
   Timer? _periodicTimer;
   UpdateInfo? _availableUpdate;
+  bool _hasCompletedCheck = false;
 
   late final BehaviorSubject<AppUpdateState> _state;
 
@@ -35,24 +36,21 @@ class UpdateCheckService {
       : Duration(hours: 12);
 
   UpdateCheckService({
-    required SettingsService settingsService,
+    required this._settingsService,
     AndroidUpdater? updater,
-    required WebUIStorage webUIStorage,
-    PluginSourceService? pluginSourceService,
+    required this._webUIStorage,
+    this._pluginSourceService,
     bool? platformIsAndroid,
     bool? platformIsMacOS,
     GithubRateLimit? rateLimit,
     this.externallyManaged = BuildInfo.appStore,
-  }) : _settingsService = settingsService,
-       _updater =
+  }) : _updater =
            updater ??
            AndroidUpdater(
-             owner: 'tadelv',
-             repo: 'reaprime',
+             owner: 'ChampionDesigns',
+             repo: 'Decaid-Canary',
              rateLimit: rateLimit,
            ),
-       _webUIStorage = webUIStorage,
-       _pluginSourceService = pluginSourceService,
        _isAndroid = platformIsAndroid ?? Platform.isAndroid,
        _isMacOS = platformIsMacOS ?? Platform.isMacOS {
     _state = BehaviorSubject.seeded(_snapshot(AppUpdatePhase.idle));
@@ -62,6 +60,8 @@ class UpdateCheckService {
       externallyManaged ? null : _availableUpdate;
 
   bool get hasAvailableUpdate => availableUpdate != null;
+  bool get hasCompletedCheck => _hasCompletedCheck;
+  Future<String?> get skippedVersion => _settingsService.skippedVersion();
 
   Stream<AppUpdateState> get updateState => _state.stream;
 
@@ -234,6 +234,7 @@ class UpdateCheckService {
       );
 
       await _settingsService.setLastUpdateCheckTime(DateTime.now());
+      _hasCompletedCheck = true;
 
       if (updateInfo != null) {
         final skipped = await _settingsService.skippedVersion();
@@ -274,13 +275,13 @@ class UpdateCheckService {
   }
 
   String getReleasesUrl() {
-    return 'https://github.com/decentespresso/decaid/releases';
+    return 'https://github.com/ChampionDesigns/Decaid-Canary/releases';
   }
 
   String? getReleaseUrl([UpdateInfo? update]) {
     final release = update ?? _availableUpdate;
     if (release == null) return null;
-    return 'https://github.com/decentespresso/decaid/releases/tag/${release.tagName}';
+    return 'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/${release.tagName}';
   }
 
   Future<void> enableAutomaticChecks() async {
@@ -296,6 +297,7 @@ class UpdateCheckService {
 
   void clearAvailableUpdate() {
     _availableUpdate = null;
+    _hasCompletedCheck = true;
     _emit(AppUpdatePhase.idle);
   }
 
@@ -306,11 +308,10 @@ class UpdateCheckService {
       return;
     }
     _log.info('DEBUG: forcing fake update notification ($version)');
+    _hasCompletedCheck = true;
     _availableUpdate = UpdateInfo(
       version: version,
-      downloadUrl:
-          downloadUrl ??
-          'https://github.com/decentespresso/decaid/releases/download/v0.7.7/decent-android-0.7.7.apk',
+      downloadUrl: downloadUrl ?? 'https://github.com/ChampionDesigns/Decaid-Canary/releases/download/v0.7.7/decent-android-0.7.7.apk',
       releaseNotes: 'Forced update for testing the update API.',
       isPrerelease: false,
       tagName: 'v$version',
@@ -321,11 +322,20 @@ class UpdateCheckService {
   Future<void> skipCurrentUpdate() async {
     final version = _availableUpdate?.version;
     if (version != null) {
-      _log.info('User skipped update: $version');
-      await _settingsService.setSkippedVersion(version);
+      await skipVersion(version);
+    } else {
+      _emit(AppUpdatePhase.idle);
     }
-    _availableUpdate = null;
-    _emit(AppUpdatePhase.idle);
+  }
+
+  Future<void> skipVersion(String version) async {
+    _log.info('User skipped update: $version');
+    await _settingsService.setSkippedVersion(version);
+    if (_availableUpdate?.version == version) {
+      _availableUpdate = null;
+      _hasCompletedCheck = true;
+      _emit(AppUpdatePhase.idle);
+    }
   }
 
   void dispose() {

@@ -121,6 +121,7 @@ class _RecordingBengle implements BengleInterface {
 }
 
 const _debounce = Duration(milliseconds: 20);
+const _writeWaitCap = Duration(seconds: 2);
 
 void main() {
   late WorkflowController workflow;
@@ -142,6 +143,20 @@ void main() {
     await Future<void>.delayed(_debounce + const Duration(milliseconds: 30));
   }
 
+  Future<void> pumpUntilWrites(List<double> writes, int count) async {
+    await pumpDebounce();
+    final waited = Stopwatch()..start();
+    while (writes.length < count) {
+      if (waited.elapsed >= _writeWaitCap) {
+        fail(
+          'expected $count SAW write(s) within '
+          '${_writeWaitCap.inMilliseconds} ms after the debounce, got $writes',
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  }
+
   test(
     'targetYield change writes to connected Bengle after debounce',
     () async {
@@ -158,7 +173,7 @@ void main() {
 
       final ctx = workflow.currentWorkflow.context ?? const WorkflowContext();
       workflow.updateWorkflow(context: ctx.copyWith(targetYield: 30.0));
-      await pumpDebounce();
+      await pumpUntilWrites(bengle.sawWrites, 1);
 
       expect(bengle.sawWrites, [30.0]);
       await bridge.dispose();
@@ -182,7 +197,7 @@ void main() {
       workflow.updateWorkflow(context: base.copyWith(targetYield: y));
       await Future<void>.delayed(const Duration(milliseconds: 2));
     }
-    await pumpDebounce();
+    await pumpUntilWrites(bengle.sawWrites, 1);
 
     expect(bengle.sawWrites, [32.0]);
     await bridge.dispose();
@@ -213,7 +228,7 @@ void main() {
     expect(bengle.maxInFlight, 1);
 
     bengle.sawRelease!.complete();
-    await pumpDebounce();
+    await pumpUntilWrites(bengle.sawWrites, 2);
     expect(bengle.sawWrites, [30.0, 31.0]);
     expect(bengle.maxInFlight, 1);
     await bridge.dispose();
@@ -294,7 +309,7 @@ void main() {
 
     final bengle = _RecordingBengle();
     await connectBengle(bengle);
-    await pumpDebounce();
+    await pumpUntilWrites(bengle.sawWrites, 1);
 
     expect(bengle.sawWrites, contains(28.0));
     await bridge.dispose();
@@ -334,7 +349,7 @@ void main() {
 
     final ctx = workflow.currentWorkflow.context ?? const WorkflowContext();
     workflow.updateWorkflow(context: ctx.copyWith(targetYield: 0.0));
-    await pumpDebounce();
+    await pumpUntilWrites(bengle.sawWrites, 1);
 
     expect(bengle.sawWrites, [0.0]);
     await bridge.dispose();
@@ -371,7 +386,7 @@ void main() {
 
     release.complete();
     await active;
-    await pumpDebounce();
+    await pumpUntilWrites(bengle.sawWrites, 1);
 
     expect(bengle.sawWrites, [42.0]);
     await bridge.dispose();
@@ -412,7 +427,7 @@ void main() {
       await pumpDebounce();
       release.complete();
       await activeResult;
-      await pumpDebounce();
+      await pumpUntilWrites(replacement.sawWrites, 1);
 
       expect(replacement.sawWrites, [42.0]);
       await bridge.dispose();

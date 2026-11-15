@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:logging/logging.dart';
 import 'package:reaprime/src/models/device/device.dart' as device;
 import 'package:reaprime/src/models/device/ble_service_identifier.dart';
@@ -14,6 +15,8 @@ import 'package:reaprime/src/models/device/transport/logical_endpoint.dart';
 import 'package:reaprime/src/models/errors.dart';
 import 'package:reaprime/src/models/device/transport/serial_port.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/serial_response_correlator.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart'
+    show bengleEstSampleBytes;
 import 'package:rxdart/rxdart.dart';
 
 const _defaultShotSettingsFrame = <int>[
@@ -30,6 +33,10 @@ const _defaultShotSettingsFrame = <int>[
 
 const _firmwareMapPollReadTimeout = Duration(seconds: 2);
 
+class _RecoveryCancelled implements Exception {
+  const _RecoveryCancelled();
+}
+
 class UnifiedDe1Transport {
   final DataTransport _transport;
   final TransportType transportType;
@@ -41,6 +48,9 @@ class UnifiedDe1Transport {
   bool _cacheCleared = false;
 
   bool _recovering = false;
+  int _linkGeneration = 0;
+  int _appConnects = 0;
+  Future<bool>? _recovery;
 
   Stream<device.ConnectionState> get connectionState => _transport
       .connectionState
@@ -57,16 +67,34 @@ class UnifiedDe1Transport {
   ReplaySubject<ByteData> _bengleShotSampleSubject = ReplaySubject(maxSize: 1);
   PublishSubject<ByteData> _calibrationSubject = PublishSubject();
   bool _bengleShotSampleEnabled = false;
+  bool _estimatorEnabled = false;
 
   Stream<ByteData> get state => _stateSubject.asBroadcastStream();
   ByteData? get latestStateInfo => _stateSubject.valueOrNull;
   Stream<ByteData> get shotSample => _shotSampleSubject.asBroadcastStream();
   Stream<ByteData> get shotSettings => _shotSettingsSubject.asBroadcastStream();
-  Stream<ByteData> get waterLevels => _waterLevelsSubject.asBroadcastStream();
+  Stream<ByteData> get waterLevels => _waterLevelsSubject.stream;
+
+  @visibleForTesting
+  bool get debugHasWaterLevelsListener => _waterLevelsSubject.hasListener;
   Stream<ByteData> get mmr => _mmrSubject.asBroadcastStream();
   Stream<ByteData> get fwMapRequest => _fwMapRequestSubject.asBroadcastStream();
+  // Bengle 0xA014 fused puck-estimator sample (16 bytes, +5-byte Rev-2 tail).
+  // Fed by the `[T]` dispatch on serial (subscribed via the `<+T>` in
+  // `_serialConnect`) and by [subscribeEstimator] on BLE. Seeded with a ZERO-LENGTH frame on
+  // purpose: `parseBengleEstSample` drops anything under 16 bytes, so before
+  // any real `[T]` arrives the snapshot merge sees "no estimator data" and
+  // every fused key stays absent. A 16-zero seed would instead decode to fused
+  // fields pinned at 0.0.
+  BehaviorSubject<ByteData> _estimatorSubject = BehaviorSubject.seeded(
+    ByteData(0),
+  );
+
   Stream<ByteData> get bengleShotSample => _bengleShotSampleSubject.stream;
   Stream<ByteData> get calibration => _calibrationSubject.asBroadcastStream();
+
+  // 0xA014 fused puck-estimator frames (serial `[T]` only).
+  Stream<ByteData> get estimator => _estimatorSubject.asBroadcastStream();
 
   String _currentBuffer = "";
 
@@ -83,6 +111,7 @@ class UnifiedDe1Transport {
       transportType = transport.transportType,
       _log = Logger("UnifiedDe1Transport-${transport.id}");
   Future<void> connect() async {
+    _appConnects++;
     final wasConnected =
         transportType == TransportType.ble &&
         await _transport.connectionState.first ==
@@ -180,7 +209,51 @@ class UnifiedDe1Transport {
     );
   }
 
+  /// Subscribe the BengleEstSample stream, when the machine actually offers it.
+  ///
+  /// On BLE this is CONDITIONAL and must stay that way. Firmware predating the
+  /// characteristic's GATT registration does not expose it, and a CCCD write
+  /// against a characteristic the peripheral never registered stalls the
+  /// command queue — so the presence check is a safety gate, not an
+  /// optimisation. A transport that cannot enumerate characteristics returns an
+  /// empty list and we skip, which is the fail-closed outcome.
+  ///
+  /// On serial nothing to do: `_serialConnect` already sends the unconditional
+  /// `<+T>`, where no such stall hazard exists and a machine without the
+  /// observer simply never emits a frame.
+  Future<bool> subscribeEstimator() async {
+    if (transportType != TransportType.ble) return true;
+    final generation = _linkGeneration;
+    final t = _transport;
+    if (t is! BLETransport) return false;
+
+    // Normalise BOTH sides: this is a safety gate, so it must not depend on a
+    // transport honouring a casing convention.
+    final present = await t.discoverCharacteristics(de1ServiceUUID);
+    final wanted = BleServiceIdentifier.parse(Endpoint.estimator.uuid);
+    if (!wanted.matchesAny(present)) {
+      if (generation == _linkGeneration) _estimatorEnabled = false;
+      _log.info(
+        'BengleEstSample characteristic not present on this machine; '
+        'skipping the estimator subscribe (firmware predates it, or the '
+        'transport cannot enumerate characteristics)',
+      );
+      return false;
+    }
+
+    await t.subscribe(
+      de1ServiceUUID,
+      Endpoint.estimator.uuid,
+      (data) => _estimatorNotification(
+        ByteData.sublistView(Uint8List.fromList(data)),
+      ),
+    );
+    if (generation == _linkGeneration) _estimatorEnabled = true;
+    return true;
+  }
+
   Future<void> subscribeBengleShotSample() async {
+    final generation = _linkGeneration;
     switch (transportType) {
       case TransportType.ble:
         if (_transport is! BLETransport) {
@@ -200,7 +273,7 @@ class UnifiedDe1Transport {
         await _transport.writeCommand(
           '<+${Endpoint.bengleShotSample.representation}>',
         );
-        _bengleShotSampleEnabled = true;
+        if (generation == _linkGeneration) _bengleShotSampleEnabled = true;
         await _transport.writeCommand(
           '<-${Endpoint.shotSample.representation}>',
         );
@@ -209,7 +282,7 @@ class UnifiedDe1Transport {
       case TransportType.wifi:
         throw StateError('Unsupported transport type: $transportType');
     }
-    _bengleShotSampleEnabled = true;
+    if (generation == _linkGeneration) _bengleShotSampleEnabled = true;
   }
 
   Future<void> _serialConnect() async {
@@ -234,6 +307,12 @@ class UnifiedDe1Transport {
     await _transport.writeCommand("<+${Endpoint.readFromMMR.representation}>");
     await _transport.writeCommand("<+${Endpoint.fwMapRequest.representation}>");
     await _transport.writeCommand("<+${Endpoint.calibration.representation}>");
+    // Bengle 0xA014 estimator stream. Serial-only and unconditional: the
+    // serial parser has no missing-characteristic stall hazard, and a plain
+    // DE1 or an older Bengle firmware simply never emits `[T]`. Deliberately
+    // NOT subscribed over BLE. (0xA013 `<+S>` is no longer subscribed here --
+    // upstream moved it into the gated subscribeBengleShotSample path.)
+    await _transport.writeCommand("<+${Endpoint.estimator.representation}>");
 
     await _transport.writeCommand("<B>02");
 
@@ -244,7 +323,18 @@ class UnifiedDe1Transport {
     );
   }
 
+  void _cancelRecovery() {
+    _linkGeneration++;
+    _recovering = false;
+    _recovery = null;
+  }
+
+  void _throwIfCancelled(int generation) {
+    if (generation != _linkGeneration) throw const _RecoveryCancelled();
+  }
+
   Future<void> dispose() async {
+    _cancelRecovery();
     _serialResponses.failAll(StateError('Serial transport disposed'));
     await _transportSubscription?.cancel();
     _transportSubscription = null;
@@ -261,11 +351,13 @@ class UnifiedDe1Transport {
       _bengleShotSampleSubject.close();
     }
     if (!_calibrationSubject.isClosed) _calibrationSubject.close();
+    if (!_estimatorSubject.isClosed) _estimatorSubject.close();
 
     await _transport.dispose();
   }
 
   Future<void> disconnect() async {
+    _cancelRecovery();
     _serialResponses.failAll(StateError('Serial transport disconnected'));
     _log.warning('disconnect() called by app code', null, StackTrace.current);
     switch (transportType) {
@@ -303,6 +395,9 @@ class UnifiedDe1Transport {
             '<-${Endpoint.bengleShotSample.representation}>',
           );
         }
+        await _transport.writeCommand(
+          "<-${Endpoint.estimator.representation}>",
+        );
         break;
       case TransportType.ble:
         break;
@@ -336,6 +431,9 @@ class UnifiedDe1Transport {
     _bengleShotSampleSubject = ReplaySubject(maxSize: 1);
     _calibrationSubject = PublishSubject();
     _bengleShotSampleEnabled = false;
+    _estimatorEnabled = false;
+    _estimatorSubject.close();
+    _estimatorSubject = BehaviorSubject.seeded(ByteData(0));
   }
 
   static final _messagePattern = RegExp(r'(\[[A-Z]\][0-9A-Fa-f\s]*?)(?=\[|\n)');
@@ -421,6 +519,8 @@ class UnifiedDe1Transport {
           _calibrationNotification(data);
         case "S":
           _bengleShotSampleNotification(data);
+        case "T":
+          _estimatorNotification(data);
         default:
           if (!_serialResponses.complete(representation, data)) {
             _log.warning("unhandled de1 message: $input");
@@ -471,6 +571,26 @@ class UnifiedDe1Transport {
     _bengleShotSampleSubject.add(data);
   }
 
+  // Route a 0xA014 `[T]` estimator frame to the subject, dropping a truncated
+  // frame (< 16 bytes) so the downstream decoder never hits a RangeError.
+  void _estimatorNotification(ByteData d) {
+    if (d.lengthInBytes < bengleEstSampleBytes) {
+      _log.warning(
+        'Dropping short estimator frame '
+        '(${d.lengthInBytes} < $bengleEstSampleBytes bytes)',
+      );
+      return;
+    }
+    _estimatorSubject.add(d);
+  }
+
+  /// Test seam behind [UnifiedDe1.debugInjectEstimator]: push a raw 0xA014
+  /// frame into the pipeline exactly as the serial `[T]` dispatch would.
+  /// Production only ever feeds this subject over serial; the snapshot-merge
+  /// pipeline test runs a Bengle over BLE (where identity gating is
+  /// straightforward) and injects estimator frames without a live serial link.
+  void debugInjectEstimator(ByteData frame) => _estimatorNotification(frame);
+
   void _stateNotification(ByteData d) {
     if (d.lengthInBytes < _minStateBytes) {
       _log.warning(
@@ -511,6 +631,7 @@ class UnifiedDe1Transport {
   }
 
   Future<ByteData> read(LogicalEndpoint endpoint, {Duration? timeout}) async {
+    final generation = _linkGeneration;
     if (await _transport.connectionState.first !=
         device.ConnectionState.connected) {
       throw const DeviceNotConnectedException.machine();
@@ -547,7 +668,7 @@ class UnifiedDe1Transport {
       }
     } catch (e, st) {
       if (_isBleTimeout(e)) {
-        if (await _handleBleTimeout(e, st)) {
+        if (await _handleBleTimeout(e, st, generation)) {
           _log.info('Retrying read of ${endpoint.name} after reconnect');
           return read(endpoint, timeout: timeout);
         }
@@ -603,6 +724,8 @@ class UnifiedDe1Transport {
         return _latestSerialFrame(e, _shotSampleSubject, timeout);
       case Endpoint.bengleShotSample:
         return _latestSerialFrame(e, _bengleShotSampleSubject, timeout);
+      case Endpoint.estimator:
+        return _latestSerialFrame(e, _estimatorSubject, timeout);
       case Endpoint.stateInfo:
         return _latestSerialFrame(e, _stateSubject, timeout);
       case Endpoint.calibration:
@@ -720,6 +843,7 @@ class UnifiedDe1Transport {
   }
 
   Future<void> write(LogicalEndpoint endpoint, Uint8List data) async {
+    final generation = _linkGeneration;
     if (await _transport.connectionState.first !=
         device.ConnectionState.connected) {
       throw const DeviceNotConnectedException.machine();
@@ -752,7 +876,7 @@ class UnifiedDe1Transport {
       }
     } catch (e, st) {
       if (_isBleTimeout(e)) {
-        if (await _handleBleTimeout(e, st)) {
+        if (await _handleBleTimeout(e, st, generation)) {
           _log.info('Retrying write to ${endpoint.name} after reconnect');
           return write(endpoint, data);
         }
@@ -771,15 +895,18 @@ class UnifiedDe1Transport {
     Uint8List data, {
     void Function()? beforeDispatch,
   }) async {
+    final generation = _linkGeneration;
     if (await _transport.connectionState.first !=
         device.ConnectionState.connected) {
       throw const DeviceNotConnectedException.machine();
     }
     try {
       _log.fine('about to write to ${endpoint.name}');
-      _log.fine(
-        'payload: ${data.map((el) => el.toRadixString(16).padLeft(2, '0')).join(' ')}',
-      );
+      if (endpoint != Endpoint.writeToMMR) {
+        _log.fine(
+          'payload: ${data.map((el) => el.toRadixString(16).padLeft(2, '0')).join(' ')}',
+        );
+      }
       switch (transportType) {
         case TransportType.ble:
           if (endpoint.uuid == null) {
@@ -804,7 +931,7 @@ class UnifiedDe1Transport {
       }
     } catch (e, st) {
       if (_isBleTimeout(e)) {
-        if (await _handleBleTimeout(e, st)) {
+        if (await _handleBleTimeout(e, st, generation)) {
           _log.info('Retrying write to ${endpoint.name} after reconnect');
           return writeWithResponse(
             endpoint,
@@ -826,30 +953,75 @@ class UnifiedDe1Transport {
     return transportType == TransportType.ble && error is BleTimeoutException;
   }
 
-  Future<bool> _handleBleTimeout(Object error, StackTrace st) async {
+  Future<bool> _handleBleTimeout(
+    Object error,
+    StackTrace st,
+    int operationGeneration,
+  ) {
+    if (operationGeneration != _linkGeneration) {
+      _log.info('BLE timeout after an explicit disconnect; not reconnecting');
+      return Future.value(false);
+    }
+    final running = _recovery;
+    if (running != null) {
+      _log.info('BLE recovery already running; waiting for its result');
+      return running;
+    }
+    final recovery = _recoverBleLink();
+    _recovery = recovery;
+    recovery.whenComplete(() {
+      if (identical(_recovery, recovery)) _recovery = null;
+    }).ignore();
+    return recovery;
+  }
+
+  Future<bool> _recoverBleLink() async {
     _log.warning('BLE write timed out, attempting reconnect');
+    final generation = _linkGeneration;
+    final appConnects = _appConnects;
     _recovering = true;
     final restoreBengleShotSample = _bengleShotSampleEnabled;
+    final restoreEstimator = _estimatorEnabled;
     try {
       await _transport.disconnect();
+      if (generation != _linkGeneration) {
+        _log.info('BLE recovery cancelled by an explicit disconnect');
+        return false;
+      }
       await _transport.connect();
+      _throwIfCancelled(generation);
       await _bleConnect();
+      _throwIfCancelled(generation);
       if (restoreBengleShotSample) {
         await subscribeBengleShotSample();
+        _throwIfCancelled(generation);
+      }
+      if (restoreEstimator) {
+        await subscribeEstimator();
+        _throwIfCancelled(generation);
       }
       _log.info('BLE reconnect successful after timeout');
       return true;
     } catch (reconnectError) {
-      _log.severe('BLE reconnect failed, disconnecting', reconnectError);
-      _recovering = false;
-      try {
-        _transport.disconnect();
-      } catch (e, st) {
-        _log.fine('transport.disconnect() during BLE recovery failed', e, st);
+      if (reconnectError is _RecoveryCancelled ||
+          generation != _linkGeneration) {
+        _log.info('BLE recovery cancelled by an explicit disconnect');
+        if (appConnects != _appConnects) return false;
+      } else {
+        _log.severe('BLE reconnect failed, disconnecting', reconnectError);
       }
+      if (generation == _linkGeneration) _recovering = false;
+      unawaited(
+        Future.sync(_transport.disconnect).catchError((
+          Object e,
+          StackTrace st,
+        ) {
+          _log.fine('transport.disconnect() during BLE recovery failed', e, st);
+        }),
+      );
       return false;
     } finally {
-      _recovering = false;
+      if (generation == _linkGeneration) _recovering = false;
     }
   }
 

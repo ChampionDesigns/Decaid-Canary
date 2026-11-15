@@ -37,10 +37,52 @@ servers:
         default: localhost
 
 paths:
+  /api/v1/manifest:
+    get:
+      summary: Discover API documentation
+      description: >
+        Returns the static API documentation locations. The paths under `docs`
+        are relative to the same host as the API request, using the advertised
+        documentation port (4001) rather than port 8080. The documentation
+        listener may be unavailable even when this endpoint responds.
+      tags: [Documentation]
+      responses:
+        "200":
+          description: API documentation discovery manifest
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: public, max-age=300
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [api, docs]
+                properties:
+                  api:
+                    type: string
+                    example: v1
+                  docs:
+                    type: object
+                    required: [port, viewer, openapi, asyncapi]
+                    properties:
+                      port:
+                        type: integer
+                        example: 4001
+                      viewer:
+                        type: string
+                        example: /
+                      openapi:
+                        type: string
+                        example: /rest_v1.yml
+                      asyncapi:
+                        type: string
+                        example: /websocket_v1.yml
   /api/v1/devices:
     get:
       summary: Get Available Devices
-      description: Retrieves a list of available devices with their connection states.
+      description: Retrieves a list of available devices with their connection states. Android session-only USB machines retain their live ID until safe reconnect; once the attachment supplies a descriptor serial, its remembered canonical record is coalesced with that live item.
       tags: [Devices]
       responses:
         "200":
@@ -137,7 +179,7 @@ paths:
             type: boolean
             default: false
         - name: quick
-          description: If true, Decaid returns an empty array immediately while the same scan-first policy continues in the background, after any post-wake deferral has elapsed. Useful when polling for device updates manually.
+          description: If true, Decaid-Canary returns an empty array immediately while the same scan-first policy continues in the background, after any post-wake deferral has elapsed. Useful when polling for device updates manually.
           in: query
           schema:
             type: boolean
@@ -953,10 +995,11 @@ paths:
       description: |
         Reapplies a baseline set of machine settings (fan threshold, heater idle temp,
         heater phase 1/2 flows, heater phase 2 timeout, refill kit auto mode, and
-        steam purge mode), and clears the retained fan/refill overrides for the
-        connected machine only. Flow calibration is left untouched: no calibration
-        packet is sent, the machine multiplier is neither read nor modified, and the
-        saved per-machine calibration override is preserved for the next connection.
+        steam purge mode), and clears the retained fan/refill-kit overrides for the
+        connected machine only. Flow calibration and the water refill threshold are
+        left untouched: no calibration or water-levels packet is sent, neither machine
+        value is read or modified, and both saved per-machine overrides are preserved
+        for the next connection.
         Profile and workflow are not touched. A reset acknowledgement is not evidence
         of factory restoration.
       tags: [Machine]
@@ -1088,8 +1131,34 @@ paths:
           description: No machine was connected, the machine changed during the write, or the write failed
 
   /api/v1/machine/waterLevels:
+    get:
+      summary: Get water levels and refill threshold
+      description: |
+        Returns the latest water levels the machine reported, the same payload
+        `/ws/v1/machine/waterLevels` sends. `refillLevel` is the refill threshold
+        as the machine last reported it, so it reflects a POST only once the
+        machine reports again. When the machine has not reported water levels
+        since it connected, the request waits up to 4 seconds for the first report.
+      tags: [Machine]
+      responses:
+        "200":
+          description: Latest water levels
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WaterLevels"
+        "504":
+          description: The machine reported no water levels within 4 seconds, including when its BLE connection drops during the wait
+        "500":
+          description: No machine was connected, or the app disconnected the machine or its serial link dropped while the request waited
     post:
       summary: Set water level refill threshold. Only the refillLevel field is used.
+      description: |
+        The DE1 does not retain the refill threshold across a power cycle, so a
+        value written through this API is retained per machine and reapplied after
+        reconnect, using the same per-machine bucket as the fan and refill-kit
+        overrides. Until a value is written the machine keeps its own threshold.
+        A machine-settings reset does not change or forget the saved value.
       tags: [Machine]
       requestBody:
         required: true
@@ -1113,7 +1182,11 @@ paths:
       description: |
         Returns the bundled firmware catalog with per-artifact eligibility.
         Does not require a machine connection; when offline, machine fields
-        are null and eligibility is unknown.
+        are null and eligibility is unknown. `updateAvailable: false` means
+        that no applicable newer artifact was found; it does not by itself
+        mean the machine is up to date. Inspect each artifact's eligibility
+        reason: `not_newer` is distinct from `model_incompatible`; an
+        eligibility status of `unknown` is a separate indeterminate result.
       tags: [Machine]
       responses:
         "200":
@@ -1132,8 +1205,9 @@ paths:
         503 if no machine is connected or the machine write queue is full.
 
         A successful stream emits `erasing`, zero or more `uploading` events,
-        then `done`. A failed stream emits `erasing`, zero or more `uploading`
-        events, then `error` with `progress: -1.0`.
+        then `done`. A pre-start controller or initialization failure may emit
+        only `error`, without `erasing`. Other failed streams emit `erasing`,
+        zero or more `uploading` events, then `error` with `progress: -1.0`.
 
         Upload progress is emitted in approximately one-percent increments.
         The final `uploading` value may be close to or equal to `1.0`. Only the
@@ -1188,9 +1262,12 @@ paths:
       description: |
         Resolves, loads, and validates a bundled firmware artifact before
         starting the upload. Returns an NDJSON progress stream on success.
-        The JSON body is limited to 64 KiB and must arrive within 10 seconds.
-        Accepts optional `force: true` to bypass version-newer policy
-        (never bypasses integrity or compatibility checks).
+        HTTP 200 means that the stream was admitted, not that the update
+        succeeded; clients must read the complete stream and inspect its
+        terminal `done` or `error` event. The JSON body is limited to 64 KiB
+        and must arrive within 10 seconds. Accepts optional `force: true` to
+        bypass version-newer policy (never bypasses integrity or compatibility
+        checks).
       tags: [Machine]
       requestBody:
         required: true
@@ -1516,9 +1593,15 @@ paths:
                 type: array
                 items:
                   type: object
+                  required: [id, info]
                   properties:
-                    name:
+                    id:
                       type: string
+                      description: >-
+                        The sensor ID. Use it, percent-encoded as one path
+                        component, in `/api/v1/sensors/{id}`,
+                        `/api/v1/sensors/{id}/execute` and
+                        `/ws/v1/sensors/{id}/snapshot`.
                     info:
                       $ref: "#/components/schemas/SensorManifest"
 
@@ -1600,6 +1683,15 @@ paths:
                 $ref: "#/components/schemas/ReaSettings"
     post:
       summary: Update Decent settings
+      description: >
+        Applies the keys present in the body. A body that contains
+        `webUiPath`, sets `defaultSkinId` to a skin other than the current
+        default, or sets `automaticUpdateCheck` to true while it is off
+        (automatic checks install plugin and skin updates) requires
+        `Authorization: Bearer <token>` scoped `extensions:manage` (see the
+        extensionsManage security scheme) and is refused with 401 or 403
+        before any key is applied. Values already in effect, turning
+        `automaticUpdateCheck` off, and every other key need no token.
       tags: [Decent Settings]
       requestBody:
         required: true
@@ -1610,6 +1702,24 @@ paths:
       responses:
         "200":
           description: Decent settings updated successfully
+        "401":
+          description: >
+            The body contains webUiPath, changes defaultSkinId or turns on
+            automaticUpdateCheck, and the bearer token is missing, malformed,
+            unknown or revoked; no key was applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >
+            The body contains webUiPath, changes defaultSkinId or turns on
+            automaticUpdateCheck, and the token is not scoped for
+            extensions:manage; no key was applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   # REA Workflow API
   /api/v1/workflow:
@@ -3244,6 +3354,8 @@ paths:
 
     post:
       tags: [Plugins]
+      security:
+        - extensionsManage: []
       summary: Save settings for specific plugin
       description: >
         Applies a settings patch. Omitted fields preserve the existing value;
@@ -3252,6 +3364,8 @@ paths:
         is loaded, it is reloaded so the running instance picks up the patch;
         if it is unloaded, the patch is only persisted. The response
         is always redacted and never echoes a submitted credential.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       parameters:
         - name: id
           in: path
@@ -3272,12 +3386,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PluginSettings'
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/plugins/{id}/enable:
     post:
       summary: Enable a plugin
-      description: Enables and loads the specified plugin
+      description: >
+        Enables and loads the specified plugin.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [Plugins]
+      security:
+        - extensionsManage: []
       parameters:
         - name: id
           in: path
@@ -3297,12 +3428,29 @@ paths:
                     type: string
                   id:
                     type: string
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/plugins/{id}/disable:
     post:
       summary: Disable a plugin
-      description: Disables and unloads the specified plugin
+      description: >
+        Disables and unloads the specified plugin.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [Plugins]
+      security:
+        - extensionsManage: []
       parameters:
         - name: id
           in: path
@@ -3322,6 +3470,18 @@ paths:
                     type: string
                   id:
                     type: string
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/plugins/{id}/source:
     put:
@@ -3340,7 +3500,11 @@ paths:
         bundled plugin is temporary: on the next app start the bundled copy wins
         whenever its version is higher. This path shadows a plugin-declared
         endpoint named "source", the same way /settings does.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [Plugins]
+      security:
+        - extensionsManage: []
       parameters:
         - name: id
           in: path
@@ -3389,6 +3553,18 @@ paths:
                 properties:
                   error:
                     type: string
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: >
             The submitted version is lower than the installed version; remove
@@ -3419,8 +3595,13 @@ paths:
   /api/v1/plugins/{id}:
     delete:
       summary: Delete a plugin
-      description: Removes a plugin from the system
+      description: >
+        Removes a plugin from the system.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [Plugins]
+      security:
+        - extensionsManage: []
       parameters:
         - name: id
           in: path
@@ -3440,6 +3621,18 @@ paths:
                     type: string
                   id:
                     type: string
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/plugins/{id}/{endpoint}:
     get:
@@ -3449,8 +3642,11 @@ paths:
         and endpoint IDs are opaque URI path components: clients percent-encode
         each once, and the route decodes each once before lookup. The
         runtime applies this contract to every HTTP method. The plugin manifest
-        must declare the api permission; otherwise Decaid rejects the request
-        before dispatch.
+        must declare the api permission; otherwise Decaid-Canary rejects the request
+        before dispatch. A bearer token that Decaid-Canary recognises (an
+        `account:proxy` or `extensions:manage` token) is removed from the
+        request before it reaches the plugin; plugin endpoints are not gated
+        by the extensionsManage scheme.
       tags: [Plugins]
       parameters:
         - name: id
@@ -3487,7 +3683,11 @@ paths:
         Installing from an arbitrary URL is not supported. Use
         /api/v1/plugins/install/github-release or
         /api/v1/plugins/install/github-branch.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [Plugins]
+      security:
+        - extensionsManage: []
       requestBody:
         required: false
         content:
@@ -3498,6 +3698,18 @@ paths:
                 url:
                   type: string
       responses:
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "501":
           description: Not supported; the response names the endpoints to use
           content:
@@ -3522,7 +3734,11 @@ paths:
         Malformed downloaded data and package manifests return HTTP 400 with
         plain-language validation errors, without parser diagnostics or source snippets.
         This includes missing or incorrectly typed release fields and asset entries.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [Plugins]
+      security:
+        - extensionsManage: []
       requestBody:
         required: true
         content:
@@ -3553,6 +3769,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: The release is older than the installed version
           content:
@@ -3578,7 +3806,11 @@ paths:
         transport exceptions.
         Invalid GitHub commit response structures return HTTP 400 with
         plain-language validation guidance and no response-body snippets.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [Plugins]
+      security:
+        - extensionsManage: []
       requestBody:
         required: true
         content:
@@ -3602,6 +3834,18 @@ paths:
                 $ref: '#/components/schemas/PluginInstallResult'
         "400":
           description: Invalid body or invalid package
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
           content:
             application/json:
               schema:
@@ -3630,7 +3874,11 @@ paths:
         does not stop the others.
         After all items are processed, any failure (including partial completion)
         returns HTTP 500 with a plain-language error. Successful updates are kept.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [Plugins]
+      security:
+        - extensionsManage: []
       responses:
         "200":
           description: Update check finished
@@ -3641,6 +3889,18 @@ paths:
                 properties:
                   message:
                     type: string
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "500":
           description: The update check could not run or some items failed
           content:
@@ -3656,7 +3916,11 @@ paths:
         release tag or commit - accepting its added permissions. If the source
         moved since detection, the fetched candidate is refused, recorded as
         the new pendingUpdate and has to be approved again.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [Plugins]
+      security:
+        - extensionsManage: []
       parameters:
         - name: id
           in: path
@@ -3672,6 +3936,18 @@ paths:
                 $ref: '#/components/schemas/PluginInstallResult'
         "400":
           description: The candidate package is invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
           content:
             application/json:
               schema:
@@ -3790,7 +4066,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProfileRecord'
         "400":
-          description: Bad Request (missing required fields or invalid parent ID)
+          description: >-
+            Bad Request (missing required fields, an invalid step limiter, or
+            invalid parent ID). A step limiter without a numeric `value` or
+            `range` is refused with the message
+            `FormatException: limiter "value" must be a number` or
+            `FormatException: limiter "range" must be a number`. A `value` or
+            `range` that parses to NaN or an infinity (for example the string
+            `"NaN"` or the number `1e400`) is refused with
+            `FormatException: limiter "value" must be a finite number` or
+            `FormatException: limiter "range" must be a finite number`. PUT
+            /api/v1/profiles/{id} returns the same text.
         "500":
           description: Internal Server Error
 
@@ -3857,7 +4143,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProfileRecord'
         "400":
-          description: Bad Request (profile not found, target ID already exists, or cannot modify default profile)
+          description: >-
+            Bad Request (profile not found, target ID already exists, cannot
+            modify default profile, or an invalid step limiter). A step limiter
+            without a numeric `value` or `range` is refused with the same
+            message that POST /api/v1/profiles returns.
         "500":
           description: Internal Server Error
     
@@ -4154,8 +4444,13 @@ paths:
           description: Internal Server Error
     delete:
       summary: Remove/uninstall a WebUI skin
-      description: Removes a user-installed WebUI skin (bundled skins cannot be removed)
+      description: >
+        Removes a user-installed WebUI skin (bundled skins cannot be removed).
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [WebUI]
+      security:
+        - extensionsManage: []
       parameters:
         - name: id
           in: path
@@ -4177,8 +4472,18 @@ paths:
                     type: string
                   id:
                     type: string
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "403":
-          description: Cannot remove bundled skin
+          description: Cannot remove bundled skin, or token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "404":
           description: Skin not found
         "500":
@@ -4202,8 +4507,13 @@ paths:
           description: Internal Server Error
     put:
       summary: Set the default WebUI skin
-      description: Sets the user's preferred default skin by ID and persists to preferences
+      description: >
+        Sets the user's preferred default skin by ID and persists to preferences.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [WebUI]
+      security:
+        - extensionsManage: []
       requestBody:
         required: true
         content:
@@ -4233,6 +4543,18 @@ paths:
                     type: string
         "400":
           description: Bad request (missing skinId field)
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "404":
           description: Skin not found
         "500":
@@ -4241,8 +4563,13 @@ paths:
   /api/v1/webui/skins/install/github-release:
     post:
       summary: Install skin from GitHub Release
-      description: Downloads and installs a WebUI skin from a GitHub Release using the GitHub API
+      description: >
+        Downloads and installs a WebUI skin from a GitHub Release using the GitHub API.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [WebUI]
+      security:
+        - extensionsManage: []
       requestBody:
         required: true
         content:
@@ -4280,14 +4607,31 @@ paths:
                     type: string
         "400":
           description: Bad request (missing repo field)
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "500":
           description: Internal Server Error
 
   /api/v1/webui/skins/install/github-branch:
     post:
       summary: Install skin from GitHub branch
-      description: Downloads and installs a WebUI skin from a GitHub branch archive, persisting the branch source for future update checks
+      description: >
+        Downloads and installs a WebUI skin from a GitHub branch archive, persisting the branch source for future update checks.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [WebUI]
+      security:
+        - extensionsManage: []
       requestBody:
         required: true
         content:
@@ -4324,14 +4668,31 @@ paths:
                     type: string
         "400":
           description: Bad request (missing repo field)
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "500":
           description: Internal Server Error
 
   /api/v1/webui/skins/install/url:
     post:
       summary: Install skin from URL
-      description: Downloads and installs a WebUI skin from a direct ZIP URL
+      description: >
+        Downloads and installs a WebUI skin from a direct ZIP URL.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [WebUI]
+      security:
+        - extensionsManage: []
       requestBody:
         required: true
         content:
@@ -4362,6 +4723,18 @@ paths:
                     type: string
         "400":
           description: Bad request (missing url field)
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "500":
           description: Internal Server Error
 
@@ -4374,7 +4747,11 @@ paths:
         downloaded and updated. Every item is attempted; any failure, including
         partial completion, returns HTTP 500 with a plain-language error.
         Successful updates are retained.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [WebUI]
+      security:
+        - extensionsManage: []
       responses:
         "200":
           description: Update check completed
@@ -4386,6 +4763,18 @@ paths:
                   message:
                     type: string
                     example: "Skin update check completed"
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "500":
           description: Update check failed or completed only partially; error contains a plain-language message
 
@@ -4418,8 +4807,13 @@ paths:
   /api/v1/webui/server/start:
     post:
       summary: Start the WebUI server
-      description: Starts serving the default WebUI skin through the stable port 3000 entry point
+      description: >
+        Starts serving the default WebUI skin through the stable port 3000 entry point.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [WebUI]
+      security:
+        - extensionsManage: []
       responses:
         "200":
           description: Server started successfully
@@ -4441,12 +4835,29 @@ paths:
                 properties:
                   error:
                     type: string
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/webui/server/stop:
     post:
       summary: Stop the WebUI server
-      description: Stops the WebUI skin server
+      description: >
+        Stops the WebUI skin server.
+        Requires `Authorization: Bearer <token>` scoped `extensions:manage`
+        (see the extensionsManage security scheme).
       tags: [WebUI]
+      security:
+        - extensionsManage: []
       responses:
         "200":
           description: Server stopped successfully
@@ -4457,6 +4868,18 @@ paths:
                 properties:
                   message:
                     type: string
+        "401":
+          description: Missing, malformed, unknown or revoked bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token is not scoped for extensions:manage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/webui/skin-assets/{id}/{filepath}:
     get:
@@ -5030,6 +5453,13 @@ paths:
         duplicate entry names, directory/symlink entries masquerading as
         recognized files, truncated archives, CRC mismatches, and malformed
         JSON all fail safely with 400.
+
+        Changing the default skin or turning on automatic updates requires
+        `Authorization: Bearer <token>` scoped `extensions:manage`. Without
+        it, every other setting is still imported, but a `defaultSkinId` that
+        differs from the current one and an `automaticUpdateCheck: true` while
+        automatic updates are off are each skipped and reported as a warning
+        in the `settings` section result.
       tags: [Data Management]
       parameters:
         - in: query
@@ -5103,9 +5533,9 @@ paths:
           description: Internal server error
   /api/v1/data/sync:
     post:
-      summary: Sync data between Decaid instances
+      summary: Sync data between Decaid-Canary instances
       description: |
-        Synchronizes data between this Decaid instance and a target Decaid
+        Synchronizes data between this Decaid-Canary instance and a target Decaid-Canary
         instance over the network. Supports three modes:
         - **pull**: imports data from the target into this instance
         - **push**: exports data from this instance to the target
@@ -5138,6 +5568,14 @@ paths:
         phase reports reason `timeout_unknown`. A generated archive is also
         bounded by the 2 GiB import request limit, and per-record limits
         are measured in UTF-8 bytes.
+
+        A pull (including the pull phase of two_way) imports the target's
+        settings under the same rule as /api/v1/data/import: without a token
+        scoped `extensions:manage` on this request, a `defaultSkinId` that
+        differs from the current one and an `automaticUpdateCheck: true` while
+        automatic updates are off are each skipped and reported as a warning
+        in the `settings` section result. A push sends no token, so the target
+        applies the same rule to the pushed archive.
       tags: [Data Management]
       requestBody:
         required: true
@@ -5150,7 +5588,7 @@ paths:
                 target:
                   type: string
                   description: |
-                    Base URL of the target Decaid instance
+                    Base URL of the target Decaid-Canary instance
                     (e.g. "http://192.168.1.50:8080"). Must be an HTTP/HTTPS
                     origin with no path, query, or fragment; a trailing slash
                     is accepted and equivalent. IPv4, hostname, and IPv6
@@ -5899,6 +6337,22 @@ paths:
             400 with a `detail.code`, or a 429 rate-limit).
 
 components:
+  securitySchemes:
+    extensionsManage:
+      type: http
+      scheme: bearer
+      description: >
+        A bearer token scoped `extensions:manage`, required by the plugin and
+        skin management operations even though the rest of the API is
+        unauthenticated. Create one in the app (Decent Account > API access
+        tokens > Create, with "Manage plugins and skins" turned on; it is shown
+        once). For development and automation, supply a random one at launch
+        in the `DECAID_EXTENSIONS_TOKEN` environment variable or with
+        `--extensions-token <value>` (at least 32 characters; other local
+        users can read command-line arguments). Send it as
+        `Authorization: Bearer <token>`.
+        Over plain HTTP the token is not confidential on the local network;
+        use a trusted network until the HTTPS listener (#925) exists.
   schemas:
     ScaleCommandError:
       type: object
@@ -6308,7 +6762,7 @@ components:
           description: >
             Machine details read from MMR once at connect. The object stays
             open — a firmware or model may contribute keys not listed here —
-            but these two are always present for a DE1.
+            but the first two are always present for a DE1.
           additionalProperties: true
           properties:
             refillKit:
@@ -6329,6 +6783,15 @@ components:
             voltage:
               type: integer
               description: Heater supply voltage in volts, as reported by the machine.
+            profileModeCaps:
+              type: integer
+              description: >
+                Per-frame profile-step capability bitmask: 0x1 = Power,
+                0x2 = Lever, 0x4 = HOLD, 0x8 = cross-variable power exit.
+                0 or absent means the machine cannot run those profile steps,
+                and arming one — or a power exit — is refused with a 400.
+                Only firmware that implements the new pump modes defines the
+                register; stock firmware and every DE1 report 0.
           example:
             refillKit: true
             voltage: 220
@@ -6601,6 +7064,39 @@ components:
           type: integer
         steamTemperature:
           type: number
+        puckResistanceDerived:
+          type: number
+          description: >
+            Puck hydraulic resistance R = P / F² in bar·s²/mL², DERIVED from
+            pressure and reported group flow. Only computed when flow >= 0.3
+            mL/s and pressure >= 0.3 bar; when gated the key is omitted
+            entirely (never null). Measured equivalent: `r2` on the Bengle
+            puck-estimator sensor, which uses the flow through the puck rather
+            than the reported group flow. Prefer the measured value when the
+            machine offers it.
+        loadImpedanceDerived:
+          type: number
+          description: >
+            Hydraulic load impedance Z = P / F in bar·s/mL, DERIVED from
+            pressure and reported group flow. Same >= 0.3 gating as
+            puckResistanceDerived; key omitted when gated. Measured
+            equivalent: `r1` on the Bengle puck-estimator sensor. Prefer the
+            measured value when the machine offers it.
+        hydraulicPowerDerived:
+          type: number
+          description: >
+            Hydraulic power delivered to the puck, W = 0.1 · P · F in watts
+            (1 bar × 1 mL/s = 0.1 W; espresso is roughly 0.5–4 W), DERIVED
+            from pressure and reported group flow. Same >= 0.3 gating as
+            puckResistanceDerived; key omitted when gated. Measured
+            equivalent: `hydraulicPowerMeasured` on the Bengle puck-estimator
+            sensor, present when the machine reports BengleEstSample rev >= 3.
+            Prefer it when present: it is computed from the flow through the
+            puck, so it is the power actually delivered rather than supplied.
+            NOTE the derived and measured channels go null at DIFFERENT times
+            (this 0.3/0.3 gate versus the firmware's own gate and its
+            not-yet-observed sentinel), so a client switching source mid-shot
+            sees gaps in different places.
     MachineState:
       type: string
       enum:
@@ -6608,6 +7104,7 @@ components:
           booting,
           busy,
           idle,
+          schedIdle,
           sleeping,
           heating,
           preheating,
@@ -6637,11 +7134,13 @@ components:
           pouring,
           pouringDone,
           cleaningStart,
-          cleaingGroup,
+          cleaningGroup,
           cleanSoaking,
           cleaningSteam,
           pausedSteam,
           puffing,
+          refillStopped,
+          pumpZeroing,
           errorNaN,
           errorInf,
           errorGeneric,
@@ -6660,7 +7159,11 @@ components:
           errorLoCurrent,
           errorBootFill,
           errorNoAC,
-
+          errorPumpZero,
+          errorPumpNeedsCalibration,
+          errorFrontSwitchOff,
+          errorPumpFault,
+          errorPumpSilent,
         ]
       example: preparingForShot
     Profile:
@@ -6712,6 +7215,16 @@ components:
         A single step in a brewing profile. Discriminated by the `pump` field:
         - `pump: "pressure"` → pressure-controlled step (has `pressure` field)
         - `pump: "flow"` → flow-controlled step (has `flow` field)
+        - `pump: "power"` → constant-hydraulic-power step (has `power` field and
+          a MANDATORY pressure `limiter`; Bengle only)
+        - `pump: "lever"` → spring-lever step (uses `pressure` as the starting
+          pressure P₀, plus `leverSpring` and `leverGive`; Bengle only)
+
+        The `power` and `lever` pump modes and the `hold` transition require a
+        machine that advertises the matching capability. Uploading a profile
+        that uses one to a machine that does not (a DE1, or firmware without the
+        capability) is refused with a `400` before any write; the profile still
+        stores and round-trips unchanged on any machine.
       required:
         - name
         - pump
@@ -6726,12 +7239,18 @@ components:
           description: Step name/identifier
         pump:
           type: string
-          enum: [pressure, flow]
-          description: Step type discriminator. Determines whether `pressure` or `flow` field is used.
+          enum: [pressure, flow, power, lever]
+          description: Step type discriminator. Selects which target field applies (`pressure`, `flow`, `power`, or the lever `pressure`/`leverSpring`/`leverGive` trio).
         transition:
           type: string
-          enum: [fast, smooth]
-          description: How the machine transitions to this step's target
+          enum: [fast, smooth, hold]
+          description: >-
+            How the machine transitions to this step's target. `fast` = jump,
+            `smooth` = ramp. `hold` (capable machines only) has NO authored
+            target: the firmware latches the value achieved at the exit of the
+            previous step (for this step's own control variable) and holds it
+            flat. Arming is refused with a `400` on a machine that does not
+            advertise the capability, and HOLD may not be the first step.
         exit:
           $ref: '#/components/schemas/StepExitCondition'
         volume:
@@ -6763,6 +7282,18 @@ components:
           type: number
           format: double
           description: Target flow rate in ml/s (present when pump=flow)
+        power:
+          type: number
+          format: double
+          description: Target hydraulic power in watts (present when pump=power; requires a pressure `limiter`)
+        leverSpring:
+          type: number
+          format: double
+          description: Lever spring rate k_V in bar per 10 ml delivered (present when pump=lever)
+        leverGive:
+          type: number
+          format: double
+          description: Lever give R_s in bar per ml/s (present when pump=lever)
         limiter:
           $ref: '#/components/schemas/StepLimiter'
 
@@ -6776,8 +7307,14 @@ components:
       properties:
         type:
           type: string
-          enum: [pressure, flow]
-          description: Which measurement to evaluate
+          enum: [pressure, flow, power]
+          description: >-
+            Which measurement to evaluate. `power` is hydraulic watts
+            (0.1 * pressure * flow) and requires a capable machine
+            (ProfileModeCaps bit3 = 0x8); arming a power exit on a machine
+            without it is refused with a 400. The exit variable is normally the
+            step's non-own variable (e.g. a pressure step exits on flow or
+            power).
         condition:
           type: string
           enum: [over, under]
@@ -6785,11 +7322,21 @@ components:
         value:
           type: number
           format: double
-          description: Threshold value for the exit condition
+          description: >-
+            Threshold value for the exit condition. For a `power` exit the
+            value is in watts and the machine holds it in one byte of 0.1 W,
+            so the range is 0 to 25.5 W; a profile upload with a power exit
+            value that is not finite, below 0 or above 25.5 is refused with a
+            400 that names the power exit value, before anything is written to
+            the machine.
 
     StepLimiter:
       type: object
-      description: Safety limiter for a step (caps the non-controlled variable)
+      description: >-
+        Safety limiter for a step (caps the non-controlled variable). Both
+        fields are required numbers: a profile upload whose limiter has a
+        missing, null, non-numeric or non-finite (NaN or infinite) `value` or
+        `range` is refused with a 400 that names the field.
       required:
         - value
         - range
@@ -7076,12 +7623,12 @@ components:
       type: object
       properties:
         gatewayMode:
-          description: Control whether Decaid acts as gateway. Disabled means gateway is disabled, full means full gateway mode. Tracking means Decaid will not show graphs, but will control the shot (stop at weight)
+          description: Control whether Decaid-Canary acts as gateway. Disabled means gateway is disabled, full means full gateway mode. Tracking means Decaid-Canary will not show graphs, but will control the shot (stop at weight)
           type: string
           enum: ["disabled", "full", "tracking"]
           nullable: true
         webUiPath:
-          description: Set a path on local filesystem, from which REA will serve the webUI
+          description: Set a path on local filesystem, from which REA will serve the webUI. Any value requires a bearer token scoped extensions:manage (see POST /api/v1/settings).
           type: string
           nullable: true
         logLevel:
@@ -7123,12 +7670,12 @@ components:
           description: When true (default) and a scale is connected, hot water dispensing tares the scale and stops at the configured hot-water volume target treated as grams. The machine's own volume/time stop remains a backstop. Ignored in full gateway mode (a skin owns the machine). Set false to use only the machine's native volume/time stop.
           type: boolean
         preferredMachineId:
-          description: Device ID of the preferred machine for auto-connect on startup. When set, REA will automatically connect to this machine when it's discovered during device scan. Set to null to clear the preference.
+          description: Device ID of the preferred machine for auto-connect on startup. When set, REA will automatically connect to this machine when it's discovered during device scan. Android session-only USB IDs (including legacy unknown IDs) are ignored and leave the existing preference unchanged. Set to null to clear the preference.
           type: string
           nullable: true
           example: "F4:12:FA:5C:3D:8E"
         preferredScaleId:
-          description: Device ID of the preferred scale for auto-connect on startup. When set, REA will automatically connect to this scale when it's discovered during device scan. Set to null to clear the preference.
+          description: Device ID of the preferred scale for auto-connect on startup. When set, REA will automatically connect to this scale when it's discovered during device scan. Session-only USB scale IDs are not persisted as preferences. Set to null to clear the preference.
           type: string
           nullable: true
           example: "AA:BB:CC:DD:EE:FF"
@@ -7138,11 +7685,11 @@ components:
           nullable: true
           example: "plugin:grinder.example:grinder:one"
         defaultSkinId:
-          description: ID of the default WebUI skin to serve
+          description: ID of the default WebUI skin to serve. A value other than the current default requires a bearer token scoped extensions:manage (see POST /api/v1/settings).
           type: string
           nullable: true
         automaticUpdateCheck:
-          description: Whether to automatically check for updates
+          description: Whether to automatically check for updates. Automatic checks install plugin and skin updates, so setting true while it is off requires a bearer token scoped extensions:manage (see POST /api/v1/settings); turning it off needs none.
           type: boolean
           nullable: true
         chargingMode:
@@ -7231,7 +7778,7 @@ components:
           nullable: true
           example: "F4:12:FA:5C:3D:8E"
         preferredScaleId:
-          description: Device ID of the preferred scale for auto-connect on startup. Returns null if no preferred device is set.
+          description: Device ID of the preferred scale for auto-connect on startup. Session-only USB scale IDs are not persisted as preferences. Returns null if no preferred device is set.
           type: string
           nullable: true
           example: "AA:BB:CC:DD:EE:FF"
@@ -7310,26 +7857,37 @@ components:
 
     SensorManifest:
       type: object
+      description: |
+        A sensor and its channels. A Bengle that streams BengleEstSample frames
+        is listed as the sensor `Bengle Puck Estimator` with id
+        `<machine id>-puckestimator` and no commands. Its `data` channels
+        are `timestamp` (string), `rev`, `flags`, `r1` (bar·s/mL), `r2`
+        (bar·s²/mL²), `compliance` (mL/bar), `confidence`, `lag` (s),
+        `lagConfidence`, `sigmaQ` (mL/s), `absorbedVolume` (mL), `lastPauseTau`
+        (s), `collapseEventCount`, `collapseLastEventT` (s),
+        `collapseLastEventMagnitude`, `collapseLastEventConcavity` and
+        `hydraulicPowerMeasured` (W, firmware rev 3 and later). Every channel
+        except `timestamp` is a number.
       required:
-        - id
-        - dataChannels
+        - name
+        - vendor
+        - data
+        - commands
       properties:
-        id:
-          type: string
-          description: Unique sensor ID
-          example: "sensor:acme:tempflow:001"
         name:
           type: string
           example: "Acme Temp+Flow v1"
         vendor:
           type: string
           example: "Acme"
-        dataChannels:
+        data:
           type: array
+          description: The sensor's channels.
           items:
             $ref: "#/components/schemas/DataChannel"
         commands:
           type: array
+          nullable: true
           items:
             $ref: "#/components/schemas/CommandDescriptor"
 
@@ -7348,6 +7906,7 @@ components:
           example: "number"
         unit:
           type: string
+          nullable: true
           example: "°C"
 
     CommandDescriptor:
@@ -7368,6 +7927,7 @@ components:
           example: "Run auto-calibration routine."
         paramsSchema:
           type: object
+          nullable: true
           additionalProperties: true
           example:
             type: object
@@ -7378,6 +7938,7 @@ components:
             required: ["mode"]
         resultsSchema:
           type: object
+          nullable: true
           additionalProperties: true
           example:
             type: object
@@ -7389,8 +7950,40 @@ components:
 
     SensorSnapshot:
       type: object
-      required:
-        - values
+      description: |
+        One frame of a sensor, as `/ws/v1/sensors/{id}/snapshot` sends it.
+        The frame is the channel map itself, with no `id` or `values` wrapper.
+        Its keys are channel keys from the sensor's manifest
+        (`GET /api/v1/sensors/{id}`), and each value has the type its channel
+        entry names (number, integer, string, boolean, object or array). A
+        built-in sensor may also send a `timestamp` string that its manifest
+        does not declare (the EBus tap and the debug port do). A frame need not
+        hold every channel. A built-in sensor can send null for
+        a channel it cannot read: DiFluid R2 sends `measuring: null` for a
+        status code it does not know. A plugin sensor sends every declared
+        channel in every frame and never sends null.
+        A frame of the puck-estimator sensor (id
+        `<machine id>-puckestimator`) holds the channels
+        `timestamp` (string), `rev`, `flags`, `r1` (bar·s/mL), `r2`
+        (bar·s²/mL²), `compliance` (mL/bar), `confidence`, `lag` (s),
+        `lagConfidence`, `sigmaQ` (mL/s), `absorbedVolume` (mL), `lastPauseTau`
+        (s), `collapseEventCount`, `collapseLastEventT` (s),
+        `collapseLastEventMagnitude`, `collapseLastEventConcavity` and
+        `hydraulicPowerMeasured` (W, firmware rev 3 and later). Every channel
+        except `timestamp` is a number. The frame is the channel map itself:
+        each channel is a top-level key of the frame.
+        A channel the firmware does not report is omitted, never sent as null.
+      additionalProperties:
+        nullable: true
+        description: A channel value, typed by the manifest's channel entry, or null.
+      example:
+        timestamp: "2026-11-08T06:00:00.000"
+        rev: 3
+        flags: 0
+        r1: 1.8
+        confidence: 0.9
+        lagConfidence: 0.7
+        sigmaQ: 0.05
 
     WorkflowRequest:
       type: object
@@ -7500,7 +8093,7 @@ components:
           type: integer
           description: >
             Target steam temperature in Celsius. Set to 0 to disable steam-heater
-            preheating. Decaid writes 0 to the machine when steam is disabled and
+            preheating. Decaid-Canary writes 0 to the machine when steam is disabled and
             treats temperatures below the supported range as disabled. Supported
             enabled ranges are 135–160 °C for DE1 and 135–165 °C for Bengle.
           example: 150
@@ -7552,7 +8145,11 @@ components:
         flow:
           type: number
           format: double
-          description: Hot water flow rate
+          description: >
+            Hot water flow rate in ml/s. Decaid's model default is 10 ml/s and the
+            consumer skin offers 1–10 ml/s; that range is a client recommendation,
+            not an API validity constraint. No minimum or maximum is declared, so
+            existing finite workflow values round-trip unchanged.
           example: 10.0
 
     RinseData:
@@ -7764,6 +8361,37 @@ components:
           format: double
           nullable: true
           description: Accumulated volume in milliliters (ml) since shot start, calculated by integrating machine flow over time. Only counted from profile frame specified in targetVolumeCountStart.
+        sensors:
+          type: object
+          description: |
+            The latest frame of each attached sensor at this sample, keyed by
+            sensor device id (for example `<machine id>-puckestimator`). Each
+            value is that sensor's channel map. Its keys are the keys of the
+            `data` channels of the sensor's manifest (`GET /api/v1/sensors/{id}`),
+            and each channel's value has the type its `data` entry names
+            (number, integer, string, boolean, object or array). A built-in
+            sensor may also send a `timestamp` string that its manifest does not
+            declare (the EBus tap and the debug port do). For example,
+            the puck estimator's `timestamp` is a string and the EBus tap's
+            `bytes` is a string. Any value may be null: a value that is not a
+            finite number is stored as null. A channel the sensor did not report is absent. Omitted when
+            the sample holds no sensor frame.
+          additionalProperties:
+            type: object
+            description: One sensor's channel map, keyed by channel key.
+            additionalProperties:
+              nullable: true
+              description: A channel value, typed by the manifest's `data` entry, or null.
+          example:
+            DE1-1234-puckestimator:
+              timestamp: "2026-11-08T06:00:00.000"
+              rev: 3
+              flags: 0
+              r1: 1.8
+              confidence: 0.9
+              lagConfidence: 0.7
+              sigmaQ: 0.05
+              hydraulicPowerMeasured: 4.2
 
     SteamSnapshot:
       type: object
@@ -7813,7 +8441,7 @@ components:
           type: number
         weightFlow:
           type: number
-          description: Device-provided gravimetric flow when available; otherwise Decaid's weight-derived estimate.
+          description: Device-provided gravimetric flow when available; otherwise Decaid-Canary's weight-derived estimate.
         battery:
           type: integer
           nullable: true
@@ -7844,7 +8472,7 @@ components:
           type: array
           items:
             type: string
-            enum: [log, api, emit, pluginStorage, events.machine, events.shots, events.workflow, proxy.decent_api, proxy.decent_api.write, network.websocket, network.tcp, network.tls, transport.ble]
+            enum: [log, api, emit, notifications, pluginStorage, events.machine, events.shots, events.workflow, proxy.decent_api, proxy.decent_api.write, network.websocket, network.tcp, network.tls, transport.ble, manage.extensions]
         drivers:
           type: array
           maxItems: 8
@@ -8535,6 +9163,13 @@ components:
           nullable: true
           description: Current grinder setting value
           example: "5.2"
+        grinderRpm:
+          type: integer
+          format: int32
+          minimum: 0
+          nullable: true
+          description: Recorded grinder speed in revolutions per minute; absent when not configured.
+          example: 1200
         beanBatchId:
           type: string
           nullable: true
@@ -8634,6 +9269,13 @@ components:
           nullable: true
           description: Current grinder setting value
           example: "5.2"
+        grinderRpm:
+          type: integer
+          format: int32
+          minimum: 0
+          nullable: true
+          description: Recorded grinder speed in revolutions per minute; absent when not configured.
+          example: 1200
         beanBatchId:
           type: string
           nullable: true
@@ -9022,6 +9664,10 @@ components:
         updateAvailable:
           type: boolean
           nullable: true
+          description: >-
+            False means no applicable newer artifact was found. It is not an
+            assertion that the machine is current; model_incompatible and
+            eligibility status unknown are distinct from not_newer.
         operation:
           $ref: "#/components/schemas/FirmwareOperationState"
 
@@ -9115,9 +9761,12 @@ components:
         2. Zero or more `{"status":"uploading","progress":0.45}` events
         3. `{"status":"error","progress":-1.0,"error":"..."}`
 
-        An `error` event may terminate the sequence after any previously
-        emitted events. Verification failure or timeout emits `error`, never
-        `done`.
+        A pre-start controller or initialization failure may emit only the
+        terminal `error` event, without `erasing`. An `error` event may
+        terminate the sequence after any previously emitted events. Diagnostic
+        `stage` and `cause` are present when available; typed cancellation
+        intentionally omits failure-stage metadata. Verification failure or
+        timeout emits `error`, never `done`.
 
         Upload progress is emitted in approximately one-percent increments.
         The final `uploading` value may be close to or equal to `1.0`. Only the
@@ -9139,3 +9788,9 @@ components:
         error:
           type: string
           description: Error message (only present on status=error)
+        stage:
+          type: string
+          description: Diagnostic firmware stage (only present on status=error when available; includes initialization or controller for pre-start failures)
+        cause:
+          type: string
+          description: Original diagnostic cause (only present on status=error when available; omitted for typed cancellation)

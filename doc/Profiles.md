@@ -8,6 +8,17 @@ REA supports loading profiles to the espresso machine either directly through th
 
 The REA Profile data object definition lives in `lib/src/models/data/profile.dart`.
 
+## Workflow Numeric Settings
+
+Workflow `SteamSettings`, `HotWaterData`, and `RinseData` numeric fields keep
+finite values as supplied. Editor and skin control ranges are recommendations,
+not REST or hardware validity constraints. In particular, the hot-water flow
+control offers 1–10 ml/s, including the model default of 10 ml/s, and Decaid
+does not rewrite a preserved workflow value outside that range. The REST schemas do
+not declare guessed numeric bounds. The full evidence inventory, including
+unsigned-byte wire capacities and conditional steam semantics, is in
+[workflow-numeric-limits.md](workflow-numeric-limits.md).
+
 ## Workflow Final Targets
 
 `WorkflowContext.targetYield` is beverage output weight in grams and drives scale-based stop-at-weight. `WorkflowContext.targetWaterVolume` is DE1-integrated machine water volume in milliliters and overrides `Profile.targetVolume` only for the existing volumetric fallback when no usable scale stop is available. A null workflow water target inherits the profile target; `0` disables volumetric stopping for that workflow. These quantities are never converted or used as fallbacks for each other.
@@ -120,8 +131,7 @@ cannot be brewed is rejected at the boundary.
 through `Workflow.fromRecordedJson`, which `ShotMapper.fromRow` and
 `ShotRecord.fromRecordedJson` use to read the profile embedded in a stored
 shot's workflow. A shot's profile is a
-record of what happened, and shots imported from de1app `.shot` files carry no
-profile steps at all. Missing or empty titles read back as `Unknown profile`;
+record of what happened. Missing or empty titles read back as `Unknown profile`;
 missing numeric fields read back as `0`. Never use it to load a profile the user
 can brew from.
 
@@ -539,7 +549,7 @@ curl -X PUT http://localhost:8080/api/v1/workflow \
   -d "{\"profile\": $(echo $PROFILE | jq '.profile')}"
 ```
 
-The Workflow API approach updates the entire workflow context (profile + dose + grinder + coffee data).
+The Workflow API approach updates the workflow's `profile` and leaves the rest of the context alone. A profile-only PUT does not populate or update `grinderRpm` or `context.extras`, and any values already recorded there are retained. When a client does send them, `grinderRpm` is an optional non-negative integer and grinder preparation values live in namespaced `context.extras`; both are recorded workflow configuration, not connected-grinder telemetry.
 
 ### Error Handling
 
@@ -619,6 +629,83 @@ physical upload.
   when a retry lands, the machine disconnects, or the sync is disposed.
 - See `doc/plans/archive/profile-upload-recovery/design.md` for the full
   design rationale.
+
+### de1app Legacy `.shot` History Import
+
+de1app dual-writes every finished shot to both `history/*.shot` (legacy) and
+`history_v2/*.json` (`save_this_espresso_to_history`). Basenames only pair
+candidate files; **shot id (`de1app-<clock>`) is the sole merge key**, and two
+records are merged only once both parse to the same id:
+
+- v2 only, or legacy only: that file is the source.
+- Both, same id: the v2 shot supplies the profile and measurements, and the
+  legacy shot fills only the metadata fields the v2 shot leaves empty (`null`,
+  empty string, or `0` for dose, yield, tds, ey and enjoyment, which de1app
+  writes as `0` when unset). A value the v2 shot already has is never replaced.
+- Both, different ids (a renamed or hand-copied file): two separate shots, no
+  metadata crosses between them.
+- Both, with the v2 file unreadable: the legacy shot is used whole.
+- Two files of the same format for one shot id (a renamed copy, say): merged
+  the same way and stored once.
+
+Discovery order never decides the outcome: `Directory.list()` makes no ordering
+promise, so candidates are sorted by basename before parsing. For a conflict
+between two same-format records of one id, the lexicographically first basename
+wins each field it has, and the other only fills that record's gaps.
+
+Modification times are deliberately not consulted. `SafFolderCopier` stages the
+import through `safStream.copyToLocalFile`, which stamps every destination with
+the copy time, so the mtime of a staged file says nothing about which of the two
+is fresher.
+
+A legacy `.shot` carries the complete v2 profile as JSON under its top-level
+`profile` key. `TclShotParser` locates that block with a JSON-string-aware brace
+scan, decodes it directly, and **cuts it out of the text before the generic
+`TclParser` pass runs**, so the JSON is read once and its braces can never be
+counted as Tcl structure. That matters for a record whose `profile` block
+precedes `settings`: a brace inside a JSON string value is unbalanced as Tcl and
+would otherwise swallow the `settings` block whole. The parser falls back to a
+step-less profile titled from `settings profile_title` when the JSON is absent
+or unparseable.
+Braces, escaped quotes and escaped backslashes inside JSON string values do not
+disturb the scan. `TclParser`'s own brace counting follows the Tcl rule that a
+backslash-escaped brace does not nest, which matters because de1app writes each
+settings value through `[list $v]`.
+
+Only `espresso_elapsed` and the machine series bound the measurement count; the
+scale series never do. The canonical writer emits `espresso_weight` and
+`espresso_flow_weight` inside `catch` blocks, so a shot recorded without a scale
+has neither, and a scale that connected late or dropped out mid-shot leaves them
+shorter than the machine trace. Either way every machine sample survives, and
+`ShotSnapshot.scale` is null for the samples the scale does not cover. The v2
+parser treats `totals.weight` and `flow.by_weight` the same way.
+
+`profileFrame` comes from the recorded `espresso_state_change` series (v2:
+`state_change`), which de1app flips in sign at every frame change the machine
+reports, so conditional early exits land on the right frame. The choice is made
+once per shot: the recorded series is used only when it covers every sample,
+otherwise cumulative step durations are used for the whole shot. The two are
+never mixed within one shot, which would let the frame number jump backwards
+mid-record. The duration fallback assumes each step runs to its configured
+maximum and is wrong for any profile that exits early on pressure, flow or
+weight.
+
+A sign flip records only that the machine's frame number changed, not its new
+value, so a profile step the machine skips outright (a step-skip, or an exit
+condition that jumps more than one frame) counts as a single advance and every
+later `profileFrame` is that much low. Nothing in either file format records the
+absolute frame number per sample, so that undercount cannot be recovered here.
+
+For a shot present in both formats, the legacy sibling is parsed in
+`metadataOnly` mode: sample lines are skipped, no snapshots are built, and the
+embedded profile is not scanned, because the merge takes neither from legacy.
+That is the parse that runs for most paired shots, and it costs about 1/16th of
+a full legacy parse (`test/import/de1app_parse_benchmark_test.dart` prints both).
+A full legacy parse only happens when there is no v2 sibling, when the v2 file
+is unreadable, or when the ids turn out to differ.
+
+See `doc/plans/archive/de1app-shot-merge-v1-v2/design.md` for the full
+root-cause writeup.
 
 ### de1app Legacy `.tcl` Profile Import
 

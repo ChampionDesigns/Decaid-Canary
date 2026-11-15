@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Decide
+GenericName=Espresso Machine Controller
+Comment=Control and monitor your Decent Espresso machine
+Exec=AppRun
+Icon=com.decentespresso.decaid-canary
+Terminal=false
+Categories=Utility;
+StartupWMClass=com.decentespresso.decaid-canary

@@ -39,7 +39,7 @@ class _RecordingWebUIStorage extends WebUIStorage {
 }
 
 class _FakeUpdater extends AndroidUpdater {
-  _FakeUpdater() : super(owner: 'tadelv', repo: 'reaprime');
+  _FakeUpdater() : super(owner: 'ChampionDesigns', repo: 'Decaid-Canary');
 
   UpdateInfo? nextCheck;
   bool throwOnCheck = false;
@@ -170,7 +170,7 @@ void main() {
 
       expect(
         svc.getReleaseUrl(_update(version: '1.2.3')),
-        'https://github.com/decentespresso/decaid/releases/tag/v1.2.3',
+        'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/v1.2.3',
       );
       svc.dispose();
     });

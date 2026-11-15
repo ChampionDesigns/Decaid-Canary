@@ -25,7 +25,15 @@ enum Endpoint implements LogicalEndpoint {
   frameWrite('A010', 'P'),
   waterLevels('A011', 'Q'),
   calibration('A012', 'R'),
-  bengleShotSample('A013', 'S');
+  bengleShotSample('A013', 'S'),
+  // Bengle-only fused puck-estimator sample (observer outputs: R1/R2/C +
+  // confidence + Qout lag + V_abs, plus an optional R1-collapse detector
+  // tail). Additive characteristic on service 0xA000; serial char 'T'. Over
+  // BLE the app subscribes only when discovery lists the characteristic, and
+  // must NOT blind-subscribe it — a CCCD write on an unregistered
+  // characteristic stalls the command queue (the same hazard
+  // [subscribeBengleShotSample] guards against). Wire layout: bengle_est_sample.dart.
+  estimator('A014', 'T');
 
   @override
   final String uuid;
@@ -151,10 +159,11 @@ enum De1SubState {
   cleanFillGroup(0x0E, 'Fill the group.'),
   cleanSoak(0x0F, 'Wait for 60 seconds to soak the group head.'),
   cleanGroup(0x10, 'Flush through group.'),
-  refill(0x11, 'Have we given up on a refill?'),
+  refillStopped(0x11, 'Have we given up on a refill?'),
   pausedSteam(0x12, 'Are we paused in steam?'),
   userNotPresent(0x13, 'User is not present.'),
   puffing(0x14, 'Puffing.'),
+  pumpZeroing(0x15, 'Waiting for the pump boards to zero.'),
 
   errorNaN(200, 'Something died with a NaN.'),
   errorInf(201, 'Something died with an Inf.'),
@@ -179,7 +188,12 @@ enum De1SubState {
     216,
     'Could not get up to pressure during boot pressure test, possibly no water.',
   ),
-  errorNoAC(217, 'Front button off.');
+  errorNoAC(217, 'No AC power.'),
+  errorPumpZero(218, 'Pump zeroing failed.'),
+  errorPumpNeedsCalibration(219, 'Pump needs calibration.'),
+  errorFrontSwitchOff(220, 'Front switch off.'),
+  errorPumpFault(221, 'Pump reported a fault.'),
+  errorPumpSilent(222, 'Pump board does not respond.');
 
   final int hexValue;
   final String description;
@@ -350,7 +364,14 @@ enum MMRItem implements MmrAddress {
   allowUSBCharging(0x00803854, 4, MmrValueKind.boolean, "Allow USB charging"),
   appFeatureFlags(0x00803858, 4, MmrValueKind.int32, "App Feature Flags"),
   refillKitPresent(0x0080385C, 4, MmrValueKind.int32, "Refill Kit Present"),
-  userPresent(0x00803860, 4, MmrValueKind.boolean, "Is User Present");
+  userPresent(0x00803860, 4, MmrValueKind.boolean, "Is User Present"),
+  profileModeCaps(
+    0x008038DC,
+    4,
+    MmrValueKind.int32,
+    "ProfileModeCaps bitmask: 0x1 = per-frame Power, 0x2 = per-frame Lever, "
+    "0x4 = per-frame HOLD, 0x8 = cross-variable power exit",
+  );
 
   @override
   final int address;

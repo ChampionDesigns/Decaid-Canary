@@ -60,6 +60,7 @@ app.*.map.json
 assets/plugins/dye2.reaplugin/
 assets/plugins/shot-upload.reaplugin/
 assets/plugins/dcamp.reaplugin/
+assets/plugins/weather.reaplugin/
 
 # Skin bundling
 .skin_cache/
@@ -89,3 +90,7 @@ pubspec_overrides.yaml
 .superpowers/
 # Added by code-review-graph
 .code-review-graph/
+
+# Signing identities and credentials stay private.
+*.keystore
+*.jks

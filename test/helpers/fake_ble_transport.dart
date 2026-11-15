@@ -16,6 +16,12 @@ typedef FakeBleWrite = ({
 });
 
 class FakeBleTransport extends BLETransport {
+  FakeBleTransport({this.traceEnabled = false, this.maxTraceEntries = 256})
+    : assert(maxTraceEntries >= 0);
+
+  final bool traceEnabled;
+  final int maxTraceEntries;
+
   final _connState = BehaviorSubject<ConnectionState>.seeded(
     ConnectionState.connected,
   );
@@ -36,14 +42,34 @@ class FakeBleTransport extends BLETransport {
 
   final Set<int> failMmrWritesForAddresses = {};
 
+  Duration? requestedStateSleepWriteTimeout;
+
   final Map<int, int> failMmrWriteOrdinalForAddresses = {};
 
   final Map<int, int> _mmrWriteCounts = {};
 
   int connectCalls = 0;
   int disconnectCalls = 0;
+  int connectionGeneration = 0;
+  final Stopwatch traceClock = Stopwatch()..start();
+  final List<String> trace = [];
 
   final List<FakeBleWrite> writes = [];
+
+  void recordTrace(String event) {
+    if (!traceEnabled || trace.length >= maxTraceEntries) return;
+    trace.add(
+      '${traceClock.elapsedMicroseconds}us '
+      'generation=$connectionGeneration $event',
+    );
+  }
+
+  String _endpointName(String characteristicUUID) {
+    for (final endpoint in Endpoint.values) {
+      if (endpoint.uuid == characteristicUUID) return endpoint.name;
+    }
+    return characteristicUUID;
+  }
 
   int dropNextMmrResponses = 0;
 
@@ -126,20 +152,35 @@ class FakeBleTransport extends BLETransport {
   void emitConnectionState(ConnectionState state) => _connState.add(state);
 
   @override
-  Future<ConnectionState> getConnectionState() async => _connState.value;
+  Future<ConnectionState> getConnectionState() async {
+    recordTrace('stale-link-probe state=${_connState.value.name}');
+    return _connState.value;
+  }
 
   @override
   Future<void> connect() async {
     connectCalls++;
+    connectionGeneration++;
+    recordTrace('connect');
   }
 
   @override
   Future<void> disconnect() async {
     disconnectCalls++;
+    recordTrace('disconnect');
   }
 
   @override
   Future<List<String>> discoverServices() async => [de1ServiceUUID];
+
+  /// Characteristic UUIDs this fake peripheral claims to expose. Defaults to
+  /// NONE, matching firmware that predates a given characteristic, so an
+  /// optional subscribe must be explicitly enabled by a test.
+  List<String> presentCharacteristics = const [];
+
+  @override
+  Future<List<String>> discoverCharacteristics(String serviceUUID) async =>
+      presentCharacteristics;
 
   @override
   Future<Uint8List> read(
@@ -147,6 +188,7 @@ class FakeBleTransport extends BLETransport {
     String characteristicUUID, {
     Duration? timeout,
   }) async {
+    recordTrace('read endpoint=${_endpointName(characteristicUUID)}');
     final q = _readQueue[characteristicUUID];
     if (q != null && q.isNotEmpty) {
       final next = q.removeFirst();
@@ -162,6 +204,7 @@ class FakeBleTransport extends BLETransport {
     String characteristicUUID,
     void Function(Uint8List) callback,
   ) async {
+    recordTrace('subscribe endpoint=${_endpointName(characteristicUUID)}');
     subscribers[characteristicUUID] = callback;
   }
 
@@ -176,11 +219,23 @@ class FakeBleTransport extends BLETransport {
     bool withResponse = true,
     Duration? timeout,
   }) async {
+    recordTrace(
+      'write endpoint=${_endpointName(characteristicUUID)} '
+      'withResponse=$withResponse',
+    );
     writes.add((
       characteristicUUID: characteristicUUID,
       data: data,
       withResponse: withResponse,
     ));
+
+    if (characteristicUUID == Endpoint.requestedState.uuid &&
+        data.length == 1 &&
+        data[0] ==
+            De1StateEnum.fromMachineState(MachineState.sleeping).hexValue &&
+        requestedStateSleepWriteTimeout != null) {
+      await Completer<void>().future.timeout(requestedStateSleepWriteTimeout!);
+    }
 
     if (characteristicUUID == Endpoint.fwMapRequest.uuid &&
         _firmwareMapResponses.isNotEmpty) {
@@ -355,6 +410,11 @@ class FakeBleTransport extends BLETransport {
     int refillKitPresent = 0,
     // calFlowEst has a read scale of 0.001, so raw 1000 is 1.0.
     int calFlowEst = 1000,
+    // ProfileModeCaps, read on every Bengle connect. Default 0 (unsupported)
+    // mirrors stock firmware / a stock DE1 so existing tests answer the read
+    // instantly instead of eating the fail-closed read timeout; a test for the
+    // new pump modes passes 0x3 (Power|Lever) or 0x7 (+HOLD).
+    int profileModeCaps = 0,
   }) {
     queueMmrResponseInt(MMRItem.v13Model, v13Model);
     queueMmrResponseInt(MMRItem.ghcInfo, ghcInfo);
@@ -363,6 +423,7 @@ class FakeBleTransport extends BLETransport {
     queueMmrResponseInt(MMRItem.heaterV, heaterV);
     queueMmrResponseInt(MMRItem.refillKitPresent, refillKitPresent);
     queueMmrResponseInt(MMRItem.calFlowEst, calFlowEst);
+    queueMmrResponseInt(MMRItem.profileModeCaps, profileModeCaps);
   }
 
   @override

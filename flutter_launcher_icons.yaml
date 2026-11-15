@@ -1,32 +1,32 @@
 # flutter pub run flutter_launcher_icons
+#
+# THE CONFIG WAS STALE UNTIL 28 AUGUST 2026 AND SAYING SO IS THE POINT. It pointed at
+# `assets/images/ben-streamlined.png` — the Streamline WAVE, inherited from that skin —
+# while the icon actually shipping in mipmap-*/ic_launcher.png was the "d" mark. The two
+# differed by a mean of 59/255, so running this generator would have silently replaced the
+# shipped icon with a leftover. The wave is deleted and this file now names what ships.
+#
+# THE IMAGE IS USED AS-IS ON ANDROID, Ben's call: it is a rounded square with its own dark
+# backdrop, so it is the legacy icon rather than an adaptive foreground. A circular
+# launcher will crop its corners, and that is accepted rather than unnoticed.
 flutter_launcher_icons:
-  image_path: "assets/images/ben-streamlined.png"
+  image_path: "assets/images/decide.png"
 
   android: "launcher_icon"
-  # image_path_android: "assets/icon/icon.png"
-  min_sdk_android: 21 # android min sdk min:16, default 21
-  adaptive_icon_background: "#353A4B"
-  adaptive_icon_foreground: "assets/images/ben-streamlined.png"
-  # adaptive_icon_monochrome: "assets/icon/monochrome.png"
+  min_sdk_android: 21
 
   ios: true
-  image_path_ios: "assets/images/ben-streamlined.png"
+  image_path_ios: "assets/images/decide.png"
   remove_alpha_channel_ios: true
-  # image_path_ios_dark_transparent: "assets/icon/icon_dark.png"
-  # image_path_ios_tinted_grayscale: "assets/icon/icon_tinted.png"
-  # desaturate_tinted_to_grayscale_ios: true
 
   web:
-    # generate: true
-    image_path: "assets/images/ben-streamlined.png"
-    # background_color: "#hexcode"
-    # theme_color: "#hexcode"
+    image_path: "assets/images/decide.png"
 
   windows:
     generate: true
-    image_path: "assets/images/ben-streamlined.png"
-    icon_size: 48 # min:48, max:256, default: 48
+    image_path: "assets/images/decide.png"
+    icon_size: 48
 
   macos:
     generate: true
-    image_path: "assets/images/ben-streamlined.png"
+    image_path: "assets/images/decide.png"

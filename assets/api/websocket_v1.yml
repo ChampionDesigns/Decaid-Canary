@@ -568,7 +568,7 @@ components:
       description: >
         Weight + flow frame emitted on `ws/v1/scale/snapshot`. Mirrors the
         controller-level `WeightSnapshot`. Device-provided flow is passed
-        through; weight-only scales use Decaid's flow estimator.
+        through; weight-only scales use Decaid-Canary's flow estimator.
       properties:
         timestamp:
           type: string
@@ -578,7 +578,7 @@ components:
           description: Current weight reading in grams.
         weightFlow:
           type: number
-          description: Device-provided gravimetric flow when available; otherwise Decaid's smoothed weight-derived estimate.
+          description: Device-provided gravimetric flow when available; otherwise Decaid-Canary's smoothed weight-derived estimate.
         battery:
           type: integer
           nullable: true
@@ -767,11 +767,46 @@ components:
           type: integer
         steamTemperature:
           type: number
+        puckResistanceDerived:
+          type: number
+          description: >
+            Puck hydraulic resistance R = P / F² in bar·s²/mL², DERIVED from
+            pressure and reported group flow. Only computed when flow >= 0.3
+            mL/s and pressure >= 0.3 bar; when gated the key is omitted
+            entirely (never null). Measured equivalent: `r2` on the Bengle
+            puck-estimator sensor, which uses the flow through the puck rather
+            than the reported group flow. Prefer the measured value when the
+            machine offers it.
+        loadImpedanceDerived:
+          type: number
+          description: >
+            Hydraulic load impedance Z = P / F in bar·s/mL, DERIVED from
+            pressure and reported group flow. Same >= 0.3 gating as
+            puckResistanceDerived; key omitted when gated. Measured
+            equivalent: `r1` on the Bengle puck-estimator sensor. Prefer the
+            measured value when the machine offers it.
+        hydraulicPowerDerived:
+          type: number
+          description: >
+            Hydraulic power delivered to the puck, W = 0.1 · P · F in watts
+            (1 bar × 1 mL/s = 0.1 W; espresso is roughly 0.5–4 W), DERIVED
+            from pressure and reported group flow. Same >= 0.3 gating as
+            puckResistanceDerived; key omitted when gated. Measured
+            equivalent: `hydraulicPowerMeasured` on the Bengle puck-estimator
+            sensor, present when the machine reports BengleEstSample rev >= 3.
+            Prefer it when present: it is computed from the flow through the
+            puck, so it is the power actually delivered rather than supplied.
+            NOTE the derived and measured channels go null at DIFFERENT times
+            (this 0.3/0.3 gate versus the firmware's own gate and its
+            not-yet-observed sentinel), so a client switching source mid-shot
+            sees gaps in different places.
     MachineState:
       type: string
       enum:
-        - idle
         - booting
+        - busy
+        - idle
+        - schedIdle
         - sleeping
         - heating
         - preheating
@@ -779,12 +814,16 @@ components:
         - hotWater
         - flush
         - steam
+        - steamRinse
         - skipStep
         - cleaning
         - descaling
-        - transportMode
+        - calibration
+        - selfTest
+        - airPurge
         - needsWater
         - error
+        - fwUpgrade
       example: espresso
     MachineSubstate:
       type: string
@@ -795,11 +834,36 @@ components:
         - pouring
         - pouringDone
         - cleaningStart
-        - cleaingGroup
+        - cleaningGroup
         - cleanSoaking
         - cleaningSteam
         - pausedSteam
         - puffing
+        - refillStopped
+        - pumpZeroing
+        - errorNaN
+        - errorInf
+        - errorGeneric
+        - errorAcc
+        - errorTSensor
+        - errorPSensor
+        - errorWLevel
+        - errorDip
+        - errorAssertion
+        - errorUnsafe
+        - errorInvalidParam
+        - errorFlash
+        - errorOOM
+        - errorDeadline
+        - errorHiCurrent
+        - errorLoCurrent
+        - errorBootFill
+        - errorNoAC
+        - errorPumpZero
+        - errorPumpNeedsCalibration
+        - errorFrontSwitchOff
+        - errorPumpFault
+        - errorPumpSilent
       example: preparingForShot
     ShotSettings:
       type: object
@@ -870,18 +934,39 @@ components:
       description: Operation type indicating the nature of the raw message.
     SensorSnapshot:
       type: object
-      required:
-        - values
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        id:
-          type: string
-          description: Sensor identifier
-        values:
-          type: object
-          additionalProperties: true
+      description: |
+        One frame of a sensor. The frame is the channel map itself, with no
+        `id` or `values` wrapper. Its keys are channel keys from the sensor's
+        manifest (`GET /api/v1/sensors/{id}`), and each value has the type its
+        channel entry names (number, integer, string, boolean, object or
+        array). A built-in sensor may also send a `timestamp` string that its
+        manifest does not declare (the EBus tap and the debug port do). A frame
+        need not hold every channel. A built-in sensor can send
+        null for a channel it cannot read: DiFluid R2 sends `measuring: null`
+        for a status code it does not know. A plugin sensor sends every
+        declared channel in every frame and never sends null.
+        A Bengle that streams BengleEstSample frames
+        publishes the sensor `Bengle Puck Estimator` with id
+        `<machine id>-puckestimator`. Its frames hold the channels
+        `timestamp` (string), `rev`, `flags`, `r1` (bar·s/mL), `r2`
+        (bar·s²/mL²), `compliance` (mL/bar), `confidence`, `lag` (s),
+        `lagConfidence`, `sigmaQ` (mL/s), `absorbedVolume` (mL), `lastPauseTau`
+        (s), `collapseEventCount`, `collapseLastEventT` (s),
+        `collapseLastEventMagnitude`, `collapseLastEventConcavity` and
+        `hydraulicPowerMeasured` (W, firmware rev 3 and later). Every channel
+        except `timestamp` is a number. The frame is the channel map itself:
+        each channel is a top-level key of the frame.
+        A channel the firmware does not report is omitted, never sent as null.
+      additionalProperties:
+        description: A channel value, typed by the manifest's channel entry, or null.
+      example:
+        timestamp: "2026-11-08T06:00:00.000"
+        rev: 3
+        flags: 0
+        r1: 1.8
+        confidence: 0.9
+        lagConfidence: 0.7
+        sigmaQ: 0.05
 
     PluginMessage:
       type: object
