@@ -417,6 +417,35 @@ void main() {
       expect(postBody, equals(putBody));
     });
 
+    group('a non-finite step value', () {
+      for (final (field, literal) in [
+        ('pressure', '"NaN"'),
+        ('seconds', '1e400'),
+        ('temperature', '"-Infinity"'),
+      ]) {
+        test('$field $literal: POST and PUT both answer 400 that names '
+            'the field', () async {
+          final id = await seedRecord();
+          final step = stepWithLimiter(null)..[field] = 'PLACEHOLDER';
+          final body = jsonEncode({
+            'profile': profileWithoutMetadata()..['steps'] = <dynamic>[step],
+          }).replaceFirst('"PLACEHOLDER"', literal);
+          final refusal = {
+            'error': 'Invalid request',
+            'message': 'FormatException: step "$field" must be a finite number',
+          };
+
+          final post = await postRawProfile(body);
+          final put = await putRawProfile(id, body);
+
+          expect(post.statusCode, 400);
+          expect(put.statusCode, 400);
+          expect(await decode(post), refusal);
+          expect(await decode(put), refusal);
+        });
+      }
+    });
+
     group('a non-finite limiter', () {
       Map<String, String> notFiniteRefusal(String field) => {
         'error': 'Invalid request',
