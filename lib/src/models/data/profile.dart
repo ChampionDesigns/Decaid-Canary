@@ -173,8 +173,16 @@ double _requireLimiterNumber(Map<String, dynamic> json, String field) {
   return number;
 }
 
-double _requireFiniteStepNumber(Map<String, dynamic> json, String field) =>
-    _requireFinite(parseDouble(json[field]), 'step "$field"');
+double _requireFiniteStepNumber(
+  Map<String, dynamic> json,
+  String field, {
+  String? alias,
+}) {
+  final raw = json.containsKey(field) || alias == null
+      ? json[field]
+      : json[alias];
+  return _requireFinite(parseDouble(raw), 'step "$field"');
+}
 
 double? _optionalFiniteStepNumber(Map<String, dynamic> json, String field) {
   final number = parseOptionalDouble(json[field]);
@@ -571,8 +579,16 @@ class ProfileStepLever extends ProfileStep {
           ? StepLimiter.fromJson(json['limiter'])
           : null,
       pressure: _requireFiniteStepNumber(json, 'pressure'),
-      leverSpring: _requireFiniteStepNumber(json, 'leverSpring'),
-      leverGive: _requireFiniteStepNumber(json, 'leverGive'),
+      leverSpring: _requireFiniteStepNumber(
+        json,
+        'leverSpring',
+        alias: 'lever_spring',
+      ),
+      leverGive: _requireFiniteStepNumber(
+        json,
+        'leverGive',
+        alias: 'lever_give',
+      ),
     );
   }
 

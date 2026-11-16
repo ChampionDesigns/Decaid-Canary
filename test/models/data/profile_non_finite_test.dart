@@ -161,4 +161,45 @@ void main() {
       expect(Profile.fromJson(_profile(step)).steps.single.weight, isNull);
     });
   });
+
+  group('a lever step accepts both field spellings', () {
+    Map<String, dynamic> snakeLever() {
+      final step = _step('lever')
+        ..remove('leverSpring')
+        ..remove('leverGive');
+      return step
+        ..['lever_spring'] = 0.5
+        ..['lever_give'] = 0.2;
+    }
+
+    test('lever_spring and lever_give import with the camelCase values', () {
+      final snake = Profile.fromJson(_profile(snakeLever()));
+      final camel = Profile.fromJson(_profile(_step('lever')));
+
+      final step = snake.steps.single as ProfileStepLever;
+      expect(step.leverSpring, 0.5);
+      expect(step.leverGive, 0.2);
+      expect(snake, equals(camel));
+    });
+
+    test('toJson writes the camelCase spelling', () {
+      final json = Profile.fromJson(_profile(snakeLever())).steps.single
+          .toJson();
+      expect(json['leverSpring'], 0.5);
+      expect(json['leverGive'], 0.2);
+      expect(json.containsKey('lever_spring'), isFalse);
+      expect(json.containsKey('lever_give'), isFalse);
+    });
+
+    test('a non-finite lever_spring is refused', () {
+      expect(
+        () => _parseWith(
+          snakeLever(),
+          (s) => s['lever_spring'] = _placeholder,
+          '"Infinity"',
+        ),
+        _refusesStepField('leverSpring'),
+      );
+    });
+  });
 }
