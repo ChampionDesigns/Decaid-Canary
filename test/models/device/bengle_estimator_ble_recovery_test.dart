@@ -331,6 +331,24 @@ void _recoveryGroup(_Link link) {
       },
     );
 
+    test(
+      'clears the last estimator sample when A014 is gone after recovery',
+      () async {
+        expect(await de1.subscribeEstimator(), isTrue);
+        transport.emitNotification(Endpoint.estimator, _sample(1));
+        await Future<void>.delayed(Duration.zero);
+        expect(samples, hasLength(1));
+        transport.presentCharacteristics = const [];
+
+        await _timeoutWrite(de1);
+
+        final latest = await de1.estimator.first;
+        expect(latest.lengthInBytes, 0);
+        expect(samples, hasLength(1));
+        expect(await de1.subscribeEstimator(), isFalse);
+      },
+    );
+
     test('a full disconnect clears the estimator request', () async {
       expect(await de1.subscribeEstimator(), isTrue);
       await de1.disconnect();
