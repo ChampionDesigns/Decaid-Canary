@@ -487,7 +487,15 @@ paths:
         "200":
           description: Profile updated successfully
         "400":
-          description: Malformed JSON body
+          description: >-
+            Malformed JSON body, or an invalid profile. A step `volume`,
+            `seconds`, `weight`, `temperature`, `pressure`, `flow`, `power`,
+            `leverSpring` or `leverGive`, or an exit `value`, that parses to
+            NaN or an infinity (for example the string `"NaN"` or the number
+            `1e400`) is refused with `error` `Invalid profile` and the message
+            `FormatException: step "<field>" must be a finite number` or
+            `FormatException: exit "value" must be a finite number`. Nothing
+            is written to the machine.
         "503":
           description: Machine write queue is full
         "500":
@@ -1867,7 +1875,12 @@ paths:
             invalid enum value, a missing required profile field, an
             unparseable number, a non-numeric `context.targetYield`, or an
             explicit `null` on a non-nullable patch field such as
-            `steamSettings`, `context` or `context.targetYield`). The
+            `steamSettings`, `context` or `context.targetYield`). A profile
+            step or exit value that parses to NaN or an infinity (for example
+            the string `"NaN"` or the number `1e400`) is refused with
+            `FormatException: step "<field>" must be a finite number` or
+            `FormatException: exit "value" must be a finite number`; the
+            workflow does not change and nothing is sent to the machine. The
             response body contains an `error` and `message` field describing
             the validation failure.
           content:
@@ -4075,8 +4088,11 @@ paths:
             `range` that parses to NaN or an infinity (for example the string
             `"NaN"` or the number `1e400`) is refused with
             `FormatException: limiter "value" must be a finite number` or
-            `FormatException: limiter "range" must be a finite number`. PUT
-            /api/v1/profiles/{id} returns the same text.
+            `FormatException: limiter "range" must be a finite number`. A
+            step value or an exit `value` that parses to NaN or an infinity is
+            refused with `FormatException: step "<field>" must be a finite
+            number` or `FormatException: exit "value" must be a finite
+            number`. PUT /api/v1/profiles/{id} returns the same text.
         "500":
           description: Internal Server Error
 
@@ -7225,6 +7241,11 @@ components:
         that uses one to a machine that does not (a DE1, or firmware without the
         capability) is refused with a `400` before any write; the profile still
         stores and round-trips unchanged on any machine.
+
+        Every number in a step, its `exit` and its `limiter` must be finite. A
+        value that parses to NaN or an infinity (for example the string `"NaN"`
+        or the number `1e400`) is refused with a `400` that names the field,
+        before the profile is stored or sent to the machine.
       required:
         - name
         - pump

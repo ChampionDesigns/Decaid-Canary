@@ -173,6 +173,29 @@ double _requireLimiterNumber(Map<String, dynamic> json, String field) {
   return number;
 }
 
+double _requireFiniteStepNumber(
+  Map<String, dynamic> json,
+  String field, {
+  String? alias,
+}) {
+  final raw = json.containsKey(field) || alias == null
+      ? json[field]
+      : json[alias];
+  return _requireFinite(parseDouble(raw), 'step "$field"');
+}
+
+double? _optionalFiniteStepNumber(Map<String, dynamic> json, String field) {
+  final number = parseOptionalDouble(json[field]);
+  return number == null ? null : _requireFinite(number, 'step "$field"');
+}
+
+double _requireFinite(double number, String label) {
+  if (!number.isFinite) {
+    throw FormatException('$label must be a finite number');
+  }
+  return number;
+}
+
 class StepLimiter extends Equatable {
   final double value;
   final double range;
@@ -265,15 +288,15 @@ class ProfileStepPressure extends ProfileStep {
       exit: json['exit'] != null
           ? StepExitCondition.fromJson(json['exit'])
           : null,
-      volume: parseDouble(json['volume']),
-      seconds: parseDouble(json['seconds']),
-      weight: parseOptionalDouble(json['weight']),
-      temperature: parseDouble(json['temperature']),
+      volume: _requireFiniteStepNumber(json, 'volume'),
+      seconds: _requireFiniteStepNumber(json, 'seconds'),
+      weight: _optionalFiniteStepNumber(json, 'weight'),
+      temperature: _requireFiniteStepNumber(json, 'temperature'),
       sensor: TemperatureSensor.values.byName(json['sensor']),
       limiter: json['limiter'] != null
           ? StepLimiter.fromJson(json['limiter'])
           : null,
-      pressure: parseDouble(json['pressure']),
+      pressure: _requireFiniteStepNumber(json, 'pressure'),
     );
   }
 
@@ -352,15 +375,15 @@ class ProfileStepFlow extends ProfileStep {
       exit: json['exit'] != null
           ? StepExitCondition.fromJson(json['exit'])
           : null,
-      volume: parseDouble(json['volume']),
-      seconds: parseDouble(json['seconds']),
-      weight: parseOptionalDouble(json['weight']),
-      temperature: parseDouble(json['temperature']),
+      volume: _requireFiniteStepNumber(json, 'volume'),
+      seconds: _requireFiniteStepNumber(json, 'seconds'),
+      weight: _optionalFiniteStepNumber(json, 'weight'),
+      temperature: _requireFiniteStepNumber(json, 'temperature'),
       sensor: TemperatureSensor.values.byName(json['sensor']),
       limiter: json['limiter'] != null
           ? StepLimiter.fromJson(json['limiter'])
           : null,
-      flow: parseDouble(json['flow']),
+      flow: _requireFiniteStepNumber(json, 'flow'),
     );
   }
 
@@ -453,13 +476,13 @@ class ProfileStepPower extends ProfileStep {
       exit: json['exit'] != null
           ? StepExitCondition.fromJson(json['exit'])
           : null,
-      volume: parseDouble(json['volume']),
-      seconds: parseDouble(json['seconds']),
-      weight: parseOptionalDouble(json['weight']),
-      temperature: parseDouble(json['temperature']),
+      volume: _requireFiniteStepNumber(json, 'volume'),
+      seconds: _requireFiniteStepNumber(json, 'seconds'),
+      weight: _optionalFiniteStepNumber(json, 'weight'),
+      temperature: _requireFiniteStepNumber(json, 'temperature'),
       sensor: TemperatureSensor.values.byName(json['sensor']),
       limiter: limiter,
-      power: parseDouble(json['power']),
+      power: _requireFiniteStepNumber(json, 'power'),
     );
   }
 
@@ -547,17 +570,25 @@ class ProfileStepLever extends ProfileStep {
       exit: json['exit'] != null
           ? StepExitCondition.fromJson(json['exit'])
           : null,
-      volume: parseDouble(json['volume']),
-      seconds: parseDouble(json['seconds']),
-      weight: parseOptionalDouble(json['weight']),
-      temperature: parseDouble(json['temperature']),
+      volume: _requireFiniteStepNumber(json, 'volume'),
+      seconds: _requireFiniteStepNumber(json, 'seconds'),
+      weight: _optionalFiniteStepNumber(json, 'weight'),
+      temperature: _requireFiniteStepNumber(json, 'temperature'),
       sensor: TemperatureSensor.values.byName(json['sensor']),
       limiter: json['limiter'] != null
           ? StepLimiter.fromJson(json['limiter'])
           : null,
-      pressure: parseDouble(json['pressure']),
-      leverSpring: parseDouble(json['leverSpring']),
-      leverGive: parseDouble(json['leverGive']),
+      pressure: _requireFiniteStepNumber(json, 'pressure'),
+      leverSpring: _requireFiniteStepNumber(
+        json,
+        'leverSpring',
+        alias: 'lever_spring',
+      ),
+      leverGive: _requireFiniteStepNumber(
+        json,
+        'leverGive',
+        alias: 'lever_give',
+      ),
     );
   }
 
@@ -631,7 +662,7 @@ class StepExitCondition extends Equatable {
     return StepExitCondition(
       type: ExitType.values.byName(json['type']),
       condition: ExitCondition.values.byName(json['condition']),
-      value: parseDouble(json['value']),
+      value: _requireFinite(parseDouble(json['value']), 'exit "value"'),
     );
   }
 
