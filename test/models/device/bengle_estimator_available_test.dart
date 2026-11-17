@@ -7,9 +7,10 @@ import 'package:reaprime/src/controllers/device_controller.dart';
 import 'package:reaprime/src/controllers/sensor_controller.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
+import 'package:reaprime/src/models/device/impl/bengle/mock_bengle.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/bengle_est_sample.dart'
-    show bengleEstSampleBytes;
+    show bengleEstSampleBytes, parseBengleEstSample;
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/models/device/sensor.dart';
 import 'package:reaprime/src/models/device/transport/ble_timeout_exception.dart';
@@ -20,6 +21,20 @@ import '../../helpers/mock_device_discovery_service.dart';
 
 class _TimeoutOnceTransport extends FakeBleTransport {
   bool timeoutNextWrite = false;
+  bool failEstimatorSubscribe = false;
+
+  @override
+  Future<void> subscribe(
+    String serviceUUID,
+    String characteristicUUID,
+    void Function(Uint8List) callback,
+  ) async {
+    if (failEstimatorSubscribe &&
+        characteristicUUID == Endpoint.estimator.uuid) {
+      throw StateError('estimator subscribe failed');
+    }
+    await super.subscribe(serviceUUID, characteristicUUID, callback);
+  }
 
   @override
   Future<void> disconnect() async {
@@ -47,6 +62,15 @@ class _TimeoutOnceTransport extends FakeBleTransport {
       timeout: timeout,
     );
   }
+}
+
+class _SwitchableBengle extends MockBengle {
+  _SwitchableBengle() : super(deviceId: 'BengleSwitch');
+
+  final BehaviorSubject<bool> available = BehaviorSubject.seeded(true);
+
+  @override
+  Stream<bool> get puckEstimatorAvailable => available.stream;
 }
 
 class _StubDe1Controller extends De1Controller {
@@ -228,4 +252,59 @@ void main() {
 
     expect(estimator(), isNull);
   });
+
+  test('a recovery whose estimator subscribe throws reports unavailable and '
+      'unregisters the sensor', () async {
+    final t = _transport(hasEstimator: true);
+    final bengle = await connectedBengle(t);
+    final seen = <bool>[];
+    final sub = bengle.puckEstimatorAvailable.listen(seen.add);
+    addTearDown(sub.cancel);
+    de1Controller.emit(bengle);
+    await settle();
+    t.emitNotification(Endpoint.estimator, _frame(450));
+    await settle();
+    expect(estimator(), isNotNull);
+
+    t.failEstimatorSubscribe = true;
+    t.timeoutNextWrite = true;
+    await bengle
+        .requestState(MachineState.idle)
+        .then<void>((_) {}, onError: (Object _) {});
+    await settle();
+
+    expect(seen, [true, false]);
+    expect(estimator(), isNull);
+    expect(sensors.unregisters, 1);
+  });
+
+  for (final lateFrameFirst in [true, false]) {
+    test('a frame that arrives ${lateFrameFirst ? 'before' : 'after'} the '
+        'loss is handled does not register a sensor on a lost '
+        'estimator', () async {
+      final bengle = _SwitchableBengle();
+      addTearDown(bengle.available.close);
+      final sample = parseBengleEstSample(
+        ByteData.sublistView(Uint8List.fromList(_frame(450))),
+      )!;
+      de1Controller.emit(bengle);
+      await settle();
+      bengle.emitPuckEstimator(sample);
+      await settle();
+      expect(estimator(), isNotNull);
+
+      bengle.available.add(false);
+      if (!lateFrameFirst) await settle();
+      bengle.emitPuckEstimator(sample);
+      await settle();
+
+      expect(estimator(), isNull);
+
+      bengle.available.add(true);
+      await settle();
+
+      expect(estimator(), isNotNull);
+      expect(sensors.unregisters, 1);
+    });
+  }
 }

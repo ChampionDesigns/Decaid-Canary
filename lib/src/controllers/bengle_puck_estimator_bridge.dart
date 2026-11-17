@@ -65,7 +65,9 @@ class BenglePuckEstimatorBridge {
 
   Future<void> _onSample(BengleEstSample _) async {
     final bengle = _attachedBengle;
-    if (bengle == null || _registered != null) return;
+    if (bengle == null || _registered != null || _restoreWhenAvailable) {
+      return;
+    }
     _log.info('Bengle puck estimator producing data — registering sensor');
     await _register(bengle);
   }

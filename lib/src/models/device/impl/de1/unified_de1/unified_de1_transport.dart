@@ -1061,7 +1061,10 @@ class UnifiedDe1Transport {
       } else {
         _log.severe('BLE reconnect failed, disconnecting', reconnectError);
       }
-      if (generation == _linkGeneration) _recovering = false;
+      if (generation == _linkGeneration) {
+        _recovering = false;
+        _setEstimatorAvailable(false);
+      }
       unawaited(
         Future.sync(_transport.disconnect).catchError((
           Object e,
