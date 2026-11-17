@@ -108,6 +108,9 @@ class _TestBengle extends TestDe1 implements BengleInterface {
   Stream<BengleEstSample> get puckEstimator => const Stream.empty();
 
   @override
+  Stream<bool> get puckEstimatorAvailable => const Stream.empty();
+
+  @override
   Future<ScaleCalibrationState> getScaleCalibrationState() async =>
       const ScaleCalibrationState(
         step: ScaleCalibrationStep.idle,

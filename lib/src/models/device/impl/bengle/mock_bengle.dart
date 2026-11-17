@@ -187,6 +187,9 @@ class MockBengle extends MockDe1 implements BengleInterface, SimulatedDevice {
   @override
   Stream<BengleEstSample> get puckEstimator => _puckEstimatorSubject.stream;
 
+  @override
+  Stream<bool> get puckEstimatorAvailable => Stream<bool>.value(true);
+
   /// Simulation hook: publish a decoded estimator frame as if the firmware had
   /// sent one. Nothing emits on its own -- a mock must never advertise observer
   /// data the real serial-only stream would not produce.

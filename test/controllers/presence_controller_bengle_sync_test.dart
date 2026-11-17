@@ -145,6 +145,9 @@ class _FakeBengle extends MockDe1 implements BengleInterface {
 
   @override
   Stream<BengleEstSample> get puckEstimator => const Stream.empty();
+
+  @override
+  Stream<bool> get puckEstimatorAvailable => const Stream.empty();
 }
 
 class _TestDe1Controller extends De1Controller {

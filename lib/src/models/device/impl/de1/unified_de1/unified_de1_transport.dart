@@ -97,6 +97,16 @@ class UnifiedDe1Transport {
   // 0xA014 fused puck-estimator frames (serial `[T]` only).
   Stream<ByteData> get estimator => _estimatorSubject.asBroadcastStream();
 
+  final BehaviorSubject<bool> _estimatorAvailableSubject = BehaviorSubject();
+
+  Stream<bool> get estimatorAvailable => _estimatorAvailableSubject.stream;
+
+  void _setEstimatorAvailable(bool available) {
+    if (_estimatorAvailableSubject.isClosed) return;
+    if (_estimatorAvailableSubject.valueOrNull == available) return;
+    _estimatorAvailableSubject.add(available);
+  }
+
   String _currentBuffer = "";
 
   // Serial machines never push K (shot settings) on their own: a DE1
@@ -236,17 +246,26 @@ class UnifiedDe1Transport {
   /// `<+T>`, where no such stall hazard exists and a machine without the
   /// observer simply never emits a frame.
   Future<bool> subscribeEstimator() async {
-    if (transportType != TransportType.ble) return true;
+    if (transportType != TransportType.ble) {
+      _setEstimatorAvailable(true);
+      return true;
+    }
     final generation = _linkGeneration;
     final t = _transport;
-    if (t is! BLETransport) return false;
+    if (t is! BLETransport) {
+      _setEstimatorAvailable(false);
+      return false;
+    }
 
     // Normalise BOTH sides: this is a safety gate, so it must not depend on a
     // transport honouring a casing convention.
     final present = await t.discoverCharacteristics(de1ServiceUUID);
     final wanted = BleServiceIdentifier.parse(Endpoint.estimator.uuid);
     if (!wanted.matchesAny(present)) {
-      if (generation == _linkGeneration) _estimatorEnabled = false;
+      if (generation == _linkGeneration) {
+        _estimatorEnabled = false;
+        _setEstimatorAvailable(false);
+      }
       _log.info(
         'BengleEstSample characteristic not present on this machine; '
         'skipping the estimator subscribe (firmware predates it, or the '
@@ -262,7 +281,10 @@ class UnifiedDe1Transport {
         ByteData.sublistView(Uint8List.fromList(data)),
       ),
     );
-    if (generation == _linkGeneration) _estimatorEnabled = true;
+    if (generation == _linkGeneration) {
+      _estimatorEnabled = true;
+      _setEstimatorAvailable(true);
+    }
     return true;
   }
 
@@ -369,6 +391,9 @@ class UnifiedDe1Transport {
     }
     if (!_calibrationSubject.isClosed) _calibrationSubject.close();
     if (!_estimatorSubject.isClosed) _estimatorSubject.close();
+    if (!_estimatorAvailableSubject.isClosed) {
+      _estimatorAvailableSubject.close();
+    }
 
     await _transport.dispose();
   }
@@ -449,6 +474,7 @@ class UnifiedDe1Transport {
     _calibrationSubject = PublishSubject();
     _bengleShotSampleEnabled = false;
     _estimatorEnabled = false;
+    _setEstimatorAvailable(false);
     _estimatorSubject.close();
     _estimatorSubject = BehaviorSubject.seeded(ByteData(0));
   }
