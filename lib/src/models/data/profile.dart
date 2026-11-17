@@ -84,10 +84,13 @@ class Profile extends Equatable {
                 )
                 .toList()
           : const [],
-      targetVolume: parseOptionalDouble(json['target_volume']),
-      targetWeight: parseOptionalDouble(json['target_weight']),
-      targetVolumeCountStart: parseInt(json['target_volume_count_start'] ?? 0),
-      tankTemperature: parseDouble(json['tank_temperature'] ?? 0),
+      targetVolume: _optionalFiniteProfileNumber(json, 'target_volume'),
+      targetWeight: _optionalFiniteProfileNumber(json, 'target_weight'),
+      targetVolumeCountStart: _requireFiniteProfileInt(
+        json,
+        'target_volume_count_start',
+      ),
+      tankTemperature: _requireFiniteProfileNumber(json, 'tank_temperature'),
     );
   }
 
@@ -187,6 +190,21 @@ double _requireFiniteStepNumber(
 double? _optionalFiniteStepNumber(Map<String, dynamic> json, String field) {
   final number = parseOptionalDouble(json[field]);
   return number == null ? null : _requireFinite(number, 'step "$field"');
+}
+
+double _requireFiniteProfileNumber(Map<String, dynamic> json, String field) =>
+    _requireFinite(parseDouble(json[field] ?? 0), 'profile "$field"');
+
+int _requireFiniteProfileInt(Map<String, dynamic> json, String field) {
+  final raw = json[field] ?? 0;
+  final number = raw is String ? double.tryParse(raw) : raw;
+  if (number is double) _requireFinite(number, 'profile "$field"');
+  return parseInt(raw);
+}
+
+double? _optionalFiniteProfileNumber(Map<String, dynamic> json, String field) {
+  final number = parseOptionalDouble(json[field]);
+  return number == null ? null : _requireFinite(number, 'profile "$field"');
 }
 
 double _requireFinite(double number, String label) {

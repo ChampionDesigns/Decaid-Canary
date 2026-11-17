@@ -143,6 +143,56 @@ void main() {
     }
   });
 
+  group('a non-finite profile value is refused at parse', () {
+    for (final field in [
+      'tank_temperature',
+      'target_weight',
+      'target_volume',
+      'target_volume_count_start',
+    ]) {
+      for (final (label, literal) in _nonFiniteForms) {
+        test('profile $field $label', () {
+          final json = _profile(_step('pressure'))..[field] = _placeholder;
+          final text = jsonEncode(json)
+              .replaceFirst('"$_placeholder"', literal);
+          expect(
+            () => Profile.fromJson(jsonDecode(text) as Map<String, dynamic>),
+            throwsA(
+              isA<FormatException>().having(
+                (e) => e.message,
+                'message',
+                'profile "$field" must be a finite number',
+              ),
+            ),
+          );
+        });
+      }
+    }
+
+    test('finite profile values still parse from numbers and strings', () {
+      final profile = Profile.fromJson(
+        _profile(_step('pressure'))
+          ..['tank_temperature'] = '88.5'
+          ..['target_weight'] = 36
+          ..['target_volume'] = '40'
+          ..['target_volume_count_start'] = 2.0,
+      );
+      expect(profile.tankTemperature, 88.5);
+      expect(profile.targetWeight, 36);
+      expect(profile.targetVolume, 40);
+      expect(profile.targetVolumeCountStart, 2);
+    });
+
+    test('absent optional profile values stay absent', () {
+      final json = _profile(_step('pressure'))
+        ..remove('target_volume_count_start');
+      final profile = Profile.fromRecordedJson(json);
+      expect(profile.targetWeight, isNull);
+      expect(profile.targetVolume, isNull);
+      expect(profile.targetVolumeCountStart, 0);
+    });
+  });
+
   group('finite values still parse', () {
     for (final pump in ['pressure', 'flow', 'power', 'lever']) {
       test('a $pump step with string and number values', () {
