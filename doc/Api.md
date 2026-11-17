@@ -743,6 +743,8 @@ same request prevent all fields from being stored (validation is atomic).
 A Bengle that streams `BengleEstSample` frames publishes them as a sensor. Its id is
 `<machineDeviceId>-puckestimator` and its name is `Bengle Puck Estimator`. It exposes no commands.
 Read its manifest at `GET /api/v1/sensors/:id` and stream it at `/ws/v1/sensors/:id/snapshot`.
+The sensor leaves the sensor list when the machine stops offering the estimator (for example
+after a BLE reconnect that finds no `0xA014`), and returns when the estimator is available again.
 
 Channels: `r1` (bar·s/mL), `r2` (bar·s²/mL²), `compliance` (mL/bar), `confidence`, `lag` (s),
 `lagConfidence`, `sigmaQ` (mL/s), `absorbedVolume` (mL), `lastPauseTau` (s), the four `collapse*`

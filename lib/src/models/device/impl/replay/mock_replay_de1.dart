@@ -350,6 +350,8 @@ class MockReplayDe1 implements BengleInterface, SimulatedDevice {
   @override
   Stream<BengleEstSample> get puckEstimator =>
       const Stream<BengleEstSample>.empty();
+  @override
+  Stream<bool> get puckEstimatorAvailable => Stream<bool>.value(true);
 
   @override
   Stream<bool> get ready => _synthetic.ready;
