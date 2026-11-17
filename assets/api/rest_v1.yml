@@ -494,8 +494,11 @@ paths:
             NaN or an infinity (for example the string `"NaN"` or the number
             `1e400`) is refused with `error` `Invalid profile` and the message
             `FormatException: step "<field>" must be a finite number` or
-            `FormatException: exit "value" must be a finite number`. Nothing
-            is written to the machine.
+            `FormatException: exit "value" must be a finite number`. A
+            profile `tank_temperature`, `target_weight`, `target_volume` or
+            `target_volume_count_start` that parses to NaN or an infinity is
+            refused with `FormatException: profile "<field>" must be a finite
+            number`. Nothing is written to the machine.
         "503":
           description: Machine write queue is full
         "500":
@@ -1879,8 +1882,11 @@ paths:
             step or exit value that parses to NaN or an infinity (for example
             the string `"NaN"` or the number `1e400`) is refused with
             `FormatException: step "<field>" must be a finite number` or
-            `FormatException: exit "value" must be a finite number`; the
-            workflow does not change and nothing is sent to the machine. The
+            `FormatException: exit "value" must be a finite number`. A
+            profile `tank_temperature`, `target_weight`, `target_volume` or
+            `target_volume_count_start` that parses to NaN or an infinity is
+            refused with `FormatException: profile "<field>" must be a finite
+            number`. In each case the workflow does not change and nothing is sent to the machine. The
             response body contains an `error` and `message` field describing
             the validation failure.
           content:
@@ -4092,7 +4098,11 @@ paths:
             step value or an exit `value` that parses to NaN or an infinity is
             refused with `FormatException: step "<field>" must be a finite
             number` or `FormatException: exit "value" must be a finite
-            number`. PUT /api/v1/profiles/{id} returns the same text.
+            number`. A profile `tank_temperature`, `target_weight`,
+            `target_volume` or `target_volume_count_start` that parses to NaN
+            or an infinity is refused with `FormatException: profile "<field>"
+            must be a finite number`. PUT /api/v1/profiles/{id} returns the
+            same text.
         "500":
           description: Internal Server Error
 
@@ -7184,6 +7194,12 @@ components:
       example: preparingForShot
     Profile:
       type: object
+      description: >-
+        `tank_temperature`, `target_weight`, `target_volume` and
+        `target_volume_count_start` must be finite. A value that parses to NaN
+        or an infinity (for example the string `"NaN"` or the number `1e400`)
+        is refused with a `400` that names the field, before the profile is
+        stored or sent to the machine.
       required:
         - title
         - steps
