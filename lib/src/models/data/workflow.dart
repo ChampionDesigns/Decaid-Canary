@@ -152,6 +152,7 @@ class WorkflowMachine {
   final String? serialNumber;
   final String? model;
   final String? firmwareVersion;
+  final bool de1Emulation;
 
   const WorkflowMachine({
     this.provenanceStatus,
@@ -159,6 +160,7 @@ class WorkflowMachine {
     this.serialNumber,
     this.model,
     this.firmwareVersion,
+    this.de1Emulation = false,
   });
 
   WorkflowMachine copyWith({
@@ -167,12 +169,14 @@ class WorkflowMachine {
     String? serialNumber,
     String? model,
     String? firmwareVersion,
+    bool? de1Emulation,
   }) => WorkflowMachine(
     provenanceStatus: provenanceStatus ?? this.provenanceStatus,
     flowCalibration: flowCalibration ?? this.flowCalibration,
     serialNumber: serialNumber ?? this.serialNumber,
     model: model ?? this.model,
     firmwareVersion: firmwareVersion ?? this.firmwareVersion,
+    de1Emulation: de1Emulation ?? this.de1Emulation,
   );
 
   Map<String, dynamic> toJson() => {
@@ -181,6 +185,7 @@ class WorkflowMachine {
     if (serialNumber != null) 'serialNumber': serialNumber,
     if (model != null) 'model': model,
     if (firmwareVersion != null) 'firmwareVersion': firmwareVersion,
+    if (de1Emulation) 'de1Emulation': true,
   };
 
   factory WorkflowMachine.fromJson(Map<String, dynamic> json) =>
@@ -192,6 +197,7 @@ class WorkflowMachine {
         serialNumber: parseOptionalString(json['serialNumber']),
         model: parseOptionalString(json['model']),
         firmwareVersion: parseOptionalString(json['firmwareVersion']),
+        de1Emulation: json['de1Emulation'] == true,
       );
 
   @override
@@ -201,7 +207,8 @@ class WorkflowMachine {
       other.flowCalibration == flowCalibration &&
       other.serialNumber == serialNumber &&
       other.model == model &&
-      other.firmwareVersion == firmwareVersion;
+      other.firmwareVersion == firmwareVersion &&
+      other.de1Emulation == de1Emulation;
 
   @override
   int get hashCode => Object.hash(
@@ -210,6 +217,7 @@ class WorkflowMachine {
     serialNumber,
     model,
     firmwareVersion,
+    de1Emulation,
   );
 }
 

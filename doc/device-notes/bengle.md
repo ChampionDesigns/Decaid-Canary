@@ -70,6 +70,20 @@ endpoints 404 only on non-Bengle machines.
 | 59 | MatPreheatEnable | 0x008038D0 | int32 0..1 | persisted |
 | 60 | MatPreheatLeadMin | 0x008038D4 | int32 0..120 | persisted |
 | 61 | MatPreheatActive | 0x008038D8 | int32 0..1 | read-only |
+| 63 | FeatureCaps | 0x00803970 | int32 bits | read-only; bit 0 = DE1 emulation; Decaid does not read it |
+
+## DE1 emulation
+
+- Every Bengle firmware supports DE1 emulation. Decaid does not read
+  FeatureCaps; the `Bengle` device class is the support check. A DE1 is
+  never supported.
+- The firmware reads `T_ShotTail.Unused[0]` (tail frame byte 3; byte 0 is
+  the frame number) as the DE1 emulation switch.
+- Decaid writes 1 there only when the profile's `de1_emulation` is true and
+  every step is a pressure or flow step with a fast or smooth transition.
+  A Power step, a Lever step or a hold transition gives 0. The firmware
+  would run those steps native with the switch on, which is a partial
+  emulation.
 
 ## Scale calibration (rows 39-41)
 

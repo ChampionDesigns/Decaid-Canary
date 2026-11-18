@@ -259,6 +259,7 @@ class ShotsHandler {
         final merged = _deepMerge(existingShot.toJson(), normalizedPatch);
         _representClearedNoteAsEmpty(normalizedPatch, merged);
         _synchronizeLegacyAnnotationAliases(merged);
+        _keepRecordedDe1Emulation(merged, existingShot.de1Emulation);
         merged['id'] = id;
 
         final contentChanged = !ShotRecord.fromRecordedJson(merged)
@@ -284,6 +285,25 @@ class ShotsHandler {
     } catch (e, st) {
       _log.severe("Error updating shot $id", e, st);
       return jsonError({"error": e.toString()});
+    }
+  }
+
+  static void _keepRecordedDe1Emulation(
+    Map<String, dynamic> merged,
+    bool recorded,
+  ) {
+    merged.remove('de1Emulation');
+    final workflow = merged['workflow'];
+    if (workflow is! Map) return;
+    final machine = workflow['machine'];
+    if (machine is Map) {
+      if (recorded) {
+        machine['de1Emulation'] = true;
+      } else {
+        machine.remove('de1Emulation');
+      }
+    } else if (recorded) {
+      workflow['machine'] = {'de1Emulation': true};
     }
   }
 

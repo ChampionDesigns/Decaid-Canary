@@ -51,3 +51,13 @@ via `combineModelAndBurrs`. Invariants to preserve when changing this:
 - **Keep the `storageRead` layering.** The reply for `uploadedGrinderModels` layers under
   whatever the session has already recorded, because that read can land after an upload has
   remembered its string.
+
+## Visualizer: DE1 emulation shot name
+
+A shot with `de1Emulation: true` uploads with the profile title
+`B-DE1 · <title>` (`shotProfileTitle`), and a forced metadata sync sends the same
+`profile_title`. Only the uploaded copy of the profile changes; the local shot and its
+profile keep the plain title. A title that already starts with the prefix gets no second
+prefix. Back-sync does not map `profile_title` back, so the prefix never reaches the local
+shot. An import from a share code removes a leading `B-DE1 · ` from the fetched profile
+title (`withoutDe1EmulationPrefix`), so the prefix never reaches a stored profile.

@@ -7240,6 +7240,18 @@ components:
         tank_temperature:
           type: number
           description: Required.
+        de1_emulation:
+          type: boolean
+          default: false
+          description: >
+            Optional. Asks a Bengle to run this profile as a DE1 would. Only
+            the JSON value `true` turns it on; a missing key or any other value
+            reads as false. Written only when true, and part of the profile
+            hash only when true, so existing profiles keep their JSON and
+            their ID. Sent to the machine only when the machine is a Bengle
+            and every step is a pressure or flow step with a fast or smooth
+            transition; otherwise the profile uploads with the flag off. The
+            stored value does not change.
 
     ProfileStep:
       type: object
@@ -8104,6 +8116,15 @@ components:
           type: string
         firmwareVersion:
           type: string
+        de1Emulation:
+          type: boolean
+          description: >
+            True when the shot ran in DE1 emulation: the last profile upload
+            before the shot started wrote byte 3 = 1 in the shot tail frame
+            (a Bengle, profile de1_emulation on, and only pressure or flow
+            steps with a fast or smooth transition). Absent
+            otherwise. Captured by the app and read-only: PUT /shots/{id}
+            ignores it. ShotRecord.de1Emulation mirrors it.
 
     SteamSettingsPatch:
       type: object
@@ -8301,6 +8322,19 @@ components:
             feed.) Null for legacy shots and shots the app did not sequence
             (e.g. full gateway mode while backgrounded).
           example: targetWeight
+        de1Emulation:
+          type: boolean
+          enum: [true]
+          description: |
+            Present and true only for a shot that ran in DE1 emulation (the
+            shot tail frame asked a Bengle to run the profile as a DE1).
+            Absent for every other shot, legacy shots included; a reader
+            treats absent or any value other than true as false. Clients
+            show the shot name as "B-DE1 · <profile title>" (space, U+00B7,
+            space) when it is true, and do not add the prefix twice. The
+            stored profile title and profile id never carry the prefix, so
+            the profileTitle filter matches the plain title. The app records
+            it; PUT /shots/{id} ignores the key and keeps the recorded value.
         shotNotes:
           type: string
           nullable: true
@@ -8375,6 +8409,12 @@ components:
             Why the shot ended (open set — tolerate unknown values).
             See ShotRecord.stopReason.
           example: targetWeight
+        de1Emulation:
+          type: boolean
+          enum: [true]
+          description: |
+            Present and true only for a shot that ran in DE1 emulation.
+            See ShotRecord.de1Emulation.
         shotNotes:
           type: string
           nullable: true

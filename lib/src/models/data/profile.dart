@@ -15,6 +15,7 @@ class Profile extends Equatable {
   final double? targetWeight;
   final int targetVolumeCountStart;
   final double tankTemperature;
+  final bool de1Emulation;
 
   const Profile({
     required this.version,
@@ -27,6 +28,7 @@ class Profile extends Equatable {
     this.targetWeight,
     required this.targetVolumeCountStart,
     required this.tankTemperature,
+    this.de1Emulation = false,
   });
 
   @override
@@ -41,6 +43,7 @@ class Profile extends Equatable {
     targetWeight,
     targetVolumeCountStart,
     tankTemperature,
+    de1Emulation,
   ];
 
   static const unknownTitle = 'Unknown profile';
@@ -91,6 +94,7 @@ class Profile extends Equatable {
         'target_volume_count_start',
       ),
       tankTemperature: _requireFiniteProfileNumber(json, 'tank_temperature'),
+      de1Emulation: json['de1_emulation'] == true,
     );
   }
 
@@ -106,6 +110,7 @@ class Profile extends Equatable {
       'target_weight': targetWeight,
       'target_volume_count_start': targetVolumeCountStart,
       'tank_temperature': tankTemperature,
+      if (de1Emulation) 'de1_emulation': true,
     };
   }
 
@@ -120,6 +125,7 @@ class Profile extends Equatable {
     double? targetWeight,
     int? targetVolumeCountStart,
     double? tankTemperature,
+    bool? de1Emulation,
   }) {
     return Profile(
       version: version ?? this.version,
@@ -133,8 +139,20 @@ class Profile extends Equatable {
       targetVolumeCountStart:
           targetVolumeCountStart ?? this.targetVolumeCountStart,
       tankTemperature: tankTemperature ?? this.tankTemperature,
+      de1Emulation: de1Emulation ?? this.de1Emulation,
     );
   }
+
+  bool usesDe1Emulation({required bool machineSupported}) =>
+      de1Emulation && machineSupported && de1EmulationAllowedBySteps;
+
+  bool get de1EmulationAllowedBySteps => steps.every(_runsAsDe1Step);
+
+  static const _de1Transitions = {TransitionType.fast, TransitionType.smooth};
+
+  static bool _runsAsDe1Step(ProfileStep step) =>
+      (step is ProfileStepPressure || step is ProfileStepFlow) &&
+      _de1Transitions.contains(step.transition);
 
   Profile adjustTemperature(double offset) {
     return copyWith(
