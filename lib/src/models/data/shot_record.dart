@@ -14,6 +14,8 @@ class ShotRecord {
     'visualizerId',
   };
 
+  static const de1EmulationTitlePrefix = 'B-DE1 · ';
+
   final String id;
   final DateTime timestamp;
   final DateTime? createdAt;
@@ -47,6 +49,20 @@ class ShotRecord {
   @Deprecated('Use annotations?.extras instead')
   Map<String, dynamic>? get metadata => _metadata;
 
+  bool get de1Emulation => workflow.machine?.de1Emulation ?? false;
+
+  String get displayProfileTitle =>
+      profileTitleFor(workflow.profile.title, de1Emulation: de1Emulation);
+
+  static String profileTitleFor(String title, {required bool de1Emulation}) {
+    if (!de1Emulation ||
+        title.trim().isEmpty ||
+        title.startsWith(de1EmulationTitlePrefix)) {
+      return title;
+    }
+    return '$de1EmulationTitlePrefix$title';
+  }
+
   Map<String, dynamic> toJson() {
     return {
       "id": id,
@@ -57,6 +73,7 @@ class ShotRecord {
       "workflow": workflow.toJson(),
       if (annotations != null) "annotations": annotations!.toJson(),
       if (stopReason != null) "stopReason": stopReason,
+      if (de1Emulation) "de1Emulation": true,
       if (_shotNotes != null) "shotNotes": _shotNotes,
       if (_metadata != null) "metadata": _metadata,
     };
@@ -71,6 +88,7 @@ class ShotRecord {
       "workflow": workflow.toJson(),
       if (annotations != null) "annotations": annotations!.toJson(),
       if (stopReason != null) "stopReason": stopReason,
+      if (de1Emulation) "de1Emulation": true,
       if (_shotNotes != null) "shotNotes": _shotNotes,
       if (_metadata != null) "metadata": _metadata,
     };
@@ -112,9 +130,12 @@ class ShotRecord {
       measurements: (json["measurements"] as List)
           .map((e) => ShotSnapshot.fromJson(e))
           .toList(),
-      workflow: recorded
-          ? Workflow.fromRecordedJson(json["workflow"])
-          : Workflow.fromJson(json["workflow"]),
+      workflow: _withDe1Emulation(
+        recorded
+            ? Workflow.fromRecordedJson(json["workflow"])
+            : Workflow.fromJson(json["workflow"]),
+        json["de1Emulation"] == true,
+      ),
       annotations: ann,
       stopReason: json["stopReason"] as String?,
       shotNotes: json.containsKey('annotations')
@@ -123,6 +144,17 @@ class ShotRecord {
       metadata: json.containsKey('annotations')
           ? null
           : json["metadata"] as Map<String, dynamic>?,
+    );
+  }
+
+  static Workflow _withDe1Emulation(Workflow workflow, bool de1Emulation) {
+    final machine = workflow.machine;
+    if (!de1Emulation || (machine?.de1Emulation ?? false)) return workflow;
+    return workflow.copyWith(
+      id: workflow.id,
+      machine: (machine ?? const WorkflowMachine()).copyWith(
+        de1Emulation: true,
+      ),
     );
   }
 

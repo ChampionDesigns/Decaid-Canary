@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:reaprime/src/controllers/shot_sequencer.dart';
 import 'package:reaprime/src/controllers/workflow_controller.dart';
 import 'package:reaprime/src/models/data/profile.dart';
+import 'package:reaprime/src/models/data/shot_record.dart';
 import 'package:reaprime/src/models/data/shot_snapshot.dart';
+import 'package:reaprime/src/models/device/de1_emulation_reporter.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/settings/gateway_mode.dart';
 import 'package:reaprime/src/settings/settings_service.dart';
@@ -42,6 +44,7 @@ class _RealtimeShotFeatureState extends State<RealtimeShotFeature> {
   }
 
   late ShotSequencer _shotSequencer;
+  late String _profileTitle;
   final List<ShotSnapshot> _shotSnapshots = [];
   late StreamSubscription<ShotSnapshot> _shotSubscription;
   late StreamSubscription<bool> _resetCommandSubscription;
@@ -55,6 +58,12 @@ class _RealtimeShotFeatureState extends State<RealtimeShotFeature> {
       (b) => _gatewayMode = b == GatewayMode.full,
     );
     _shotSequencer = widget.shotSequencer;
+    _profileTitle = ShotRecord.profileTitleFor(
+      _shotSequencer.targetProfile.title,
+      de1Emulation: de1EmulationSentBy(
+        _shotSequencer.de1controller.connectedDe1OrNull,
+      ),
+    );
     _resetCommandSubscription = _shotSequencer.resetCommand.listen((event) {
       setState(() {
         _shotSnapshots.clear();
@@ -215,7 +224,7 @@ class _RealtimeShotFeatureState extends State<RealtimeShotFeature> {
         ),
         Spacer(),
         ShotDataView(
-          firstLine: "Profile: ${_shotSequencer.targetProfile.title}",
+          firstLine: "Profile: $_profileTitle",
           secondLine:
               "Target weight: ${_shotSequencer.targetYield.toStringAsFixed(1)}g",
         ),

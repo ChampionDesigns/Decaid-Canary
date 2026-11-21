@@ -403,6 +403,22 @@ Newly recorded shots snapshot `serialNumber`, `model`, `firmwareVersion`, and
 fields. Consumers must not infer missing capture-time identity from the machine
 that happens to be connected when a record is read.
 
+**DE1 emulation.** A shot that ran in DE1 emulation carries a top-level
+`"de1Emulation": true` in every shot response (`GET /api/v1/shots`,
+`/shots/latest`, `/shots/:id`), in the data export, and in the plugin
+`shotUpdated` event; the key is absent for every other shot. The app captures
+it when the shot starts from the machine: it is true when the last profile
+upload wrote byte 3 = 1 in the shot tail frame (the machine is a Bengle, the
+profile has `de1_emulation` on, and every step is a pressure or flow step with
+a `fast` or `smooth` transition). It is stored as
+`workflow.machine.de1Emulation`, so no schema change is involved. The value is
+read-only: `PUT /api/v1/shots/:id` ignores `de1Emulation` at the top level and
+in `workflow.machine`, and keeps the recorded value. Clients show
+the shot name as `B-DE1 · <profile title>` (space, U+00B7 middle dot, space)
+and do not add the prefix to a title that already starts with it. The profile
+title and profile id never change, so `profileTitle` filters match the plain
+title and find both kinds of shot.
+
 **Modification tracking.** Every shot carries `createdAt` and `updatedAt`
 (ISO-8601 UTC, always serialized with a trailing `Z`). `createdAt` is set
 when the shot enters local storage; the extraction `timestamp` is the fallback

@@ -135,6 +135,25 @@ record of what happened. Missing or empty titles read back as `Unknown profile`;
 missing numeric fields read back as `0`. Never use it to load a profile the user
 can brew from.
 
+#### DE1 Emulation
+
+`de1_emulation` is an optional profile-level boolean, default `false`. It asks a
+Bengle to run the profile as a DE1 would. Only the JSON value `true` turns it on;
+a missing key or any other value reads as `false`. `toJson` writes the key only
+when it is `true`, so the JSON of existing profiles does not change. Profiles
+imported from de1app TCL files and v2 JSON without the key load with it off.
+
+The flag travels with the profile to every machine. Decaid writes `1` in byte 3
+of the shot tail frame only when all of these are true:
+
+- The connected machine is a Bengle. A DE1 always gets `0`.
+- The profile has `de1_emulation` on.
+- Every step is a pressure or flow step with a `fast` or `smooth` transition. A
+  Power step, a Lever step or a `hold` transition gives `0`.
+
+The stored flag does not change when the steps block it. Only the byte that
+Decaid sends changes.
+
 #### Hash Types
 
 Profiles use three SHA-256 hashes:
@@ -142,6 +161,7 @@ Profiles use three SHA-256 hashes:
 **1. Profile Hash (Primary ID)**
 - Calculated from execution-relevant fields:
   - `beverage_type`, `steps`, `tank_temperature`, `target_weight`, `target_volume`, `target_volume_count_start`, `version`
+  - `de1_emulation`, only when it is `true`, so a profile without the flag keeps the hash it had before the field existed
 - Format: `profile:<first_20_chars_of_hash>`
 - Example: `profile:a3f2c8b4d1e6f9a21c7d`
 - Used as the profile record's unique ID
@@ -414,7 +434,8 @@ curl -X POST http://localhost:8080/api/v1/profiles \
       "author": "Jane Doe",
       "beverage_type": "espresso",
       "steps": [...],
-      "tank_temperature": 93
+      "tank_temperature": 93,
+      "de1_emulation": true
     }
   }'
 ```
