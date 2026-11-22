@@ -154,6 +154,26 @@ class WorkflowHandler {
     }
   }
 
+  Map<String, dynamic> _takeDe1EmulationFromCompleteProfile(
+    Map<String, dynamic> resultJson,
+    Map<String, dynamic> merge,
+  ) {
+    final updateProfile = merge['profile'];
+    final mergedProfile = resultJson['profile'];
+    if (updateProfile is! Map<String, dynamic> ||
+        !updateProfile.containsKey('steps') ||
+        mergedProfile is! Map<String, dynamic>) {
+      return resultJson;
+    }
+    return {
+      ...resultJson,
+      'profile': {
+        ...mergedProfile,
+        'de1_emulation': updateProfile['de1_emulation'] == true,
+      },
+    };
+  }
+
   Future<Response> _applyUpdate(Map<String, dynamic> merge) async {
     try {
       rejectExplicitNulls(merge, const ['steamSettings', 'context']);
@@ -178,7 +198,10 @@ class WorkflowHandler {
         final oldWorkflow = _controller.currentWorkflow;
         final revision = _controller.revision;
         final currentJson = oldWorkflow.toJson();
-        final resultJson = deepMergeJson(currentJson, merge);
+        final resultJson = _takeDe1EmulationFromCompleteProfile(
+          deepMergeJson(currentJson, merge),
+          merge,
+        );
         final updatedWorkflow = Workflow.fromJson(resultJson);
 
         await _de1controller.updateWorkflowSettings(

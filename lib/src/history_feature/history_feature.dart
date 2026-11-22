@@ -97,7 +97,7 @@ class _HistoryFeatureState extends State<HistoryFeature> {
     if (record.workflow.context?.coffeeRoaster != null) {
       parts.add('by ${record.workflow.context!.coffeeRoaster!}');
     }
-    parts.add(record.workflow.profile.title);
+    parts.add(record.displayProfileTitle);
     if (record.workflow.context?.targetDoseWeight != null) {
       parts.add('${record.workflow.context!.targetDoseWeight!}g in');
     }
@@ -351,7 +351,7 @@ class _HistoryFeatureState extends State<HistoryFeature> {
                                     const SizedBox(width: 4),
                                     Expanded(
                                       child: Text(
-                                        record.workflow.profile.title,
+                                        record.displayProfileTitle,
                                         style: Theme.of(context)
                                             .textTheme
                                             .bodySmall,
@@ -764,7 +764,7 @@ class _HistoryFeatureState extends State<HistoryFeature> {
                     SizedBox(height: 12),
                     _DetailRow(
                       label: "Profile",
-                      value: record.workflow.profile.title,
+                      value: record.displayProfileTitle,
                       context: context,
                     ),
                     if (record.workflow.context?.grinderModel != null ||

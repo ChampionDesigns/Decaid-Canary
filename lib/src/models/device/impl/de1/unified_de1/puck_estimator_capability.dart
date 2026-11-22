@@ -15,4 +15,6 @@ mixin PuckEstimatorCapability on UnifiedDe1 {
   Stream<BengleEstSample> get puckEstimator => _transport.estimator
       .map(parseBengleEstSample)
       .whereType<BengleEstSample>();
+
+  Stream<bool> get puckEstimatorAvailable => _transport.estimatorAvailable;
 }

@@ -487,7 +487,18 @@ paths:
         "200":
           description: Profile updated successfully
         "400":
-          description: Malformed JSON body
+          description: >-
+            Malformed JSON body, or an invalid profile. A step `volume`,
+            `seconds`, `weight`, `temperature`, `pressure`, `flow`, `power`,
+            `leverSpring` or `leverGive`, or an exit `value`, that parses to
+            NaN or an infinity (for example the string `"NaN"` or the number
+            `1e400`) is refused with `error` `Invalid profile` and the message
+            `FormatException: step "<field>" must be a finite number` or
+            `FormatException: exit "value" must be a finite number`. A
+            profile `tank_temperature`, `target_weight`, `target_volume` or
+            `target_volume_count_start` that parses to NaN or an infinity is
+            refused with `FormatException: profile "<field>" must be a finite
+            number`. Nothing is written to the machine.
         "503":
           description: Machine write queue is full
         "500":
@@ -1753,6 +1764,11 @@ paths:
         mean stop-at-weight is off: send `0` to turn it off. Every other `context` field still
         accepts an explicit `null` to clear it, so clearing is per field — there is no
         whole-object clear.
+        A `profile` object that contains `steps` is a complete profile: its `de1_emulation`
+        replaces the current value, and the flag is on only when the request sends `true`.
+        A complete profile that omits `de1_emulation` turns DE1 emulation off. A partial
+        `profile` object without `steps` is deep-merged and keeps the current `de1_emulation`
+        unless it sends the key.
         The server does not debounce or combine separate requests. Machine side effects from
         workflow PUT requests do not execute concurrently,
         so a request may wait behind an in-flight machine operation. Each response describes
@@ -1867,7 +1883,15 @@ paths:
             invalid enum value, a missing required profile field, an
             unparseable number, a non-numeric `context.targetYield`, or an
             explicit `null` on a non-nullable patch field such as
-            `steamSettings`, `context` or `context.targetYield`). The
+            `steamSettings`, `context` or `context.targetYield`). A profile
+            step or exit value that parses to NaN or an infinity (for example
+            the string `"NaN"` or the number `1e400`) is refused with
+            `FormatException: step "<field>" must be a finite number` or
+            `FormatException: exit "value" must be a finite number`. A
+            profile `tank_temperature`, `target_weight`, `target_volume` or
+            `target_volume_count_start` that parses to NaN or an infinity is
+            refused with `FormatException: profile "<field>" must be a finite
+            number`. In each case the workflow does not change and nothing is sent to the machine. The
             response body contains an `error` and `message` field describing
             the validation failure.
           content:
@@ -4075,8 +4099,15 @@ paths:
             `range` that parses to NaN or an infinity (for example the string
             `"NaN"` or the number `1e400`) is refused with
             `FormatException: limiter "value" must be a finite number` or
-            `FormatException: limiter "range" must be a finite number`. PUT
-            /api/v1/profiles/{id} returns the same text.
+            `FormatException: limiter "range" must be a finite number`. A
+            step value or an exit `value` that parses to NaN or an infinity is
+            refused with `FormatException: step "<field>" must be a finite
+            number` or `FormatException: exit "value" must be a finite
+            number`. A profile `tank_temperature`, `target_weight`,
+            `target_volume` or `target_volume_count_start` that parses to NaN
+            or an infinity is refused with `FormatException: profile "<field>"
+            must be a finite number`. PUT /api/v1/profiles/{id} returns the
+            same text.
         "500":
           description: Internal Server Error
 
@@ -7168,6 +7199,12 @@ components:
       example: preparingForShot
     Profile:
       type: object
+      description: >-
+        `tank_temperature`, `target_weight`, `target_volume` and
+        `target_volume_count_start` must be finite. A value that parses to NaN
+        or an infinity (for example the string `"NaN"` or the number `1e400`)
+        is refused with a `400` that names the field, before the profile is
+        stored or sent to the machine.
       required:
         - title
         - steps
@@ -7208,6 +7245,18 @@ components:
         tank_temperature:
           type: number
           description: Required.
+        de1_emulation:
+          type: boolean
+          default: false
+          description: >
+            Optional. Asks a Bengle to run this profile as a DE1 would. Only
+            the JSON value `true` turns it on; a missing key or any other value
+            reads as false. Written only when true, and part of the profile
+            hash only when true, so existing profiles keep their JSON and
+            their ID. Sent to the machine only when the machine is a Bengle
+            and every step is a pressure or flow step with a fast or smooth
+            transition; otherwise the profile uploads with the flag off. The
+            stored value does not change.
 
     ProfileStep:
       type: object
@@ -7224,7 +7273,13 @@ components:
         machine that advertises the matching capability. Uploading a profile
         that uses one to a machine that does not (a DE1, or firmware without the
         capability) is refused with a `400` before any write; the profile still
-        stores and round-trips unchanged on any machine.
+        stores and round-trips unchanged on any machine. A `lever` step with
+        the `hold` transition is refused the same way on every machine.
+
+        Every number in a step, its `exit` and its `limiter` must be finite. A
+        value that parses to NaN or an infinity (for example the string `"NaN"`
+        or the number `1e400`) is refused with a `400` that names the field,
+        before the profile is stored or sent to the machine.
       required:
         - name
         - pump
@@ -8066,6 +8121,15 @@ components:
           type: string
         firmwareVersion:
           type: string
+        de1Emulation:
+          type: boolean
+          description: >
+            True when the shot ran in DE1 emulation: the last profile upload
+            before the shot started wrote byte 3 = 1 in the shot tail frame
+            (a Bengle, profile de1_emulation on, and only pressure or flow
+            steps with a fast or smooth transition). Absent
+            otherwise. Captured by the app and read-only: PUT /shots/{id}
+            ignores it. ShotRecord.de1Emulation mirrors it.
 
     SteamSettingsPatch:
       type: object
@@ -8263,6 +8327,19 @@ components:
             feed.) Null for legacy shots and shots the app did not sequence
             (e.g. full gateway mode while backgrounded).
           example: targetWeight
+        de1Emulation:
+          type: boolean
+          enum: [true]
+          description: |
+            Present and true only for a shot that ran in DE1 emulation (the
+            shot tail frame asked a Bengle to run the profile as a DE1).
+            Absent for every other shot, legacy shots included; a reader
+            treats absent or any value other than true as false. Clients
+            show the shot name as "B-DE1 · <profile title>" (space, U+00B7,
+            space) when it is true, and do not add the prefix twice. The
+            stored profile title and profile id never carry the prefix, so
+            the profileTitle filter matches the plain title. The app records
+            it; PUT /shots/{id} ignores the key and keeps the recorded value.
         shotNotes:
           type: string
           nullable: true
@@ -8337,6 +8414,12 @@ components:
             Why the shot ended (open set — tolerate unknown values).
             See ShotRecord.stopReason.
           example: targetWeight
+        de1Emulation:
+          type: boolean
+          enum: [true]
+          description: |
+            Present and true only for a shot that ran in DE1 emulation.
+            See ShotRecord.de1Emulation.
         shotNotes:
           type: string
           nullable: true

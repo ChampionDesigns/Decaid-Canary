@@ -18,6 +18,7 @@ function createPlugin(host) {
   const VISUALIZER_PROFILE_API = "https://visualizer.coffee/api/shots/%1/profile?format=json";
   const CANONICAL_ENJOYMENT_MAX = 10;
   const VISUALIZER_ENJOYMENT_SCALE = 10;
+  const DE1_EMULATION_TITLE_PREFIX = "B-DE1 \u00B7 ";
 
   let shotFetchTimeoutId = null;
   let backSyncTimeoutId = null;
@@ -240,6 +241,25 @@ function createPlugin(host) {
     return typeof value === "string" && value.trim() !== "" ? value : null;
   }
 
+  function shotProfileTitle(shot) {
+    const title = shot?.workflow?.profile?.title;
+    if (shot?.de1Emulation !== true || typeof title !== "string" || title.trim() === "") return title;
+    if (title.startsWith(DE1_EMULATION_TITLE_PREFIX)) return title;
+    return DE1_EMULATION_TITLE_PREFIX + title;
+  }
+
+  function withoutDe1EmulationPrefix(profile) {
+    const title = profile?.title;
+    if (typeof title !== "string" || !title.startsWith(DE1_EMULATION_TITLE_PREFIX)) return profile;
+    return { ...profile, title: title.slice(DE1_EMULATION_TITLE_PREFIX.length) };
+  }
+
+  function uploadProfile(reaShot) {
+    const profile = reaShot.workflow.profile;
+    const title = shotProfileTitle(reaShot);
+    return title === profile?.title ? profile : { ...profile, title };
+  }
+
   function convertReaToVisualizerFormat(reaShot) {
     if (!reaShot || !reaShot.measurements || reaShot.measurements.length === 0) {
       throw new Error("Invalid or empty Decent shot data for conversion.");
@@ -266,7 +286,7 @@ function createPlugin(host) {
       temperature: { mix: [], basket: [], goal: [], mix_goal: [] },
       totals: { weight: [], water_dispensed: [] },
       state_change: [],
-      profile: reaShot.workflow.profile,
+      profile: uploadProfile(reaShot),
       app: {
         data: {
           settings: {
@@ -507,7 +527,7 @@ function createPlugin(host) {
       throw new Error(`Failed to fetch profile: HTTP ${statusCode} ${profileResponse.statusText}`);
     }
 
-    const profileData = await profileResponse.json();
+    const profileData = withoutDe1EmulationPrefix(await profileResponse.json());
     log(`Fetched profile: ${JSON.stringify(profileData).slice(0, 200)}`);
 
     // Step 3: POST profile to Decent workflow endpoint
@@ -806,7 +826,7 @@ function createPlugin(host) {
     setString("bean_type", context.coffeeName, patchContext, "coffeeName");
     // profile_title has no patch key; only send it in a full (force) sync.
     if (force === true) {
-      const title = shot.workflow?.profile?.title || shot.workflow?.name;
+      const title = shotProfileTitle(shot) || shot.workflow?.name;
       if (typeof title === "string" && title.trim() !== "") payload.profile_title = title;
     }
     if (force === true || localTagsTouched(patch)) {

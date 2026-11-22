@@ -403,6 +403,22 @@ Newly recorded shots snapshot `serialNumber`, `model`, `firmwareVersion`, and
 fields. Consumers must not infer missing capture-time identity from the machine
 that happens to be connected when a record is read.
 
+**DE1 emulation.** A shot that ran in DE1 emulation carries a top-level
+`"de1Emulation": true` in every shot response (`GET /api/v1/shots`,
+`/shots/latest`, `/shots/:id`), in the data export, and in the plugin
+`shotUpdated` event; the key is absent for every other shot. The app captures
+it when the shot starts from the machine: it is true when the last profile
+upload wrote byte 3 = 1 in the shot tail frame (the machine is a Bengle, the
+profile has `de1_emulation` on, and every step is a pressure or flow step with
+a `fast` or `smooth` transition). It is stored as
+`workflow.machine.de1Emulation`, so no schema change is involved. The value is
+read-only: `PUT /api/v1/shots/:id` ignores `de1Emulation` at the top level and
+in `workflow.machine`, and keeps the recorded value. Clients show
+the shot name as `B-DE1 · <profile title>` (space, U+00B7 middle dot, space)
+and do not add the prefix to a title that already starts with it. The profile
+title and profile id never change, so `profileTitle` filters match the plain
+title and find both kinds of shot.
+
 **Modification tracking.** Every shot carries `createdAt` and `updatedAt`
 (ISO-8601 UTC, always serialized with a trailing `Z`). `createdAt` is set
 when the shot enters local storage; the extraction `timestamp` is the fallback
@@ -516,6 +532,10 @@ number returns `400` rather than clearing the target. The `context` object itsel
 non-nullable too — `{"context": null}` returns `400`, because dropping the whole context
 would clear `targetYield` with it, so clearing is per field. A stored or returned workflow
 keeps a nullable `targetYield`. `context.grinderRpm` is an optional non-negative integer recorded by the workflow; it is never inferred from a connected grinder observation or catalog UI increment. When a shot is stored, its workflow context (including RPM and namespaced `extras`) is detached as historical data, while `grinderId` remains only a catalog reference and linked burrs are resolved for that new shot.
+A `profile` object that contains `steps` is a complete profile, so its `de1_emulation`
+replaces the current value: DE1 emulation is on only when the request sends `true`, and a
+saved profile that omits the key turns it off. A partial `profile` object without `steps`
+keeps the current `de1_emulation` unless it sends the key.
 Requests may wait behind machine I/O; the server does not debounce high-frequency
 input, so clients should throttle controls themselves. Bodies larger than 1 MiB return `413`,
 requests beyond the eight-entry active/queued limit return `429`, and requests waiting more
@@ -743,6 +763,8 @@ same request prevent all fields from being stored (validation is atomic).
 A Bengle that streams `BengleEstSample` frames publishes them as a sensor. Its id is
 `<machineDeviceId>-puckestimator` and its name is `Bengle Puck Estimator`. It exposes no commands.
 Read its manifest at `GET /api/v1/sensors/:id` and stream it at `/ws/v1/sensors/:id/snapshot`.
+The sensor leaves the sensor list when the machine stops offering the estimator (for example
+after a BLE reconnect that finds no `0xA014`), and returns when the estimator is available again.
 
 Channels: `r1` (bar·s/mL), `r2` (bar·s²/mL²), `compliance` (mL/bar), `confidence`, `lag` (s),
 `lagConfidence`, `sigmaQ` (mL/s), `absorbedVolume` (mL), `lastPauseTau` (s), the four `collapse*`

@@ -22,7 +22,7 @@ class BenglePuckEstimatorBridge {
     required SensorController sensorController,
   }) : _de1 = de1Controller,
        _sensors = sensorController {
-    _de1Sub = _de1.de1.listen(_onMachineChange);
+    _de1Sub = _de1.de1.listen(_enqueueMachineChange);
   }
 
   final De1Controller _de1;
@@ -31,8 +31,23 @@ class BenglePuckEstimatorBridge {
 
   StreamSubscription<De1Interface?>? _de1Sub;
   StreamSubscription<BengleEstSample>? _sampleSub;
+  StreamSubscription<bool>? _availableSub;
   BenglePuckEstimator? _registered;
   BengleInterface? _attachedBengle;
+  bool _restoreWhenAvailable = false;
+  Future<void> _machineChanges = Future<void>.value();
+
+  void _enqueueMachineChange(De1Interface? device) =>
+      _enqueue(() => _onMachineChange(device));
+
+  void _enqueue(Future<void> Function() change) {
+    _machineChanges = _machineChanges
+        .then((_) => change())
+        .catchError(
+          (Object e, StackTrace st) =>
+              _log.warning('machine change handling failed', e, st),
+        );
+  }
 
   Future<void> _onMachineChange(De1Interface? device) async {
     if (device is BengleInterface) {
@@ -40,6 +55,9 @@ class BenglePuckEstimatorBridge {
       await _detachCurrent();
       _attachedBengle = device;
       _sampleSub = device.puckEstimator.listen(_onSample);
+      _availableSub = device.puckEstimatorAvailable.listen(
+        (available) => _enqueue(() => _onAvailability(device, available)),
+      );
     } else {
       await _detachCurrent();
     }
@@ -47,16 +65,43 @@ class BenglePuckEstimatorBridge {
 
   Future<void> _onSample(BengleEstSample _) async {
     final bengle = _attachedBengle;
-    if (bengle == null || _registered != null) return;
+    if (bengle == null || _registered != null || _restoreWhenAvailable) {
+      return;
+    }
+    _log.info('Bengle puck estimator producing data — registering sensor');
+    await _register(bengle);
+  }
+
+  Future<void> _onAvailability(BengleInterface bengle, bool available) async {
+    if (!identical(_attachedBengle, bengle)) return;
+    if (available) {
+      if (!_restoreWhenAvailable) return;
+      _restoreWhenAvailable = false;
+      if (_registered != null) return;
+      _log.info('Bengle puck estimator available again — registering sensor');
+      await _register(bengle);
+      return;
+    }
+    final sensor = _registered;
+    if (sensor == null) return;
+    _registered = null;
+    _restoreWhenAvailable = true;
+    _log.info('Bengle puck estimator lost — unregistering sensor');
+    await _sensors.unregister(sensor.deviceId);
+  }
+
+  Future<void> _register(BengleInterface bengle) async {
     final sensor = BenglePuckEstimator(bengle: bengle);
     _registered = sensor;
-    _log.info('Bengle puck estimator producing data — registering sensor');
     await _sensors.register(sensor);
   }
 
   Future<void> _detachCurrent() async {
     await _sampleSub?.cancel();
     _sampleSub = null;
+    await _availableSub?.cancel();
+    _availableSub = null;
+    _restoreWhenAvailable = false;
     final sensor = _registered;
     if (sensor != null) {
       _registered = null;
@@ -68,6 +113,7 @@ class BenglePuckEstimatorBridge {
   Future<void> dispose() async {
     await _de1Sub?.cancel();
     _de1Sub = null;
+    await _machineChanges;
     await _detachCurrent();
   }
 }

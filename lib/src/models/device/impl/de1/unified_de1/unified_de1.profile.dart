@@ -321,12 +321,16 @@ extension UnifiedDe1Profile on UnifiedDe1 {
 
     data[0] = profile.steps.length;
 
-    data[3] = 0;
+    data[3] =
+        profile.usesDe1Emulation(machineSupported: implementation == .bengle)
+        ? 1
+        : 0;
     data[4] = 0;
     data[5] = 0;
     data[6] = 0;
     data[7] = 0;
     await _transport.writeWithResponse(Endpoint.frameWrite, data);
+    _lastTailDe1Emulation = data[3] == 1;
   }
 }
 

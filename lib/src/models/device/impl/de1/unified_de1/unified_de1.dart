@@ -7,6 +7,7 @@ import 'package:logging/logging.dart';
 import 'package:reaprime/src/controllers/connection/connection_timings.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/de1_firmwaremodel.dart';
+import 'package:reaprime/src/models/device/de1_emulation_reporter.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/firmware_wake_entry.dart';
@@ -60,7 +61,8 @@ final class _FirmwareCancellationToken {
   }
 }
 
-class UnifiedDe1 implements De1Interface, CanonicalDeviceIdentity {
+class UnifiedDe1
+    implements De1Interface, CanonicalDeviceIdentity, De1EmulationReporter {
   static final BleServiceIdentifier advertisingIdentifier =
       BleServiceIdentifier.short('ffff');
   final UnifiedDe1Transport _transport;
@@ -404,6 +406,10 @@ class UnifiedDe1 implements De1Interface, CanonicalDeviceIdentity {
   String get name => "DE1";
   int _voltage = -1;
   int _refillKitDetected = -1;
+  bool _lastTailDe1Emulation = false;
+
+  @override
+  bool get lastUploadedProfileDe1Emulation => _lastTailDe1Emulation;
   De1RefillKitSettings _refillKitSetting = De1RefillKitSettings.auto;
   double? _cachedFlowEstimation;
   int _flowEstimationEpoch = 0;
@@ -428,6 +434,7 @@ class UnifiedDe1 implements De1Interface, CanonicalDeviceIdentity {
     await _transport.connect();
 
     _currentProfile = null;
+    _lastTailDe1Emulation = false;
     clearEffectiveIdentity();
 
     if (_info != null) {
@@ -671,6 +678,18 @@ class UnifiedDe1 implements De1Interface, CanonicalDeviceIdentity {
   /// 400 instead of a silent mis-command (watts read as bar, a P0 as constant
   /// pressure), and so `WorkflowDeviceSync` parks instead of retrying forever.
   void _assertProfileModeSupported(Profile profile) {
+    final leverHoldIndex = profile.steps.indexWhere(
+      (s) => s is ProfileStepLever && s.transition == TransitionType.hold,
+    );
+    if (leverHoldIndex >= 0) {
+      final step = profile.steps[leverHoldIndex];
+      throw ProfileModeUnsupportedException(
+        'Step ${leverHoldIndex + 1} ("${step.name}") of profile '
+        '"${profile.title}" is a Lever step with a HOLD transition. A Lever '
+        'step sets its own pressure curve and cannot latch the previous '
+        'step\'s value. Use the smooth or fast transition on a Lever step.',
+      );
+    }
     final hasPower = profile.steps.any((s) => s is ProfileStepPower);
     final hasLever = profile.steps.any((s) => s is ProfileStepLever);
     final hasHold = profile.steps.any(

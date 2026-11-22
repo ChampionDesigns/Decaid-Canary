@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:reaprime/src/models/data/profile.dart';
+import 'package:reaprime/src/models/device/de1_emulation_reporter.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/firmware_update_state.dart';
 import 'package:reaprime/src/models/device/de1_rawmessage.dart';
@@ -10,7 +11,7 @@ import 'package:reaprime/src/models/device/device_implementation.dart';
 import 'package:reaprime/src/models/device/transport/data_transport.dart';
 import 'package:rxdart/rxdart.dart';
 
-class TestDe1 implements De1Interface {
+class TestDe1 implements De1Interface, De1EmulationReporter {
   final String _deviceId;
   final String _name;
   final String serialNumber;
@@ -20,6 +21,9 @@ class TestDe1 implements De1Interface {
     this._name = 'TestDe1',
     this.serialNumber = '1',
   });
+  bool de1EmulationSupported = false;
+  @override
+  bool lastUploadedProfileDe1Emulation = false;
   final BehaviorSubject<MachineSnapshot> snapshotSubject =
       BehaviorSubject.seeded(
         MachineSnapshot(
@@ -143,7 +147,12 @@ class TestDe1 implements De1Interface {
   @override
   Future<void> setRefillLevel(int newRefillLevel) async {}
   @override
-  Future<void> setProfile(Profile profile) async {}
+  Future<void> setProfile(Profile profile) async {
+    lastUploadedProfileDe1Emulation = profile.usesDe1Emulation(
+      machineSupported: de1EmulationSupported,
+    );
+  }
+
   @override
   Future<void> setFanThreshhold(int temp) async {}
   @override

@@ -15,6 +15,7 @@ class Profile extends Equatable {
   final double? targetWeight;
   final int targetVolumeCountStart;
   final double tankTemperature;
+  final bool de1Emulation;
 
   const Profile({
     required this.version,
@@ -27,6 +28,7 @@ class Profile extends Equatable {
     this.targetWeight,
     required this.targetVolumeCountStart,
     required this.tankTemperature,
+    this.de1Emulation = false,
   });
 
   @override
@@ -41,6 +43,7 @@ class Profile extends Equatable {
     targetWeight,
     targetVolumeCountStart,
     tankTemperature,
+    de1Emulation,
   ];
 
   static const unknownTitle = 'Unknown profile';
@@ -84,10 +87,14 @@ class Profile extends Equatable {
                 )
                 .toList()
           : const [],
-      targetVolume: parseOptionalDouble(json['target_volume']),
-      targetWeight: parseOptionalDouble(json['target_weight']),
-      targetVolumeCountStart: parseInt(json['target_volume_count_start'] ?? 0),
-      tankTemperature: parseDouble(json['tank_temperature'] ?? 0),
+      targetVolume: _optionalFiniteProfileNumber(json, 'target_volume'),
+      targetWeight: _optionalFiniteProfileNumber(json, 'target_weight'),
+      targetVolumeCountStart: _requireFiniteProfileInt(
+        json,
+        'target_volume_count_start',
+      ),
+      tankTemperature: _requireFiniteProfileNumber(json, 'tank_temperature'),
+      de1Emulation: json['de1_emulation'] == true,
     );
   }
 
@@ -103,6 +110,7 @@ class Profile extends Equatable {
       'target_weight': targetWeight,
       'target_volume_count_start': targetVolumeCountStart,
       'tank_temperature': tankTemperature,
+      if (de1Emulation) 'de1_emulation': true,
     };
   }
 
@@ -117,6 +125,7 @@ class Profile extends Equatable {
     double? targetWeight,
     int? targetVolumeCountStart,
     double? tankTemperature,
+    bool? de1Emulation,
   }) {
     return Profile(
       version: version ?? this.version,
@@ -130,8 +139,20 @@ class Profile extends Equatable {
       targetVolumeCountStart:
           targetVolumeCountStart ?? this.targetVolumeCountStart,
       tankTemperature: tankTemperature ?? this.tankTemperature,
+      de1Emulation: de1Emulation ?? this.de1Emulation,
     );
   }
+
+  bool usesDe1Emulation({required bool machineSupported}) =>
+      de1Emulation && machineSupported && de1EmulationAllowedBySteps;
+
+  bool get de1EmulationAllowedBySteps => steps.every(_runsAsDe1Step);
+
+  static const _de1Transitions = {TransitionType.fast, TransitionType.smooth};
+
+  static bool _runsAsDe1Step(ProfileStep step) =>
+      (step is ProfileStepPressure || step is ProfileStepFlow) &&
+      _de1Transitions.contains(step.transition);
 
   Profile adjustTemperature(double offset) {
     return copyWith(
@@ -169,6 +190,44 @@ double _requireLimiterNumber(Map<String, dynamic> json, String field) {
   }
   if (!number.isFinite) {
     throw FormatException('limiter "$field" must be a finite number');
+  }
+  return number;
+}
+
+double _requireFiniteStepNumber(
+  Map<String, dynamic> json,
+  String field, {
+  String? alias,
+}) {
+  final raw = json.containsKey(field) || alias == null
+      ? json[field]
+      : json[alias];
+  return _requireFinite(parseDouble(raw), 'step "$field"');
+}
+
+double? _optionalFiniteStepNumber(Map<String, dynamic> json, String field) {
+  final number = parseOptionalDouble(json[field]);
+  return number == null ? null : _requireFinite(number, 'step "$field"');
+}
+
+double _requireFiniteProfileNumber(Map<String, dynamic> json, String field) =>
+    _requireFinite(parseDouble(json[field] ?? 0), 'profile "$field"');
+
+int _requireFiniteProfileInt(Map<String, dynamic> json, String field) {
+  final raw = json[field] ?? 0;
+  final number = raw is String ? double.tryParse(raw) : raw;
+  if (number is double) _requireFinite(number, 'profile "$field"');
+  return parseInt(raw);
+}
+
+double? _optionalFiniteProfileNumber(Map<String, dynamic> json, String field) {
+  final number = parseOptionalDouble(json[field]);
+  return number == null ? null : _requireFinite(number, 'profile "$field"');
+}
+
+double _requireFinite(double number, String label) {
+  if (!number.isFinite) {
+    throw FormatException('$label must be a finite number');
   }
   return number;
 }
@@ -265,15 +324,15 @@ class ProfileStepPressure extends ProfileStep {
       exit: json['exit'] != null
           ? StepExitCondition.fromJson(json['exit'])
           : null,
-      volume: parseDouble(json['volume']),
-      seconds: parseDouble(json['seconds']),
-      weight: parseOptionalDouble(json['weight']),
-      temperature: parseDouble(json['temperature']),
+      volume: _requireFiniteStepNumber(json, 'volume'),
+      seconds: _requireFiniteStepNumber(json, 'seconds'),
+      weight: _optionalFiniteStepNumber(json, 'weight'),
+      temperature: _requireFiniteStepNumber(json, 'temperature'),
       sensor: TemperatureSensor.values.byName(json['sensor']),
       limiter: json['limiter'] != null
           ? StepLimiter.fromJson(json['limiter'])
           : null,
-      pressure: parseDouble(json['pressure']),
+      pressure: _requireFiniteStepNumber(json, 'pressure'),
     );
   }
 
@@ -352,15 +411,15 @@ class ProfileStepFlow extends ProfileStep {
       exit: json['exit'] != null
           ? StepExitCondition.fromJson(json['exit'])
           : null,
-      volume: parseDouble(json['volume']),
-      seconds: parseDouble(json['seconds']),
-      weight: parseOptionalDouble(json['weight']),
-      temperature: parseDouble(json['temperature']),
+      volume: _requireFiniteStepNumber(json, 'volume'),
+      seconds: _requireFiniteStepNumber(json, 'seconds'),
+      weight: _optionalFiniteStepNumber(json, 'weight'),
+      temperature: _requireFiniteStepNumber(json, 'temperature'),
       sensor: TemperatureSensor.values.byName(json['sensor']),
       limiter: json['limiter'] != null
           ? StepLimiter.fromJson(json['limiter'])
           : null,
-      flow: parseDouble(json['flow']),
+      flow: _requireFiniteStepNumber(json, 'flow'),
     );
   }
 
@@ -453,13 +512,13 @@ class ProfileStepPower extends ProfileStep {
       exit: json['exit'] != null
           ? StepExitCondition.fromJson(json['exit'])
           : null,
-      volume: parseDouble(json['volume']),
-      seconds: parseDouble(json['seconds']),
-      weight: parseOptionalDouble(json['weight']),
-      temperature: parseDouble(json['temperature']),
+      volume: _requireFiniteStepNumber(json, 'volume'),
+      seconds: _requireFiniteStepNumber(json, 'seconds'),
+      weight: _optionalFiniteStepNumber(json, 'weight'),
+      temperature: _requireFiniteStepNumber(json, 'temperature'),
       sensor: TemperatureSensor.values.byName(json['sensor']),
       limiter: limiter,
-      power: parseDouble(json['power']),
+      power: _requireFiniteStepNumber(json, 'power'),
     );
   }
 
@@ -547,17 +606,25 @@ class ProfileStepLever extends ProfileStep {
       exit: json['exit'] != null
           ? StepExitCondition.fromJson(json['exit'])
           : null,
-      volume: parseDouble(json['volume']),
-      seconds: parseDouble(json['seconds']),
-      weight: parseOptionalDouble(json['weight']),
-      temperature: parseDouble(json['temperature']),
+      volume: _requireFiniteStepNumber(json, 'volume'),
+      seconds: _requireFiniteStepNumber(json, 'seconds'),
+      weight: _optionalFiniteStepNumber(json, 'weight'),
+      temperature: _requireFiniteStepNumber(json, 'temperature'),
       sensor: TemperatureSensor.values.byName(json['sensor']),
       limiter: json['limiter'] != null
           ? StepLimiter.fromJson(json['limiter'])
           : null,
-      pressure: parseDouble(json['pressure']),
-      leverSpring: parseDouble(json['leverSpring']),
-      leverGive: parseDouble(json['leverGive']),
+      pressure: _requireFiniteStepNumber(json, 'pressure'),
+      leverSpring: _requireFiniteStepNumber(
+        json,
+        'leverSpring',
+        alias: 'lever_spring',
+      ),
+      leverGive: _requireFiniteStepNumber(
+        json,
+        'leverGive',
+        alias: 'lever_give',
+      ),
     );
   }
 
@@ -631,7 +698,7 @@ class StepExitCondition extends Equatable {
     return StepExitCondition(
       type: ExitType.values.byName(json['type']),
       condition: ExitCondition.values.byName(json['condition']),
-      value: parseDouble(json['value']),
+      value: _requireFinite(parseDouble(json['value']), 'exit "value"'),
     );
   }
 

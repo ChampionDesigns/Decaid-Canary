@@ -35,6 +35,44 @@ class _EncoderBackedDe1 extends MockDe1 {
   }
 }
 
+const _placeholder = 'NON_FINITE_PLACEHOLDER';
+
+String _bodyWithNonFiniteValue(
+  String scope,
+  String field,
+  String literal, {
+  bool asWorkflow = false,
+}) {
+  final profile = _profileJson();
+  final target = scope == 'step'
+      ? (profile['steps'] as List<dynamic>)[1] as Map<String, dynamic>
+      : profile;
+  target[field] = _placeholder;
+  return jsonEncode(asWorkflow ? {'profile': profile} : profile)
+      .replaceFirst('"$_placeholder"', literal);
+}
+
+const _nonFiniteRestCases = <(String, String, String, String)>[
+  ('a step temperature of "NaN"', 'step', 'temperature', '"NaN"'),
+  ('a step pressure of "NaN"', 'step', 'pressure', '"NaN"'),
+  ('step seconds of 1e400', 'step', 'seconds', '1e400'),
+  ('a step pressure of -1e400', 'step', 'pressure', '-1e400'),
+  ('a target_weight of "NaN"', 'profile', 'target_weight', '"NaN"'),
+  ('a target_volume of 1e400', 'profile', 'target_volume', '1e400'),
+  (
+    'a tank_temperature of "Infinity"',
+    'profile',
+    'tank_temperature',
+    '"Infinity"',
+  ),
+  (
+    'a target_volume_count_start of 1e400',
+    'profile',
+    'target_volume_count_start',
+    '1e400',
+  ),
+];
+
 Map<String, dynamic> _profileJson({
   Object temperature = 92,
   Object seconds = 30,
@@ -113,12 +151,6 @@ void main() {
             '130.0',
           ),
           (
-            'a step temperature of "NaN"',
-            _profileJson(temperature: 'NaN'),
-            'temperature',
-            'NaN',
-          ),
-          (
             'step seconds of -1e308',
             _profileJson(seconds: -1e308),
             'seconds',
@@ -152,6 +184,28 @@ void main() {
           allOf(contains('step 2'), contains(field), contains(shown)),
         );
         expect(de1.setProfileCalls, 1);
+        expect(de1.transport.writes, isEmpty);
+      });
+    }
+
+    for (final (label, scope, field, literal) in _nonFiniteRestCases) {
+      test('$label answers 400 at parse and sends nothing', () async {
+        de1.transport.writes.clear();
+        final response = await handler(
+          Request(
+            'POST',
+            Uri.parse('http://localhost/api/v1/machine/profile'),
+            body: _bodyWithNonFiniteValue(scope, field, literal),
+            headers: {HttpHeaders.contentTypeHeader: 'application/json'},
+          ),
+        );
+
+        expect(response.statusCode, 400);
+        expect(jsonDecode(await response.readAsString()), {
+          'error': 'Invalid profile',
+          'message': 'FormatException: $scope "$field" must be a finite number',
+        });
+        expect(de1.setProfileCalls, 0);
         expect(de1.transport.writes, isEmpty);
       });
     }
@@ -276,6 +330,61 @@ void main() {
         expect(de1.transport.writes, isEmpty);
       },
     );
+  });
+
+  group('PUT /api/v1/workflow with a non-finite profile or step value', () {
+    for (final (label, scope, field, literal) in _nonFiniteRestCases) {
+      test('$label answers 400, keeps the earlier workflow and uploads '
+          'nothing', () async {
+        final sync = WorkflowDeviceSync(
+          workflowController: workflow,
+          de1Controller: controller,
+          retryDelays: const [
+            Duration(milliseconds: 20),
+            Duration(milliseconds: 40),
+          ],
+        );
+        addTearDown(sync.dispose);
+        final app = Router().plus;
+        WorkflowHandler(
+          controller: workflow,
+          de1controller: controller,
+        ).addRoutes(app);
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+        de1.setProfileCalls = 0;
+        de1.transport.writes.clear();
+        Future<Response> getWorkflow() async => app.call(
+          Request('GET', Uri.parse('http://localhost/api/v1/workflow')),
+        );
+        final before = await (await getWorkflow()).readAsString();
+
+        final response = await app.call(
+          Request(
+            'PUT',
+            Uri.parse('http://localhost/api/v1/workflow'),
+            body: _bodyWithNonFiniteValue(
+              scope,
+              field,
+              literal,
+              asWorkflow: true,
+            ),
+            headers: {'content-type': 'application/json'},
+          ),
+        );
+
+        expect(response.statusCode, 400);
+        expect(jsonDecode(await response.readAsString()), {
+          'error': 'Invalid request',
+          'message': 'FormatException: $scope "$field" must be a finite number',
+        });
+        final after = await getWorkflow();
+        expect(after.statusCode, 200);
+        expect(await after.readAsString(), before);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        expect(de1.setProfileCalls, 0);
+        expect(de1.transport.writes, isEmpty);
+      });
+    }
   });
 
   group('PUT /api/v1/workflow', () {

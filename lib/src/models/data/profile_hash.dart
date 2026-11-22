@@ -13,6 +13,7 @@ class ProfileHash {
       'target_weight': profile.targetWeight,
       'target_volume': profile.targetVolume,
       'target_volume_count_start': profile.targetVolumeCountStart,
+      if (profile.de1Emulation) 'de1_emulation': true,
     };
 
     final jsonStr = _encodeJsonStable(data);

@@ -22,6 +22,7 @@ import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/device.dart' as device;
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
+import 'package:reaprime/src/models/device/de1_emulation_reporter.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/realtime_shot_feature/realtime_shot_feature.dart';
@@ -914,6 +915,7 @@ class De1StateManager with WidgetsBindingObserver {
         serialNumber: info.serialNumber,
         model: info.model,
         firmwareVersion: info.version,
+        de1Emulation: de1EmulationSentBy(de1),
       );
     } catch (e) {
       _logger.warning('Could not read machine snapshot for shot: $e');

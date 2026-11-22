@@ -51,6 +51,7 @@ class UnifiedDe1Transport {
   int _linkGeneration = 0;
   int _appConnects = 0;
   Future<bool>? _recovery;
+  Completer<bool>? _recoveryCancel;
 
   Stream<device.ConnectionState> get connectionState => _transport
       .connectionState
@@ -95,6 +96,16 @@ class UnifiedDe1Transport {
 
   // 0xA014 fused puck-estimator frames (serial `[T]` only).
   Stream<ByteData> get estimator => _estimatorSubject.asBroadcastStream();
+
+  final BehaviorSubject<bool> _estimatorAvailableSubject = BehaviorSubject();
+
+  Stream<bool> get estimatorAvailable => _estimatorAvailableSubject.stream;
+
+  void _setEstimatorAvailable(bool available) {
+    if (_estimatorAvailableSubject.isClosed) return;
+    if (_estimatorAvailableSubject.valueOrNull == available) return;
+    _estimatorAvailableSubject.add(available);
+  }
 
   String _currentBuffer = "";
 
@@ -158,11 +169,16 @@ class UnifiedDe1Transport {
     }
   }
 
-  Future<void> _bleConnect() async {
+  Future<void> _bleConnect({int? generation}) async {
     if (_transport is! BLETransport) {
       throw "wrong transport type";
     }
+    void checkGeneration() {
+      if (generation != null) _throwIfCancelled(generation);
+    }
+
     final services = await _transport.discoverServices();
+    checkGeneration();
     final de1Service = BleServiceIdentifier.parse(de1ServiceUUID);
     if (!de1Service.matchesAny(services)) {
       throw Exception(
@@ -171,36 +187,44 @@ class UnifiedDe1Transport {
       );
     }
 
-    _stateNotification(
-      ByteData.sublistView(
-        await _transport.read(de1ServiceUUID, Endpoint.stateInfo.uuid),
-      ),
+    final stateInfo = await _transport.read(
+      de1ServiceUUID,
+      Endpoint.stateInfo.uuid,
     );
+    checkGeneration();
+    _stateNotification(ByteData.sublistView(stateInfo));
 
-    _shotSettingsNotification(
-      ByteData.sublistView(
-        await _transport.read(de1ServiceUUID, Endpoint.shotSettings.uuid),
-      ),
+    final shotSettings = await _transport.read(
+      de1ServiceUUID,
+      Endpoint.shotSettings.uuid,
     );
+    checkGeneration();
+    _shotSettingsNotification(ByteData.sublistView(shotSettings));
 
     await _transport.subscribe(de1ServiceUUID, Endpoint.stateInfo.uuid, (d) {
       _stateNotification(ByteData.sublistView(Uint8List.fromList(d)));
     });
+    checkGeneration();
     await _transport.subscribe(de1ServiceUUID, Endpoint.shotSample.uuid, (d) {
       _shotSampleNotification(ByteData.sublistView(Uint8List.fromList(d)));
     });
+    checkGeneration();
     await _transport.subscribe(de1ServiceUUID, Endpoint.waterLevels.uuid, (d) {
       _waterLevelsNotification(ByteData.sublistView(Uint8List.fromList(d)));
     });
+    checkGeneration();
     await _transport.subscribe(de1ServiceUUID, Endpoint.shotSettings.uuid, (d) {
       _shotSettingsNotification(ByteData.sublistView(Uint8List.fromList(d)));
     });
+    checkGeneration();
     await _transport.subscribe(de1ServiceUUID, Endpoint.readFromMMR.uuid, (d) {
       _mmrNotification(ByteData.sublistView(Uint8List.fromList(d)));
     });
+    checkGeneration();
     await _transport.subscribe(de1ServiceUUID, Endpoint.fwMapRequest.uuid, (d) {
       _fwMapNotification(ByteData.sublistView(Uint8List.fromList(d)));
     });
+    checkGeneration();
     await _transport.subscribe(
       de1ServiceUUID,
       Endpoint.calibration.uuid,
@@ -222,17 +246,26 @@ class UnifiedDe1Transport {
   /// `<+T>`, where no such stall hazard exists and a machine without the
   /// observer simply never emits a frame.
   Future<bool> subscribeEstimator() async {
-    if (transportType != TransportType.ble) return true;
+    if (transportType != TransportType.ble) {
+      _setEstimatorAvailable(true);
+      return true;
+    }
     final generation = _linkGeneration;
     final t = _transport;
-    if (t is! BLETransport) return false;
+    if (t is! BLETransport) {
+      _setEstimatorAvailable(false);
+      return false;
+    }
 
     // Normalise BOTH sides: this is a safety gate, so it must not depend on a
     // transport honouring a casing convention.
     final present = await t.discoverCharacteristics(de1ServiceUUID);
     final wanted = BleServiceIdentifier.parse(Endpoint.estimator.uuid);
     if (!wanted.matchesAny(present)) {
-      if (generation == _linkGeneration) _estimatorEnabled = false;
+      if (generation == _linkGeneration) {
+        _estimatorEnabled = false;
+        _setEstimatorAvailable(false);
+      }
       _log.info(
         'BengleEstSample characteristic not present on this machine; '
         'skipping the estimator subscribe (firmware predates it, or the '
@@ -248,7 +281,10 @@ class UnifiedDe1Transport {
         ByteData.sublistView(Uint8List.fromList(data)),
       ),
     );
-    if (generation == _linkGeneration) _estimatorEnabled = true;
+    if (generation == _linkGeneration) {
+      _estimatorEnabled = true;
+      _setEstimatorAvailable(true);
+    }
     return true;
   }
 
@@ -327,6 +363,9 @@ class UnifiedDe1Transport {
     _linkGeneration++;
     _recovering = false;
     _recovery = null;
+    final cancel = _recoveryCancel;
+    _recoveryCancel = null;
+    if (cancel != null && !cancel.isCompleted) cancel.complete(false);
   }
 
   void _throwIfCancelled(int generation) {
@@ -352,6 +391,9 @@ class UnifiedDe1Transport {
     }
     if (!_calibrationSubject.isClosed) _calibrationSubject.close();
     if (!_estimatorSubject.isClosed) _estimatorSubject.close();
+    if (!_estimatorAvailableSubject.isClosed) {
+      _estimatorAvailableSubject.close();
+    }
 
     await _transport.dispose();
   }
@@ -432,6 +474,7 @@ class UnifiedDe1Transport {
     _calibrationSubject = PublishSubject();
     _bengleShotSampleEnabled = false;
     _estimatorEnabled = false;
+    _setEstimatorAvailable(false);
     _estimatorSubject.close();
     _estimatorSubject = BehaviorSubject.seeded(ByteData(0));
   }
@@ -582,6 +625,10 @@ class UnifiedDe1Transport {
       return;
     }
     _estimatorSubject.add(d);
+  }
+
+  void _clearEstimatorSample() {
+    if (!_estimatorSubject.isClosed) _estimatorSubject.add(ByteData(0));
   }
 
   /// Test seam behind [UnifiedDe1.debugInjectEstimator]: push a raw 0xA014
@@ -967,10 +1014,13 @@ class UnifiedDe1Transport {
       _log.info('BLE recovery already running; waiting for its result');
       return running;
     }
-    final recovery = _recoverBleLink();
+    final cancel = Completer<bool>();
+    final recovery = Future.any([_recoverBleLink(), cancel.future]);
     _recovery = recovery;
+    _recoveryCancel = cancel;
     recovery.whenComplete(() {
       if (identical(_recovery, recovery)) _recovery = null;
+      if (identical(_recoveryCancel, cancel)) _recoveryCancel = null;
     }).ignore();
     return recovery;
   }
@@ -990,15 +1040,16 @@ class UnifiedDe1Transport {
       }
       await _transport.connect();
       _throwIfCancelled(generation);
-      await _bleConnect();
+      await _bleConnect(generation: generation);
       _throwIfCancelled(generation);
       if (restoreBengleShotSample) {
         await subscribeBengleShotSample();
         _throwIfCancelled(generation);
       }
       if (restoreEstimator) {
-        await subscribeEstimator();
+        final estimatorLive = await subscribeEstimator();
         _throwIfCancelled(generation);
+        if (!estimatorLive) _clearEstimatorSample();
       }
       _log.info('BLE reconnect successful after timeout');
       return true;
@@ -1010,7 +1061,10 @@ class UnifiedDe1Transport {
       } else {
         _log.severe('BLE reconnect failed, disconnecting', reconnectError);
       }
-      if (generation == _linkGeneration) _recovering = false;
+      if (generation == _linkGeneration) {
+        _recovering = false;
+        _setEstimatorAvailable(false);
+      }
       unawaited(
         Future.sync(_transport.disconnect).catchError((
           Object e,

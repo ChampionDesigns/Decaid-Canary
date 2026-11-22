@@ -85,4 +85,6 @@ abstract class BengleInterface extends De1Interface {
   /// characteristic. Silent until the first frame arrives, so a subscriber can
   /// treat "no event" as "this machine has no estimator".
   Stream<BengleEstSample> get puckEstimator;
+
+  Stream<bool> get puckEstimatorAvailable;
 }

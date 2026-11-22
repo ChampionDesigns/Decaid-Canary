@@ -23,6 +23,7 @@ import 'package:rxdart/rxdart.dart';
 
 import '../helpers/mock_device_discovery_service.dart';
 import '../helpers/mock_settings_service.dart';
+import '../helpers/non_de1_profile_step.dart';
 import '../helpers/test_de1.dart';
 
 class _TestDe1Controller extends De1Controller {
@@ -322,6 +323,156 @@ void main() {
       });
     },
   );
+
+  group('DE1 emulation provenance', () {
+    Future<ShotRecord> shotWith({
+      required bool profileFlag,
+      required bool support,
+    }) async {
+      final workflow = workflowController.currentWorkflow;
+      workflowController.setWorkflow(
+        workflow.copyWith(
+          id: workflow.id,
+          profile: workflow.profile.copyWith(de1Emulation: profileFlag),
+        ),
+      );
+      testDe1.de1EmulationSupported = support;
+      await testDe1.setProfile(workflowController.currentWorkflow.profile);
+      await driveShot();
+      return storage.storedShots.single;
+    }
+
+    test('the profile on the machine decides, not the workflow', () async {
+      final workflow = workflowController.currentWorkflow;
+      testDe1.de1EmulationSupported = true;
+      await testDe1.setProfile(workflow.profile.copyWith(de1Emulation: true));
+      workflowController.setWorkflow(
+        workflow.copyWith(
+          id: workflow.id,
+          profile: workflow.profile.copyWith(de1Emulation: false),
+        ),
+      );
+      await driveShot();
+      expect(storage.storedShots.single.de1Emulation, isTrue);
+    });
+
+    test('an emulated workflow profile that the machine did not get records '
+        'a native shot', () async {
+      final workflow = workflowController.currentWorkflow;
+      testDe1.de1EmulationSupported = true;
+      await testDe1.setProfile(workflow.profile.copyWith(de1Emulation: false));
+      workflowController.setWorkflow(
+        workflow.copyWith(
+          id: workflow.id,
+          profile: workflow.profile.copyWith(de1Emulation: true),
+        ),
+      );
+      await driveShot();
+      expect(storage.storedShots.single.de1Emulation, isFalse);
+    });
+
+    test('flag ON and machine support record an emulated shot', () async {
+      final record = await shotWith(profileFlag: true, support: true);
+      expect(record.de1Emulation, isTrue);
+      expect(record.workflow.machine?.de1Emulation, isTrue);
+      expect(record.toJson()['de1Emulation'], isTrue);
+      expect(record.displayProfileTitle, startsWith('B-DE1 · '));
+    });
+
+    for (final (flag, support) in [
+      (true, false),
+      (false, true),
+      (false, false),
+    ]) {
+      test('flag $flag and support $support record a native shot', () async {
+        final record = await shotWith(profileFlag: flag, support: support);
+        expect(record.de1Emulation, isFalse);
+        expect(record.toJson().containsKey('de1Emulation'), isFalse);
+        expect(record.displayProfileTitle, record.workflow.profile.title);
+      });
+    }
+
+    test('a machine profile with a step that is not pressure or flow '
+        'records a native shot', () async {
+      final workflow = workflowController.currentWorkflow;
+      final flagged = workflow.profile.copyWith(de1Emulation: true);
+      testDe1.de1EmulationSupported = true;
+      await testDe1.setProfile(
+        flagged.copyWith(steps: [...flagged.steps, const NonDe1ProfileStep()]),
+      );
+      workflowController.setWorkflow(
+        workflow.copyWith(id: workflow.id, profile: flagged),
+      );
+      await driveShot();
+      final record = storage.storedShots.single;
+      expect(record.de1Emulation, isFalse);
+      expect(record.toJson().containsKey('de1Emulation'), isFalse);
+      expect(record.displayProfileTitle, flagged.title);
+      expect(record.workflow.profile.de1Emulation, isTrue);
+    });
+
+    test('the recorded profile keeps its title and flag', () async {
+      final title = workflowController.currentWorkflow.profile.title;
+      final record = await shotWith(profileFlag: true, support: true);
+      expect(record.workflow.profile.title, title);
+      expect(record.workflow.profile.de1Emulation, isTrue);
+      expect(workflowController.currentWorkflow.profile.title, title);
+      expect(
+        workflowController.currentWorkflow.machine?.de1Emulation,
+        isNot(isTrue),
+      );
+    });
+
+    test('a repeated emulated shot does not carry its flag over', () async {
+      final workflow = workflowController.currentWorkflow;
+      workflowController.setWorkflow(
+        workflow.copyWith(
+          id: workflow.id,
+          machine: const WorkflowMachine(de1Emulation: true),
+        ),
+      );
+      final record = await shotWith(profileFlag: false, support: true);
+      expect(record.de1Emulation, isFalse);
+    });
+
+    test(
+      'a profile change after the shot starts does not change the flag',
+      () async {
+        final workflow = workflowController.currentWorkflow;
+        workflowController.setWorkflow(
+          workflow.copyWith(
+            id: workflow.id,
+            profile: workflow.profile.copyWith(de1Emulation: true),
+          ),
+        );
+        testDe1.de1EmulationSupported = true;
+        await testDe1.setProfile(workflowController.currentWorkflow.profile);
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.preparingForShot,
+        );
+        await pump();
+        final started = workflowController.currentWorkflow;
+        final changed = started.profile.copyWith(de1Emulation: false);
+        workflowController.setWorkflow(
+          started.copyWith(id: started.id, profile: changed),
+        );
+        await testDe1.setProfile(changed);
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.pouring,
+        );
+        await pump();
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.pouringDone,
+        );
+        await pump();
+
+        expect(storage.storedShots.single.de1Emulation, isTrue);
+      },
+    );
+  });
 
   test(
     'failed machine capture persists unavailable instead of stale identity',

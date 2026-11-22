@@ -1844,6 +1844,137 @@ void main() {
     },
   );
 
+  group('DE1 emulation name', () {
+    Map<String, dynamic> namedShot(String title, {bool? de1Emulation}) {
+      final shot = _shot(
+        annotations: {
+          'extras': {'visualizerId': 'visualizer-1'},
+        },
+      );
+      (shot['workflow'] as Map)['profile'] = {
+        'title': title,
+        'target_weight': 36,
+        'de1_emulation': true,
+      };
+      if (de1Emulation != null) shot['de1Emulation'] = de1Emulation;
+      return shot;
+    }
+
+    Future<String?> uploadedTitle(Map<String, dynamic> shot) async {
+      final manager = await _loadPlugin(_uploadFetchSource(shot));
+      _startAutoUpload(manager);
+      final upload = await _waitForJs(
+        manager,
+        'globalThis.__upload',
+      ) as Map<String, dynamic>;
+      return (upload['profile'] as Map)['title'] as String?;
+    }
+
+    Future<Object?> forcedSyncTitle(Map<String, dynamic> shot) async {
+      final manager = await _loadPlugin('''
+        globalThis.fetch = async (url, init = {}) => {
+          if (url.endsWith('/shots/shot-1') && (!init.method || init.method === 'GET')) {
+            return { ok: true, json: async () => (${jsonEncode(shot)}) };
+          }
+          if (url.endsWith('/shots/visualizer-1?essentials=1')) {
+            return { ok: true, json: async () => ({ id: 'visualizer-1', tags: [] }) };
+          }
+          if (url.endsWith('/shots/visualizer-1') && init.method === 'PATCH') {
+            globalThis.__forcedPatch = JSON.parse(init.body);
+            return { ok: true, json: async () => ({ id: 'visualizer-1', updated_at: 1 }) };
+          }
+          throw new Error('Unexpected URL: ' + url + ' ' + (init.method || 'GET'));
+        };
+      ''');
+      await _callApi(manager, 'forwardSyncNow', const {'shotId': 'shot-1'});
+      final patch = await _waitForJs(
+        manager,
+        'globalThis.__forcedPatch',
+      ) as Map<String, dynamic>;
+      return (patch['shot'] as Map)['profile_title'];
+    }
+
+    test('upload names an emulated shot B-DE1', () async {
+      expect(
+        await uploadedTitle(namedShot('Blooming', de1Emulation: true)),
+        'B-DE1 · Blooming',
+      );
+    });
+
+    test('upload keeps the plain name of a native shot', () async {
+      expect(await uploadedTitle(namedShot('Blooming')), 'Blooming');
+      expect(
+        await uploadedTitle(namedShot('Blooming', de1Emulation: false)),
+        'Blooming',
+      );
+    });
+
+    test('upload does not double the prefix', () async {
+      expect(
+        await uploadedTitle(namedShot('B-DE1 · Blooming', de1Emulation: true)),
+        'B-DE1 · Blooming',
+      );
+    });
+
+    test('upload does not change the local shot profile', () async {
+      final shot = namedShot('Blooming', de1Emulation: true);
+      final manager = await _loadPlugin(_uploadFetchSource(shot));
+      _startAutoUpload(manager);
+      await _waitForJs(manager, 'globalThis.__upload');
+      final stamp = await _waitForJs(
+        manager,
+        'globalThis.__uploadStamp',
+      ) as Map<String, dynamic>;
+      expect(stamp.containsKey('workflow'), isFalse);
+    });
+
+    for (final (title, plain) in [
+      ('B-DE1 · Blooming', 'Blooming'),
+      ('Blooming', 'Blooming'),
+    ]) {
+      test('import of the profile "$title" stores "$plain"', () async {
+        final manager = await _loadPlugin('''
+          globalThis.fetch = async (url, init = {}) => {
+            if (url.includes('/shots/shared?code=')) {
+              return { ok: true, json: async () => ([{ id: 'visualizer-1' }]) };
+            }
+            if (url.includes('/shots/visualizer-1/profile')) {
+              return { ok: true, json: async () => ({ id: 'p1', title: '$title' }) };
+            }
+            if (url.endsWith('/api/v1/profiles') && init.method === 'POST') {
+              globalThis.__importBody = JSON.parse(init.body);
+              return { ok: true, json: async () => ({ id: 'profile:1' }) };
+            }
+            throw new Error('Unexpected URL: ' + url + ' ' + (init.method || 'GET'));
+          };
+        ''');
+        final response = await _callApi(manager, 'import', const {
+          'shareCode': 'abcd',
+        });
+        final body = await _waitForJs(
+          manager,
+          'globalThis.__importBody',
+        ) as Map<String, dynamic>;
+        expect((body['profile'] as Map)['title'], plain);
+        expect(jsonDecode(response['body'] as String)['profileTitle'], plain);
+      });
+    }
+
+    test('forced sync sends the B-DE1 name for an emulated shot', () async {
+      expect(
+        await forcedSyncTitle(namedShot('Blooming', de1Emulation: true)),
+        'B-DE1 · Blooming',
+      );
+      expect(await forcedSyncTitle(namedShot('Blooming')), 'Blooming');
+      expect(
+        await forcedSyncTitle(
+          namedShot('B-DE1 · Blooming', de1Emulation: true),
+        ),
+        'B-DE1 · Blooming',
+      );
+    });
+  });
+
   test('plugin source and manifest versions match', () {
     final sourceVersion = RegExp(r'version:\s*"([^"]+)"')
         .firstMatch(_pluginSource)

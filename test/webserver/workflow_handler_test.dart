@@ -1017,6 +1017,122 @@ void main() {
     });
   });
 
+  group('PUT /api/v1/workflow — DE1 emulation from a complete profile', () {
+    Future<void> seedDe1EmulationOn() async {
+      final current = workflowController.currentWorkflow;
+      workflowController.setWorkflow(
+        current.copyWith(profile: current.profile.copyWith(de1Emulation: true)),
+      );
+      await _settleHandler(spy);
+      expect(workflowController.currentWorkflow.profile.de1Emulation, isTrue);
+    }
+
+    Map<String, dynamic> completeProfileJson() {
+      final json = workflowController.currentWorkflow.profile
+          .copyWith(de1Emulation: false)
+          .toJson();
+      expect(json.containsKey('de1_emulation'), isFalse);
+      expect(json.containsKey('steps'), isTrue);
+      return json;
+    }
+
+    Future<Map<String, dynamic>> putAndDecode(Map<String, dynamic> body) async {
+      final response = await put(body);
+      expect(response.statusCode, 200);
+      return decode(response);
+    }
+
+    test(
+      'a complete profile without the key turns DE1 emulation off',
+      () async {
+        await seedDe1EmulationOn();
+
+        final body = await putAndDecode({'profile': completeProfileJson()});
+
+        expect(body['profile'].containsKey('de1_emulation'), isFalse);
+        expect(
+          workflowController.currentWorkflow.profile.de1Emulation,
+          isFalse,
+        );
+      },
+    );
+
+    test('a complete profile with false turns DE1 emulation off', () async {
+      await seedDe1EmulationOn();
+
+      final body = await putAndDecode({
+        'profile': {...completeProfileJson(), 'de1_emulation': false},
+      });
+
+      expect(body['profile'].containsKey('de1_emulation'), isFalse);
+      expect(workflowController.currentWorkflow.profile.de1Emulation, isFalse);
+    });
+
+    test('a complete profile with true keeps DE1 emulation on', () async {
+      await seedDe1EmulationOn();
+
+      final body = await putAndDecode({
+        'profile': {...completeProfileJson(), 'de1_emulation': true},
+      });
+
+      expect(body['profile']['de1_emulation'], isTrue);
+      expect(workflowController.currentWorkflow.profile.de1Emulation, isTrue);
+    });
+
+    test('a complete profile with a non-boolean value turns it off', () async {
+      await seedDe1EmulationOn();
+
+      final body = await putAndDecode({
+        'profile': {...completeProfileJson(), 'de1_emulation': 'true'},
+      });
+
+      expect(body['profile'].containsKey('de1_emulation'), isFalse);
+      expect(workflowController.currentWorkflow.profile.de1Emulation, isFalse);
+    });
+
+    test('a refused complete profile keeps DE1 emulation', () async {
+      await seedDe1EmulationOn();
+
+      final response = await put({
+        'profile': {...completeProfileJson(), 'steps': null},
+      });
+
+      expect(response.statusCode, 400);
+      expect(workflowController.currentWorkflow.profile.de1Emulation, isTrue);
+    });
+
+    test('a partial profile without steps keeps DE1 emulation', () async {
+      await seedDe1EmulationOn();
+
+      for (final patch in <Map<String, dynamic>>[
+        {'title': 'Renamed'},
+        {'target_weight': 40.0},
+      ]) {
+        final body = await putAndDecode({'profile': patch});
+
+        expect(body['profile']['de1_emulation'], isTrue, reason: '$patch');
+        expect(
+          workflowController.currentWorkflow.profile.de1Emulation,
+          isTrue,
+          reason: '$patch',
+        );
+      }
+      expect(workflowController.currentWorkflow.profile.title, 'Renamed');
+      expect(workflowController.currentWorkflow.profile.targetWeight, 40.0);
+    });
+
+    test('a body without a profile keeps DE1 emulation', () async {
+      await seedDe1EmulationOn();
+
+      final body = await putAndDecode({
+        'context': {'targetDoseWeight': 19.0},
+      });
+
+      expect(body['profile']['de1_emulation'], isTrue);
+      expect(workflowController.currentWorkflow.profile.de1Emulation, isTrue);
+    });
+  });
+
   group('PUT /api/v1/workflow — read-modify-write race', () {
     test(
       'multi-field PUT: final shot-settings write reflects BOTH changes',
