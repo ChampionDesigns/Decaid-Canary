@@ -1090,6 +1090,17 @@ void main() {
       expect(workflowController.currentWorkflow.profile.de1Emulation, isFalse);
     });
 
+    test('a refused complete profile keeps DE1 emulation', () async {
+      await seedDe1EmulationOn();
+
+      final response = await put({
+        'profile': {...completeProfileJson(), 'steps': null},
+      });
+
+      expect(response.statusCode, 400);
+      expect(workflowController.currentWorkflow.profile.de1Emulation, isTrue);
+    });
+
     test('a partial profile without steps keeps DE1 emulation', () async {
       await seedDe1EmulationOn();
 
