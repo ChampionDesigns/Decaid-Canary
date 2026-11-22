@@ -95,7 +95,11 @@ void main() {
     final deadline = DateTime.now().add(const Duration(seconds: 3));
     while (DateTime.now().isBefore(deadline)) {
       final tails = tailsFor(stepCount);
-      if (tails.isNotEmpty && tails.last[3] == want) return want;
+      if (tails.isNotEmpty &&
+          tails.last[3] == want &&
+          de1EmulationSentBy(bengle) == (want == 1)) {
+        return want;
+      }
       await Future<void>.delayed(const Duration(milliseconds: 5));
     }
     final tails = tailsFor(stepCount);
@@ -141,11 +145,16 @@ void main() {
     expect(served['profile']['de1_emulation'], isTrue);
     expect(served['profile']['target_weight'], 40.0);
     final deadline = DateTime.now().add(const Duration(seconds: 3));
-    while (tailsFor(steps).length == tailsBefore &&
+    while ((tailsFor(steps).length == tailsBefore ||
+            !de1EmulationSentBy(bengle)) &&
         DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 5));
     }
-    expect(tailsFor(steps).length, greaterThan(tailsBefore));
+    expect(
+      tailsFor(steps).length,
+      greaterThan(tailsBefore),
+      reason: 'the patch did not write a new profile tail frame',
+    );
     expect(tailsFor(steps).last[3], 1);
     expect(de1EmulationSentBy(bengle), isTrue);
   });
