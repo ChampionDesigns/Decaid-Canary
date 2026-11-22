@@ -1764,6 +1764,11 @@ paths:
         mean stop-at-weight is off: send `0` to turn it off. Every other `context` field still
         accepts an explicit `null` to clear it, so clearing is per field — there is no
         whole-object clear.
+        A `profile` object that contains `steps` is a complete profile: its `de1_emulation`
+        replaces the current value, and the flag is on only when the request sends `true`.
+        A complete profile that omits `de1_emulation` turns DE1 emulation off. A partial
+        `profile` object without `steps` is deep-merged and keeps the current `de1_emulation`
+        unless it sends the key.
         The server does not debounce or combine separate requests. Machine side effects from
         workflow PUT requests do not execute concurrently,
         so a request may wait behind an in-flight machine operation. Each response describes
