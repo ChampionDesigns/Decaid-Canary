@@ -68,6 +68,7 @@ class De1StateManager with WidgetsBindingObserver {
 
   String? _currentShotId;
   WorkflowMachine? _currentShotMachine;
+  Profile? _currentShotProfile;
 
   MachineSnapshot? _latestSnapshot;
 
@@ -792,6 +793,7 @@ class De1StateManager with WidgetsBindingObserver {
       sensorController: _sensorController,
     );
     _currentShotMachine = _captureMachineSnapshot();
+    _currentShotProfile = _workflowController.currentWorkflow.profile;
 
     _currentShotSnapshots.clear();
     _currentShotId = Uuid().v4();
@@ -871,8 +873,9 @@ class De1StateManager with WidgetsBindingObserver {
   }
 
   void _persistShotIfNeeded() {
-    final beverageType =
-        _workflowController.currentWorkflow.profile.beverageType;
+    final profile =
+        _currentShotProfile ?? _workflowController.currentWorkflow.profile;
+    final beverageType = profile.beverageType;
     if (beverageType == BeverageType.cleaning ||
         beverageType == BeverageType.calibrate ||
         _currentShotSequencer == null) {
@@ -885,6 +888,7 @@ class De1StateManager with WidgetsBindingObserver {
 
     final workflow = baseWorkflow.copyWith(
       id: baseWorkflow.id,
+      profile: profile,
       machine: _currentShotMachine,
       clearMachine: _currentShotMachine == null,
     );
@@ -962,6 +966,7 @@ class De1StateManager with WidgetsBindingObserver {
 
     _currentShotSnapshots.clear();
     _currentShotMachine = null;
+    _currentShotProfile = null;
 
     if (_currentShotId != null) {
       _currentShotId = null;

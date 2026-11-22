@@ -472,6 +472,52 @@ void main() {
         expect(storage.storedShots.single.de1Emulation, isTrue);
       },
     );
+
+    test('a workflow change during the shot keeps the recipe and the mode '
+        'that the shot started with', () async {
+      final workflow = workflowController.currentWorkflow;
+      final profileA = workflow.profile.copyWith(
+        title: 'Recipe A',
+        de1Emulation: true,
+      );
+      workflowController.setWorkflow(
+        workflow.copyWith(id: workflow.id, profile: profileA),
+      );
+      testDe1.de1EmulationSupported = true;
+      await testDe1.setProfile(profileA);
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.preparingForShot,
+      );
+      await pump();
+
+      final started = workflowController.currentWorkflow;
+      final profileB = started.profile.copyWith(
+        title: 'Recipe B',
+        de1Emulation: false,
+      );
+      workflowController.setWorkflow(
+        started.copyWith(id: started.id, profile: profileB),
+      );
+      await testDe1.setProfile(profileB);
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouring,
+      );
+      await pump();
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouringDone,
+      );
+      await pump();
+
+      final record = storage.storedShots.single;
+      expect(record.workflow.profile, profileA);
+      expect(record.workflow.profile.title, 'Recipe A');
+      expect(record.de1Emulation, isTrue);
+      expect(record.displayProfileTitle, 'B-DE1 · Recipe A');
+      expect(workflowController.currentWorkflow.profile, profileB);
+    });
   });
 
   test(
