@@ -407,6 +407,7 @@ class UnifiedDe1
   int _voltage = -1;
   int _refillKitDetected = -1;
   bool _lastTailDe1Emulation = false;
+  int _rawProfileWrites = 0;
 
   @override
   bool get lastUploadedProfileDe1Emulation => _lastTailDe1Emulation;
@@ -764,8 +765,9 @@ class UnifiedDe1
       return;
     }
     _currentProfile = null;
+    final rawProfileWrites = _rawProfileWrites;
     await _sendProfile(profile);
-    _currentProfile = profile;
+    if (rawProfileWrites == _rawProfileWrites) _currentProfile = profile;
     await Future.delayed(ConnectionTimings.profileDownloadGuard);
   }
 

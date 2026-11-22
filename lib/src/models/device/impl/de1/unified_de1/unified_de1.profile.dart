@@ -37,9 +37,14 @@ class ProfileValueUnsupportedException extends ProfileModeUnsupportedException
 extension UnifiedDe1Profile on UnifiedDe1 {
   Future<void> _sendProfile(Profile profile) async {
     _assertProfileEncodable(profile);
+    _lastTailDe1Emulation = false;
+    final rawProfileWrites = _rawProfileWrites;
     await _writeHeader(profile);
     await _writeSteps(profile);
-    await _writeTail(profile);
+    final tailDe1Emulation = await _writeTail(profile);
+    if (rawProfileWrites == _rawProfileWrites) {
+      _lastTailDe1Emulation = tailDe1Emulation;
+    }
     await _writeMMRInt(MMRItem.tankTemp, profile.tankTemperature.round());
   }
 
@@ -316,7 +321,7 @@ extension UnifiedDe1Profile on UnifiedDe1 {
     }
   }
 
-  Future<void> _writeTail(Profile profile) async {
+  Future<bool> _writeTail(Profile profile) async {
     Uint8List data = Uint8List(8);
 
     data[0] = profile.steps.length;
@@ -330,7 +335,7 @@ extension UnifiedDe1Profile on UnifiedDe1 {
     data[6] = 0;
     data[7] = 0;
     await _transport.writeWithResponse(Endpoint.frameWrite, data);
-    _lastTailDe1Emulation = data[3] == 1;
+    return data[3] == 1;
   }
 }
 
