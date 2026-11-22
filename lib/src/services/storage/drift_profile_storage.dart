@@ -50,6 +50,7 @@ class DriftProfileStorageService implements ProfileStorageService {
       await _db.profileDao.insertProfile(
         ProfileMapper.toCompanion(replacement),
       );
+      await _db.profileDao.reparentChildren(oldId, replacement.id);
       await _db.profileDao.deleteProfile(oldId);
     });
   }

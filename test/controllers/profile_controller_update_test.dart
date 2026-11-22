@@ -139,20 +139,23 @@ void main() {
     });
 
     test(
-      'rejects a target ID collision without changing either profile',
+      'returns the existing record on a target ID collision without changing '
+      'either profile',
       () async {
         final target = ProfileRecord.create(
           profile: _profile(tankTemperature: 94, title: 'Target'),
         );
         await storage.store(target);
 
-        await expectLater(
-          controller.update(original.id, profile: target.profile),
-          throwsArgumentError,
+        final updated = await controller.update(
+          original.id,
+          profile: target.profile,
         );
 
+        expect(updated, target);
         expect(await storage.get(original.id), original);
         expect(await storage.get(target.id), target);
+        expect(storage.records, hasLength(2));
       },
     );
 
