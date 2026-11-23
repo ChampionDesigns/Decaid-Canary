@@ -4142,9 +4142,11 @@ paths:
         `metadata: null` clears metadata; supplied metadata replaces it. The profile
         itself is non-nullable, so `profile: null` returns `400`.
         Cannot modify default profiles' content, only metadata. Execution changes
-        that produce a new profile ID replace the old record atomically. If the
-        target ID already exists, the update is rejected and both records remain
-        unchanged.
+        that produce a new profile ID replace the old record atomically, keep its
+        visibility, and move its child profiles (`parentId`) to the new ID. If the
+        target ID already exists, the response is that existing record with `200`,
+        as POST /api/v1/profiles does for an equal profile, and both records
+        remain unchanged.
       tags: [Profiles]
       parameters:
         - name: id
@@ -4175,8 +4177,8 @@ paths:
                 $ref: '#/components/schemas/ProfileRecord'
         "400":
           description: >-
-            Bad Request (profile not found, target ID already exists, cannot
-            modify default profile, or an invalid step limiter). A step limiter
+            Bad Request (profile not found, cannot modify default profile, or an
+            invalid step limiter). A step limiter
             without a numeric `value` or `range` is refused with the same
             message that POST /api/v1/profiles returns.
         "500":

@@ -77,6 +77,12 @@ class ProfileDao extends DatabaseAccessor<AppDatabase> with _$ProfileDaoMixin {
     )..where((p) => p.id.equals(profile.id.value))).write(profile);
   }
 
+  Future<void> reparentChildren(String oldParentId, String newParentId) {
+    return (update(profileRecords)
+          ..where((p) => p.parentId.equals(oldParentId)))
+        .write(ProfileRecordsCompanion(parentId: Value(newParentId)));
+  }
+
   Future<void> deleteProfile(String id) {
     return (delete(profileRecords)..where((p) => p.id.equals(id))).go();
   }
