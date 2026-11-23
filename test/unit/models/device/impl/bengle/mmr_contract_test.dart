@@ -506,10 +506,19 @@ registers:
       }
     });
 
-    test('every since is a contract_version or unreleased', () {
-      final bad = _contract().rows
+    test('every since is a contract_version up to the current one, or '
+        'unreleased', () {
+      final contract = _contract();
+      bool isVersion(String since) {
+        final version = int.tryParse(since);
+        return version != null &&
+            version >= 1 &&
+            version <= contract.contractVersion;
+      }
+
+      final bad = contract.rows
           .where((r) => r.since != null && !r.unreleased)
-          .where((r) => int.tryParse(r.since!) == null)
+          .where((r) => !isVersion(r.since!))
           .map((r) => '${r.name}: ${r.since}');
       expect(bad, isEmpty);
     });
