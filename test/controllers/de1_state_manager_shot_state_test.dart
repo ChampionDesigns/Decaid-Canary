@@ -610,7 +610,7 @@ void main() {
       Object? readError,
     }) async {
       final transport = NativeShapeMachineTransport()
-        ..image = image
+        ..image = nativeShapeReportImage(latch: 0)
         ..readError = readError;
       addTearDown(transport.dispose);
       transport.queuePaletteHydrationResponses();
@@ -625,6 +625,13 @@ void main() {
       );
       await bengle.onConnect();
       addTearDown(bengle.onDisconnect);
+      final connectRead = DateTime.now().add(const Duration(seconds: 5));
+      while (transport.reportRequests.isEmpty &&
+          DateTime.now().isBefore(connectRead)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      transport.image = image;
       await testDe1.dispose();
       testDe1 = _BengleReportingDe1(bengle);
       de1Controller.connect(testDe1);

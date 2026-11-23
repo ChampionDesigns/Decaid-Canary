@@ -28,6 +28,8 @@ class NativeShapeMachineTransport extends FakeBleTransport {
   Object? readError;
   void Function(int readIndex)? afterRead;
   int reportReads = 0;
+  Future<void>? replyGate;
+  Future<void>? frameWriteGate;
 
   bool _isReportRead(String uuid, Uint8List data) {
     if (uuid != Endpoint.readFromMMR.uuid || data.length < 4) return false;
@@ -54,6 +56,10 @@ class NativeShapeMachineTransport extends FakeBleTransport {
       withResponse: withResponse,
       timeout: timeout,
     );
+    final frameGate = frameWriteGate;
+    if (frameGate != null && characteristicUUID == Endpoint.frameWrite.uuid) {
+      await frameGate;
+    }
     if (!_isReportRead(characteristicUUID, data)) return;
     final error = readError;
     if (error != null) throw error;
@@ -65,7 +71,14 @@ class NativeShapeMachineTransport extends FakeBleTransport {
       final reply = Uint8List(20)
         ..setRange(0, 4, data)
         ..setRange(4, 20, current, offset);
-      scheduleMicrotask(() => emitNotification(Endpoint.readFromMMR, reply));
+      final gate = replyGate;
+      if (gate == null) {
+        scheduleMicrotask(() => emitNotification(Endpoint.readFromMMR, reply));
+      } else {
+        unawaited(
+          gate.then((_) => emitNotification(Endpoint.readFromMMR, reply)),
+        );
+      }
     }
     afterRead?.call(readIndex);
   }

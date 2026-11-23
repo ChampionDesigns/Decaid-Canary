@@ -216,10 +216,15 @@ machine enters espresso. The read takes bytes 0-15 and 16-31, then bytes 0-15
 again; the latch count (byte 2) of the first and the last read must agree, or
 the read starts again (at most three passes). Decaid keeps a report only when
 its latch count differs from the count of the last read before the shot. It
-takes that count after each profile upload, and forgets it at each connect.
-With no count known before the shot, Decaid keeps the first good read and logs
-that it had no baseline. Decaid clears the report only when the next shot
-starts.
+forgets that count at each connect, then reads bytes 0-15 once after the
+connect sequence, and again after each profile upload. A shot that starts
+before the connect read ends has no count: Decaid keeps the first good read
+and logs that it had no baseline. After a profile upload while the shot runs,
+Decaid does the full read. When its latch count differs from the kept report,
+it replaces the report: the machine latches again in heat-up when an upload
+changes the block. A read waits for a profile upload that is in progress, and
+no read starts after the machine leaves espresso. Decaid clears the report
+only when the next shot starts.
 
 #### Hash Types
 

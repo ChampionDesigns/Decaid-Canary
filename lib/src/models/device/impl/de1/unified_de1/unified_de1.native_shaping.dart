@@ -118,6 +118,31 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
     return null;
   }
 
+  void _readNativeShapingAtConnect() {
+    final read = _profileUploadQueue.then(
+      (_) =>
+          _readNativeShapingBaseline(nativeShapingReadTimings.requestTimeout),
+    );
+    _profileUploadQueue = read.catchError((Object _) {});
+  }
+
+  Future<void> _readNativeShapingAfterUpload(Duration timeout) =>
+      _nativeShapingShotRunning
+      ? _readNativeShapingRelatch()
+      : _readNativeShapingBaseline(timeout);
+
+  Future<void> _readNativeShapingRelatch() async {
+    final report = await _readNativeShapeLatched();
+    if (report == null || !_nativeShapingShotRunning) return;
+    final accepted = _nativeShapingReport;
+    if (accepted == null || accepted.latchCount == report.latchCount) return;
+    _log.info(
+      'Native shaping re-latched after a profile upload during the shot '
+      '(latch ${accepted.latchCount} to ${report.latchCount})',
+    );
+    _nativeShapingReport = report;
+  }
+
   Future<void> _readNativeShapingBaseline(Duration timeout) async {
     try {
       final head = await _readNativeShapeHalf(

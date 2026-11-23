@@ -450,6 +450,11 @@ class UnifiedDe1
 
   @override
   Future<void> onConnect() async {
+    await _runConnectSequence();
+    if (isBengle) _readNativeShapingAtConnect();
+  }
+
+  Future<void> _runConnectSequence() async {
     initRawStream();
     await _transport.connect();
     _watchShotStateForNativeShaping();
@@ -793,7 +798,7 @@ class UnifiedDe1
     const guard = ConnectionTimings.profileDownloadGuard;
     await Future.wait([
       Future<void>.delayed(guard),
-      if (isBengle) _readNativeShapingBaseline(guard),
+      if (isBengle) _readNativeShapingAfterUpload(guard),
     ]);
   }
 

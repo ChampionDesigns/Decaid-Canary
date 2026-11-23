@@ -1,10 +1,6 @@
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:logging/logging.dart';
 import 'package:reaprime/src/models/data/native_shaping.dart';
-import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/de1_rawmessage.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
@@ -12,119 +8,18 @@ import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart
 import 'package:reaprime/src/models/device/native_shaping_reporter.dart';
 
 import '../../helpers/native_shape_machine_transport.dart';
-
-const _espresso = espressoStateByte;
-const _idle = idleStateByte;
-
-const _timings = NativeShapingReadTimings(
-  firstReadDelay: Duration(milliseconds: 20),
-  retryDelay: Duration(milliseconds: 150),
-  requestTimeout: Duration(milliseconds: 100),
-);
-
-Map<String, dynamic> _example() => {
-  'version': 1,
-  'pump_curve': [
-    {'pressure': 1.0, 'flow': 20.0},
-    {'pressure': 3.0, 'flow': 12.0},
-    {'pressure': 6.0, 'flow': 6.0},
-    {'pressure': 9.0, 'flow': 5.0},
-    {'pressure': 12.0, 'flow': 4.0},
-  ],
-  'flow_tau': 0.5,
-  'flow_mode': 'both',
-  'pressure_tau': 0.5,
-  'pressure_mode': 'both',
-  'ramp_factor': 1.0,
-};
-
-const _exampleBlock = exampleNativeShapingBlock;
-
-const _otherBlock = [
-  0x01, 0x01, 0x32, 0x0A, 0x32, 0x14, 0x64, //
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-
-List<int> _image({
-  int source = 1,
-  int rule = 0,
-  required int latch,
-  int flags = 0,
-  List<int> block = _exampleBlock,
-}) => nativeShapeReportImage(
-  source: source,
-  rule: rule,
-  latch: latch,
-  flags: flags,
-  block: block,
-);
-
-Profile _profile({String title = 'shaped'}) => Profile.fromJson(
-  jsonDecode(File('assets/defaultProfiles/7g_basket.json').readAsStringSync())
-      as Map<String, dynamic>,
-).copyWith(title: title, nativeShaping: NativeShaping.fromJson(_example()));
-
-Future<(Bengle, NativeShapeMachineTransport)> _connectBengle() async {
-  final transport = NativeShapeMachineTransport();
-  addTearDown(transport.dispose);
-  transport.queuePaletteHydrationResponses();
-  transport.queueOnConnectResponses(v13Model: 128);
-  final bengle = Bengle(
-    transport: transport,
-    nativeShapingReadTimings: _timings,
-  );
-  await bengle.onConnect();
-  addTearDown(bengle.onDisconnect);
-  return (bengle, transport);
-}
-
-Future<void> _until(bool Function() condition, {String? reason}) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 5));
-  while (!condition()) {
-    if (DateTime.now().isAfter(deadline)) {
-      fail('timed out: ${reason ?? 'condition'}');
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 5));
-  }
-}
-
-Future<void> _settle() =>
-    Future<void>.delayed(const Duration(milliseconds: 600));
-
-Future<void> _uploadWithBaseline(
-  Bengle bengle,
-  NativeShapeMachineTransport transport,
-  int latch, {
-  String title = 'shaped',
-}) async {
-  transport.image = _image(latch: latch);
-  await bengle.setProfile(_profile(title: title));
-}
-
-List<String> _capture(String loggerName) {
-  final lines = <String>[];
-  final sub = Logger.root.onRecord
-      .where((r) => r.loggerName == loggerName)
-      .listen((r) => lines.add(r.message));
-  addTearDown(sub.cancel);
-  Logger.root.level = Level.ALL;
-  return lines;
-}
-
-String _hex(List<int> bytes) =>
-    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+import '../../helpers/native_shape_report_harness.dart';
 
 void main() {
   group('reg 66 read', () {
     test('sends the two halves and the check read, and decodes the §3 '
         'example', () async {
-      final (bengle, transport) = await _connectBengle();
-      transport.image = _image(latch: 7);
+      final (bengle, transport) = await nsConnectBengle();
+      transport.image = nsImage(latch: 7);
       transport.writes.clear();
 
-      transport.enterState(_espresso);
-      await _until(() => nativeShapingReportedBy(bengle) != null);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => nativeShapingReportedBy(bengle) != null);
 
       expect(transport.reportRequests.map((w) => w.data.toList()), [
         [0x03, 0x80, 0x39, 0x74, ...List.filled(16, 0)],
@@ -134,40 +29,40 @@ void main() {
       final report = bengle.lastNativeShapingReport!;
       expect(report.source, NativeShapingSource.profile);
       expect(report.latchCount, 7);
-      expect(report.settings!.toJson(), _example());
+      expect(report.settings!.toJson(), nsExample());
     });
 
     test('starts again when the latch count changes between the first and '
         'the check read', () async {
-      final (bengle, transport) = await _connectBengle();
-      transport.image = _image(latch: 7);
+      final (bengle, transport) = await nsConnectBengle();
+      transport.image = nsImage(latch: 7);
       transport.afterRead = (i) {
-        if (i == 0) transport.image = _image(latch: 8, block: _otherBlock);
+        if (i == 0) transport.image = nsImage(latch: 8, block: nsOtherBlock);
       };
 
-      transport.enterState(_espresso);
-      await _until(() => nativeShapingReportedBy(bengle) != null);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => nativeShapingReportedBy(bengle) != null);
 
       expect(transport.reportReads, 6);
       final report = bengle.lastNativeShapingReport!;
       expect(report.latchCount, 8);
-      expect(report.settings, NativeShaping.fromBlockBytes(_otherBlock));
+      expect(report.settings, NativeShaping.fromBlockBytes(nsOtherBlock));
     });
 
     test(
       'gives no report when the latch count changes on every pass',
       () async {
-        final (bengle, transport) = await _connectBengle();
+        final (bengle, transport) = await nsConnectBengle();
         var latch = 7;
-        transport.image = _image(latch: latch);
-        transport.afterRead = (_) => transport.image = _image(latch: ++latch);
-        final log = _capture('DE1');
+        transport.image = nsImage(latch: latch);
+        transport.afterRead = (_) => transport.image = nsImage(latch: ++latch);
+        final log = nsCapture('DE1');
 
-        transport.enterState(_espresso);
-        await _until(() => transport.reportReads >= 9);
+        transport.enterState(nsEspresso);
+        await nsUntil(() => transport.reportReads >= 9);
         transport.afterRead = null;
         transport.image = null;
-        await _settle();
+        await nsSettle();
 
         expect(bengle.lastNativeShapingReport, isNull);
         expect(
@@ -179,8 +74,8 @@ void main() {
 
     test('a rounded CLI report that breaks rule 8 keeps the report with no '
         'settings', () async {
-      final (bengle, transport) = await _connectBengle();
-      transport.image = _image(
+      final (bengle, transport) = await nsConnectBengle();
+      transport.image = nsImage(
         source: 0,
         latch: 3,
         flags: 1,
@@ -191,8 +86,8 @@ void main() {
         ],
       );
 
-      transport.enterState(_espresso);
-      await _until(() => nativeShapingReportedBy(bengle) != null);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => nativeShapingReportedBy(bengle) != null);
 
       final report = bengle.lastNativeShapingReport!;
       expect(report.source, NativeShapingSource.cli);
@@ -209,13 +104,13 @@ void main() {
       ),
     ]) {
       test('a read that $label gives no report and keeps the link', () async {
-        final (bengle, transport) = await _connectBengle();
+        final (bengle, transport) = await nsConnectBengle();
         setUp(transport);
-        final log = _capture('DE1');
+        final log = nsCapture('DE1');
 
-        transport.enterState(_espresso);
-        await _until(() => transport.reportRequests.length >= 2);
-        await _settle();
+        transport.enterState(nsEspresso);
+        await nsUntil(() => transport.reportRequests.length >= 2);
+        await nsSettle();
 
         expect(bengle.lastNativeShapingReport, isNull);
         expect(
@@ -223,8 +118,8 @@ void main() {
           hasLength(2),
         );
         transport.readError = null;
-        transport.image = _image(latch: 1);
-        await bengle.setProfile(_profile());
+        transport.image = nsImage(latch: 1);
+        await bengle.setProfile(nsProfile());
         expect(transport.reportReads, greaterThan(0));
       });
     }
@@ -235,14 +130,14 @@ void main() {
       transport.queueOnConnectResponses(v13Model: 1);
       final de1 = UnifiedDe1(
         transport: transport,
-        nativeShapingReadTimings: _timings,
+        nativeShapingReadTimings: nsTimings,
       );
       await de1.onConnect();
-      transport.image = _image(latch: 7);
+      transport.image = nsImage(latch: 7);
 
-      await de1.setProfile(_profile());
-      transport.enterState(_espresso);
-      await _settle();
+      await de1.setProfile(nsProfile());
+      transport.enterState(nsEspresso);
+      await nsSettle();
 
       expect(transport.reportRequests, isEmpty);
       expect(de1.lastNativeShapingReport, isNull);
@@ -251,21 +146,21 @@ void main() {
 
   group('report life', () {
     Future<(Bengle, NativeShapeMachineTransport)> withReport() async {
-      final (bengle, transport) = await _connectBengle();
-      await _uploadWithBaseline(bengle, transport, 7);
-      transport.image = _image(latch: 8);
-      transport.enterState(_espresso);
-      await _until(() => nativeShapingReportedBy(bengle) != null);
+      final (bengle, transport) = await nsConnectBengle();
+      await nsUploadWithBaseline(bengle, transport, 7);
+      transport.image = nsImage(latch: 8);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => nativeShapingReportedBy(bengle) != null);
       return (bengle, transport);
     }
 
     test('is kept after a profile upload once espresso ends', () async {
       final (bengle, transport) = await withReport();
       final accepted = bengle.lastNativeShapingReport;
-      transport.enterState(_idle);
+      transport.enterState(nsIdle);
       await pumpEventQueue();
 
-      await bengle.setProfile(_profile(title: 'next'));
+      await bengle.setProfile(nsProfile(title: 'next'));
 
       expect(bengle.lastNativeShapingReport, accepted);
     });
@@ -273,7 +168,7 @@ void main() {
     test('is kept after a raw profile write once espresso ends', () async {
       final (bengle, transport) = await withReport();
       final accepted = bengle.lastNativeShapingReport;
-      transport.enterState(_idle);
+      transport.enterState(nsIdle);
       await pumpEventQueue();
 
       bengle.sendRawMessage(
@@ -281,7 +176,7 @@ void main() {
           type: De1RawMessageType.request,
           operation: De1RawOperationType.write,
           characteristicUUID: Endpoint.headerWrite.uuid,
-          payload: _hex([1, 2, 0, 0, 0]),
+          payload: nsHex([1, 2, 0, 0, 0]),
         ),
       );
       await pumpEventQueue();
@@ -291,10 +186,10 @@ void main() {
 
     test('is null at the next shot start', () async {
       final (bengle, transport) = await withReport();
-      transport.enterState(_idle);
+      transport.enterState(nsIdle);
       transport.image = null;
 
-      transport.enterState(_espresso);
+      transport.enterState(nsEspresso);
       await pumpEventQueue();
 
       expect(bengle.lastNativeShapingReport, isNull);
@@ -303,92 +198,76 @@ void main() {
 
   group('baseline', () {
     test('a count equal to the baseline gives no report', () async {
-      final (bengle, transport) = await _connectBengle();
-      await _uploadWithBaseline(bengle, transport, 7);
-      final log = _capture('DE1');
+      final (bengle, transport) = await nsConnectBengle();
+      await nsUploadWithBaseline(bengle, transport, 7);
+      final log = nsCapture('DE1');
 
-      transport.enterState(_espresso);
-      await _until(() => transport.reportReads >= 7);
-      await _settle();
+      transport.enterState(nsEspresso);
+      await nsUntil(() => transport.reportReads >= 7);
+      await nsSettle();
 
       expect(bengle.lastNativeShapingReport, isNull);
       expect(log.where((l) => l.contains('equals the baseline')), hasLength(2));
     });
 
     test('a new count gives the report', () async {
-      final (bengle, transport) = await _connectBengle();
-      await _uploadWithBaseline(bengle, transport, 7);
-      transport.image = _image(latch: 8);
+      final (bengle, transport) = await nsConnectBengle();
+      await nsUploadWithBaseline(bengle, transport, 7);
+      transport.image = nsImage(latch: 8);
 
-      transport.enterState(_espresso);
-      await _until(() => nativeShapingReportedBy(bengle) != null);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => nativeShapingReportedBy(bengle) != null);
 
       expect(bengle.lastNativeShapingReport!.latchCount, 8);
     });
 
     test('an equal count at the first read and a new count at the second '
         'read gives the report', () async {
-      final (bengle, transport) = await _connectBengle();
-      await _uploadWithBaseline(bengle, transport, 7);
+      final (bengle, transport) = await nsConnectBengle();
+      await nsUploadWithBaseline(bengle, transport, 7);
       final readsBefore = transport.reportReads;
       transport.afterRead = (i) {
-        if (i == readsBefore + 2) transport.image = _image(latch: 8);
+        if (i == readsBefore + 2) transport.image = nsImage(latch: 8);
       };
 
-      transport.enterState(_espresso);
-      await _until(() => nativeShapingReportedBy(bengle) != null);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => nativeShapingReportedBy(bengle) != null);
 
       expect(bengle.lastNativeShapingReport!.latchCount, 8);
       expect(transport.reportReads - readsBefore, 6);
     });
 
-    test('case (a): an upload during the shot keeps the accepted report, and '
-        'the next baseline comes after that upload', () async {
-      final (bengle, transport) = await _connectBengle();
-      await _uploadWithBaseline(bengle, transport, 7);
-      transport.image = _image(latch: 8);
-      transport.enterState(_espresso);
-      await _until(() => nativeShapingReportedBy(bengle) != null);
+    test('case (a): an upload during the shot with no re-latch keeps the '
+        'accepted report, and the next shot needs a new count', () async {
+      final (bengle, transport) = await nsConnectBengle();
+      await nsUploadWithBaseline(bengle, transport, 7);
+      transport.image = nsImage(latch: 8);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => nativeShapingReportedBy(bengle) != null);
       final accepted = bengle.lastNativeShapingReport;
 
-      transport.image = _image(latch: 9);
-      await bengle.setProfile(_profile(title: 'during the shot'));
+      await bengle.setProfile(nsProfile(title: 'during the shot'));
 
       expect(bengle.lastNativeShapingReport, same(accepted));
-      transport.enterState(_idle);
-      transport.enterState(_espresso);
-      await _until(() => transport.reportReads >= 1 + 3 + 1 + 6);
-      await _settle();
+      transport.enterState(nsIdle);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => transport.reportReads >= 1 + 3 + 3 + 6);
+      await nsSettle();
       expect(bengle.lastNativeShapingReport, isNull);
     });
 
     test('a reconnect forgets the baseline, so a restarted latch count equal '
         'to the old baseline gives the report', () async {
-      final (bengle, transport) = await _connectBengle();
-      await _uploadWithBaseline(bengle, transport, 1);
+      final (bengle, transport) = await nsConnectBengle();
+      await nsUploadWithBaseline(bengle, transport, 1);
       await bengle.onDisconnect();
-      transport.queuePaletteHydrationResponses();
-      transport.queueOnConnectResponses(v13Model: 128);
-      await bengle.onConnect();
-      transport.image = _image(latch: 1);
+      await nsConnect(bengle, transport, connectLatch: 0);
+      transport.image = nsImage(latch: 1);
 
-      transport.enterState(_espresso);
-      await _until(() => nativeShapingReportedBy(bengle) != null);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => nativeShapingReportedBy(bengle) != null);
 
       expect(bengle.lastNativeShapingReport!.latchCount, 1);
-    });
-
-    test('case (b): with no baseline the first good read gives the report '
-        'and one log line', () async {
-      final (bengle, transport) = await _connectBengle();
-      transport.image = _image(latch: 7);
-      final log = _capture('DE1');
-
-      transport.enterState(_espresso);
-      await _until(() => nativeShapingReportedBy(bengle) != null);
-
-      expect(bengle.lastNativeShapingReport!.latchCount, 7);
-      expect(log.where((l) => l.contains('no baseline')), hasLength(1));
     });
   });
 }
