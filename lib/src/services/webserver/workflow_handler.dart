@@ -174,6 +174,28 @@ class WorkflowHandler {
     };
   }
 
+  Map<String, dynamic> _takeNativeShapingAsOneValue(
+    Map<String, dynamic> resultJson,
+    Map<String, dynamic> merge,
+  ) {
+    final updateProfile = merge['profile'];
+    final mergedProfile = resultJson['profile'];
+    if (updateProfile is! Map<String, dynamic> ||
+        mergedProfile is! Map<String, dynamic>) {
+      return resultJson;
+    }
+    final hasKey = updateProfile.containsKey('native_shaping');
+    if (!hasKey && !updateProfile.containsKey('steps')) return resultJson;
+    final block = updateProfile['native_shaping'];
+    return {
+      ...resultJson,
+      'profile': {
+        ...Map.of(mergedProfile)..remove('native_shaping'),
+        'native_shaping': ?block,
+      },
+    };
+  }
+
   Future<Response> _applyUpdate(Map<String, dynamic> merge) async {
     try {
       rejectExplicitNulls(merge, const ['steamSettings', 'context']);
@@ -198,8 +220,11 @@ class WorkflowHandler {
         final oldWorkflow = _controller.currentWorkflow;
         final revision = _controller.revision;
         final currentJson = oldWorkflow.toJson();
-        final resultJson = _takeDe1EmulationFromCompleteProfile(
-          deepMergeJson(currentJson, merge),
+        final resultJson = _takeNativeShapingAsOneValue(
+          _takeDe1EmulationFromCompleteProfile(
+            deepMergeJson(currentJson, merge),
+            merge,
+          ),
           merge,
         );
         final updatedWorkflow = Workflow.fromJson(resultJson);

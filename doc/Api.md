@@ -557,6 +557,12 @@ A `profile` object that contains `steps` is a complete profile, so its `de1_emul
 replaces the current value: DE1 emulation is on only when the request sends `true`, and a
 saved profile that omits the key turns it off. A partial `profile` object without `steps`
 keeps the current `de1_emulation` unless it sends the key.
+`native_shaping` is one value and is never deep-merged. A complete profile replaces it:
+the block it sends, or no block when it omits the key. A partial profile that sends the
+key replaces the whole block (`"native_shaping": null` removes it); a partial profile
+without the key keeps the block. A key that is absent inside a sent block takes its
+default (`doc/Profiles.md`, Native Shaping), not the value of the stored block. A block
+that breaks a rule returns `400`.
 Requests may wait behind machine I/O; the server does not debounce high-frequency
 input, so clients should throttle controls themselves. Bodies larger than 1 MiB return `413`,
 requests beyond the eight-entry active/queued limit return `429`, and requests waiting more

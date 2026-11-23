@@ -1769,6 +1769,12 @@ paths:
         A complete profile that omits `de1_emulation` turns DE1 emulation off. A partial
         `profile` object without `steps` is deep-merged and keeps the current `de1_emulation`
         unless it sends the key.
+        `native_shaping` is one value and is never deep-merged. A complete profile replaces
+        it: the block it sends, or no block when it omits the key. A partial profile that
+        sends the key replaces the whole block, and `"native_shaping": null` removes it; a
+        partial profile without the key keeps the block. A key that is absent inside a sent
+        block takes its default, not the value of the stored block. A block that breaks a
+        rule returns `400`.
         The server does not debounce or combine separate requests. Machine side effects from
         workflow PUT requests do not execute concurrently,
         so a request may wait behind an in-flight machine operation. Each response describes

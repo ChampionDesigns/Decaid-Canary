@@ -176,7 +176,9 @@ array. A key that is absent inside the block takes its default.
 `NativeShaping.fromJson` rounds each number half up to its wire step first
 (a decimal half step such as `0.29` s rounds up to `0.30` s),
 then checks the rounded value. So the stored value is the value the machine
-runs, and two blocks that round to the same bytes are equal. A value that
+runs, and two blocks that round to the same bytes are equal. A PUT
+`/api/v1/workflow` treats the block as one value: a sent block replaces the
+stored one with no merge of keys or points (see `doc/Api.md`, Workflow). A value that
 breaks a rule throws an `ArgumentError`, and the REST API returns `400`.
 `toJson` writes every key of the block.
 
