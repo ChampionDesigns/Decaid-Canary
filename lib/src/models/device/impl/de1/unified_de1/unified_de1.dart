@@ -10,6 +10,7 @@ import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/de1_firmwaremodel.dart';
 import 'package:reaprime/src/models/device/de1_emulation_reporter.dart';
 import 'package:reaprime/src/models/device/native_shaping_reporter.dart';
+import 'package:reaprime/src/models/device/raw_profile_write_counter.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/firmware_wake_entry.dart';
@@ -69,7 +70,8 @@ class UnifiedDe1
         De1Interface,
         CanonicalDeviceIdentity,
         De1EmulationReporter,
-        NativeShapingReporter {
+        NativeShapingReporter,
+        RawProfileWriteCounter {
   static final BleServiceIdentifier advertisingIdentifier =
       BleServiceIdentifier.short('ffff');
   final UnifiedDe1Transport _transport;
@@ -417,6 +419,9 @@ class UnifiedDe1
   int _refillKitDetected = -1;
   bool _lastTailDe1Emulation = false;
   int _rawProfileWrites = 0;
+
+  @override
+  int get rawProfileWrites => _rawProfileWrites;
 
   @override
   bool get lastUploadedProfileDe1Emulation => _lastTailDe1Emulation;

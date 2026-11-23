@@ -1096,6 +1096,9 @@ For clients this means:
 - **A gap in frames is not a dead socket.** If a client needs a liveness signal, use `/ws/v1/devices`.
 - `/ws/v1/machine/raw` writes are delivered to the machine the socket is *currently* bound to, not the
   one that was present when the socket was opened.
+- A raw write to the profile header or frame characteristic replaces the profile on the machine.
+  After it, the app sends the selected profile again when the workflow selects it, also when the
+  raw write failed or did not finish yet.
 - A `write` response echoes the payload the client submitted, as `payload` in uppercase hex — the
   same encoding a `read` response uses, so a client can correlate **the payload that completed**. It
   does not identify an individual write: two writes carrying the same payload are indistinguishable,
