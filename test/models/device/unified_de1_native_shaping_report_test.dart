@@ -1,4 +1,3 @@
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/models/data/native_shaping.dart';
 import 'package:reaprime/src/models/device/de1_rawmessage.dart';
