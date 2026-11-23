@@ -259,18 +259,22 @@ void main() {
       return (bengle, transport);
     }
 
-    test('is null after a profile upload while no shot runs', () async {
+    test('is kept after a profile upload once espresso ends', () async {
       final (bengle, transport) = await withReport();
+      final accepted = bengle.lastNativeShapingReport;
       transport.enterState(_idle);
       await pumpEventQueue();
 
       await bengle.setProfile(_profile(title: 'next'));
 
-      expect(bengle.lastNativeShapingReport, isNull);
+      expect(bengle.lastNativeShapingReport, accepted);
     });
 
-    test('is null after a raw profile write', () async {
-      final (bengle, _) = await withReport();
+    test('is kept after a raw profile write once espresso ends', () async {
+      final (bengle, transport) = await withReport();
+      final accepted = bengle.lastNativeShapingReport;
+      transport.enterState(_idle);
+      await pumpEventQueue();
 
       bengle.sendRawMessage(
         De1RawMessage(
@@ -282,7 +286,7 @@ void main() {
       );
       await pumpEventQueue();
 
-      expect(bengle.lastNativeShapingReport, isNull);
+      expect(bengle.lastNativeShapingReport, accepted);
     });
 
     test('is null at the next shot start', () async {

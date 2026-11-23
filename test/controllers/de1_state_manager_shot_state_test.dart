@@ -16,6 +16,7 @@ import 'package:reaprime/src/models/data/steam_record.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/data/workflow_context.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
+import 'package:reaprime/src/models/device/de1_rawmessage.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
@@ -653,6 +654,63 @@ void main() {
           storage.storedShots.single.workflow.toJson()['machine'] as Map;
       expect((machine['nativeShaping'] as Map)['source'], 'profile');
     });
+
+    for (final action in ['a profile upload', 'a raw profile write']) {
+      test('$action between espresso end and the shot save keeps the report '
+          'in the saved record', () async {
+        final (bengle, transport) = await connectReportingBengle(
+          image: nativeShapeReportImage(latch: 9),
+        );
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.preparingForShot,
+        );
+        await pump();
+        transport.emitNotification(Endpoint.stateInfo, [espressoStateByte, 0]);
+        final deadline = DateTime.now().add(const Duration(seconds: 5));
+        while (bengle.lastNativeShapingReport == null &&
+            DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        expect(bengle.lastNativeShapingReport, isNotNull);
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.pouring,
+        );
+        await pump();
+        transport.emitNotification(Endpoint.stateInfo, [idleStateByte, 0]);
+        await pump();
+
+        if (action == 'a profile upload') {
+          await bengle.setProfile(
+            workflowController.currentWorkflow.profile.copyWith(title: 'next'),
+          );
+        } else {
+          bengle.sendRawMessage(
+            De1RawMessage(
+              type: De1RawMessageType.request,
+              operation: De1RawOperationType.write,
+              characteristicUUID: Endpoint.headerWrite.uuid,
+              payload: '0102000000',
+            ),
+          );
+        }
+        await pump();
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.pouringDone,
+        );
+        await pump();
+
+        final saved =
+            storage.storedShots.single.workflow.machine?.nativeShaping;
+        expect(saved, isNotNull);
+        expect(saved!.latchCount, 9);
+        final machine =
+            storage.storedShots.single.workflow.toJson()['machine'] as Map;
+        expect((machine['nativeShaping'] as Map)['latchCount'], 9);
+      });
+    }
 
     for (final (label, image, error) in [
       ('times out', null, null),

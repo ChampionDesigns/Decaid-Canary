@@ -430,9 +430,9 @@ nothing. The app takes it when it saves the shot. The key is absent when the
 machine gave no report: on a DE1; when the read failed (an error, a timeout, a
 short reply, or a latch count that changed on each of three passes); when the
 latch count equals the count read before the shot (the machine did not latch
-for this shot); and after a raw profile write. A profile upload while no shot
-runs clears the report of the last shot, unless the profile is the one already
-on the machine (that upload sends nothing). The report is read-only:
+for this shot). The app clears the report only when the next shot starts, so a
+profile upload or a raw profile write after the shot does not remove it from
+that shot's record. The report is read-only:
 `PUT /api/v1/shots/:id` ignores `workflow.machine.nativeShaping` (a full or a
 partial object, or `null`) and keeps the recorded report, so a request cannot
 change, remove or add it. The schema is `NativeShapingReport` in

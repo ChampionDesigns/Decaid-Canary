@@ -52,7 +52,6 @@ extension UnifiedDe1Raw on UnifiedDe1 {
     _rawProfileWrites++;
     _currentProfile = null;
     _lastTailDe1Emulation = false;
-    _forgetNativeShapingReport();
   }
 
   void notifyFrom(Endpoint e, Uint8List data) {

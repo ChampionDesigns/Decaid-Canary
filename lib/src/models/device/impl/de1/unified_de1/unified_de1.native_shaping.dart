@@ -55,11 +55,6 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
     unawaited(_readShotNativeShaping(epoch, _lastSeenLatchCount));
   }
 
-  void _forgetNativeShapingReport() {
-    _nativeShapingReport = null;
-    _nativeShapingEpoch++;
-  }
-
   bool _isCurrentNativeShapingRead(int epoch) => epoch == _nativeShapingEpoch;
 
   Future<void> _readShotNativeShaping(int epoch, int? baseline) async {

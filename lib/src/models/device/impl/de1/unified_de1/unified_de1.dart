@@ -787,7 +787,6 @@ class UnifiedDe1
       return;
     }
     _currentProfile = null;
-    if (!_nativeShapingShotRunning) _forgetNativeShapingReport();
     final rawProfileWrites = _rawProfileWrites;
     await _sendProfile(profile);
     if (rawProfileWrites == _rawProfileWrites) _currentProfile = profile;

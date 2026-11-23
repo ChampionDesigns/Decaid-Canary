@@ -8280,10 +8280,10 @@ components:
             a DE1; when the read failed (an error, a timeout, a short reply,
             or a latch count that changed on each of three passes); when the
             latch count equals the count read before the shot, so the machine
-            did not latch for this shot; and after a raw profile write. A
-            profile upload while no shot runs clears the report of the last
-            shot, unless the profile is the one already on the machine (that
-            upload sends nothing). Read-only: `PUT /api/v1/shots/{id}` ignores this key and
+            did not latch for this shot. The app clears the report only when
+            the next shot starts, so a profile upload or a raw profile write
+            after the shot does not remove it from that shot's record.
+            Read-only: `PUT /api/v1/shots/{id}` ignores this key and
             keeps the recorded report. A request cannot change, remove or add
             it, and a partial object is ignored as a whole.
 
