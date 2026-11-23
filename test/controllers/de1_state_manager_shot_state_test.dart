@@ -31,6 +31,8 @@ import '../helpers/mock_settings_service.dart';
 import '../helpers/native_shape_machine_transport.dart';
 import '../helpers/non_de1_profile_step.dart';
 import '../helpers/test_de1.dart';
+import '../helpers/test_scale.dart';
+import '../helpers/test_scale_controller.dart';
 
 class _BengleReportingDe1 extends TestDe1 {
   _BengleReportingDe1(this.bengle);
@@ -157,6 +159,8 @@ void main() {
   late _CapturingStorageService storage;
   late WorkflowController workflowController;
   late De1StateManager manager;
+  late SettingsController settingsController;
+  late ConnectionManager connectionManager;
   late List<ShotStateEvent> events;
   late StreamSubscription<ShotStateEvent> eventsSub;
 
@@ -173,10 +177,10 @@ void main() {
 
     final settingsService = MockSettingsService();
     await settingsService.updateGatewayMode(GatewayMode.tracking);
-    final settingsController = SettingsController(settingsService);
+    settingsController = SettingsController(settingsService);
     await settingsController.loadSettings();
 
-    final connectionManager = ConnectionManager(
+    connectionManager = ConnectionManager(
       deviceScanner: deviceController,
       de1Controller: de1Controller,
       scaleController: scaleController,
@@ -605,12 +609,146 @@ void main() {
       expect(storage.storedShots[1].workflow.machine?.nativeShaping, isNull);
     });
 
+    Future<TestScaleController> trackWithStoppingScale() async {
+      manager.dispose();
+      final scale = TestScaleController(TestScale());
+      addTearDown(scale.dispose);
+      manager = De1StateManager(
+        de1Controller: de1Controller,
+        scaleController: scale,
+        workflowController: workflowController,
+        persistenceController: PersistenceController(storageService: storage),
+        settingsController: settingsController,
+        connectionManager: connectionManager,
+        navigatorKey: GlobalKey<NavigatorState>(),
+      );
+      await pump();
+      scale.emitWeight(30.0, weightFlow: 2.0);
+      await pump();
+      return scale;
+    }
+
+    Future<void> settleStoppingShot(TestScaleController scale) async {
+      scale.emitWeight(36.0);
+      await pump();
+      for (var sample = 0; sample < 10; sample++) {
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.preparingForShot,
+        );
+        await pump();
+      }
+    }
+
+    Future<void> pourUntilStopping() async {
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.preparingForShot,
+      );
+      await pump();
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouring,
+      );
+      await pump();
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouringDone,
+      );
+      await pump();
+    }
+
+    test('a shot that settles after the next espresso start keeps the report '
+        'of its own shot', () async {
+      final scale = await trackWithStoppingScale();
+      final shotStates = <ShotState>[];
+      final sub = de1Controller.shotState.listen(
+        (e) => shotStates.add(e.state),
+      );
+      addTearDown(sub.cancel);
+      testDe1.lastNativeShapingReport = report(4);
+      await pourUntilStopping();
+      expect(shotStates.last, ShotState.stopping);
+
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = null;
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.preparingForShot,
+      );
+      await pump();
+      testDe1.lastNativeShapingReport = report(7);
+      expect(storage.storedShots, isEmpty);
+      await settleStoppingShot(scale);
+
+      expect(
+        storage.storedShots.single.workflow.machine?.nativeShaping,
+        report(4),
+      );
+
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = report(9);
+      scale.emitWeight(30.0, weightFlow: 2.0);
+      await pump();
+      await pourUntilStopping();
+      await settleStoppingShot(scale);
+
+      expect(storage.storedShots, hasLength(2));
+      expect(storage.storedShots[1].workflow.machine?.nativeShaping, report(9));
+    });
+
+    test('a report that arrives after espresso ends and before the next '
+        'espresso start is the report of the settling shot', () async {
+      final scale = await trackWithStoppingScale();
+      await pourUntilStopping();
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = report(4);
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = null;
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.preparingForShot,
+      );
+      await pump();
+      testDe1.lastNativeShapingReport = report(7);
+      await settleStoppingShot(scale);
+
+      expect(
+        storage.storedShots.single.workflow.machine?.nativeShaping,
+        report(4),
+      );
+    });
+
+    test('a shot that settles with no next espresso start takes the report '
+        'that the machine has at the save', () async {
+      final scale = await trackWithStoppingScale();
+      await pourUntilStopping();
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = report(4);
+      scale.emitWeight(36.0);
+      await pump();
+      for (var sample = 0; sample < 10; sample++) {
+        testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+        await pump();
+      }
+
+      expect(
+        storage.storedShots.single.workflow.machine?.nativeShaping,
+        report(4),
+      );
+    });
+
     Future<(Bengle, NativeShapeMachineTransport)> connectReportingBengle({
       List<int>? image,
       Object? readError,
     }) async {
       final transport = NativeShapeMachineTransport()
-        ..image = image
+        ..image = nativeShapeReportImage(latch: 0)
         ..readError = readError;
       addTearDown(transport.dispose);
       transport.queuePaletteHydrationResponses();
@@ -625,6 +763,13 @@ void main() {
       );
       await bengle.onConnect();
       addTearDown(bengle.onDisconnect);
+      final connectRead = DateTime.now().add(const Duration(seconds: 5));
+      while (transport.reportRequests.isEmpty &&
+          DateTime.now().isBefore(connectRead)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      transport.image = image;
       await testDe1.dispose();
       testDe1 = _BengleReportingDe1(bengle);
       de1Controller.connect(testDe1);

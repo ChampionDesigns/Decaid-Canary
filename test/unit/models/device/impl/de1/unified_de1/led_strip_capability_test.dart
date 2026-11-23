@@ -179,6 +179,7 @@ void main() {
         queueStoredPalette();
       }
       await bengle.onConnect();
+      await transport.completeNativeShapeConnectRead();
       if (queuePalette) {
         queueStoredPalette();
       }
@@ -225,6 +226,7 @@ void main() {
         transport.queueMmrResponseInt(BengleMmr.rearLedAwake, 0xFFFFFF);
         transport.queueMmrResponseInt(BengleMmr.rearLedSleep, 0x000000);
         await bengle.onConnect();
+        await transport.completeNativeShapeConnectRead();
 
         final state = (await bengle.getLedStripState())!;
         expect(state.frontSwitch.awake, const Color16(0xFF00, 0xF000, 0xC800));
@@ -248,6 +250,7 @@ void main() {
           BengleMmr.rearLedSleep.address,
         ]);
         await bengle.onConnect();
+        await transport.completeNativeShapeConnectRead();
 
         expect(await bengle.getLedStripState(), isNull);
       },

@@ -234,6 +234,7 @@ void main() {
         transport.queueOnConnectResponses(v13Model: 128);
         transport.queuePaletteHydrationResponses();
         await wireWith(bengle);
+        await transport.completeNativeShapeConnectRead();
         transport.writes.clear();
 
         final res = await put('/api/v1/machine/cupWarmer', {
@@ -282,6 +283,7 @@ void main() {
         transport.queueOnConnectResponses(v13Model: 128);
         transport.queuePaletteHydrationResponses();
         await wireWith(bengle);
+        await transport.completeNativeShapeConnectRead();
         transport.writes.clear();
         transport.failMmrWritesForAddresses.add(BengleMmr.matSetPoint.address);
 

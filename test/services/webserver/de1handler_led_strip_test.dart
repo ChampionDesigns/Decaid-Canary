@@ -319,6 +319,7 @@ void main() {
       transport.queueMmrResponseInt(BengleMmr.rearLedAwake, 0x00FF00);
       transport.queueMmrResponseInt(BengleMmr.rearLedSleep, 0x0000FF);
       await wireWith(Bengle(transport: transport));
+      await transport.completeNativeShapeConnectRead();
       transport.queueMmrResponseInt(BengleMmr.frontLedAwake, 0xFF8000);
       transport.queueMmrResponseInt(BengleMmr.frontLedSleep, 0x302010);
       transport.queueMmrResponseInt(BengleMmr.rearLedAwake, 0x00FF00);
@@ -454,6 +455,7 @@ void main() {
         BengleMmr.rearLedSleep.address,
       ]);
       await wireWith(Bengle(transport: transport));
+      await transport.completeNativeShapeConnectRead();
       addTearDown(() async {
         await controller.dispose();
         await transport.dispose();

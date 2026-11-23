@@ -59,6 +59,7 @@ void main() {
     await controller.connectToDe1(
       bengle ? Bengle(transport: transport) : UnifiedDe1(transport: transport),
     );
+    if (bengle) await transport.completeNativeShapeConnectRead();
 
     final settingsController = SettingsController(MockSettingsService());
     await settingsController.loadSettings();
@@ -127,7 +128,7 @@ void main() {
       Bengle(transport: serialTransport),
     );
 
-    Future<void> respondToMmr(int address, int value) async {
+    Future<void> respondToMmr(int address, List<int> values) async {
       final expectedWrites = serialTransport.writes.length + 1;
       for (
         var i = 0;
@@ -141,7 +142,7 @@ void main() {
         greaterThanOrEqualTo(expectedWrites),
       );
       serialTransport.injectSerial(
-        '[E]${_hex(_serialMmrResponse(address, [value]))}\n',
+        '[E]${_hex(_serialMmrResponse(address, values))}\n',
       );
     }
 
@@ -155,11 +156,12 @@ void main() {
       MMRItem.profileModeCaps: 0,
       MMRItem.calFlowEst: 1000,
     }.entries) {
-      await respondToMmr(entry.key.address, entry.value);
+      await respondToMmr(entry.key.address, [entry.value]);
     }
     for (final address in [0x00803898, 0x008038A0, 0x0080389C, 0x008038A4]) {
-      await respondToMmr(address, 0);
+      await respondToMmr(address, [0]);
     }
+    await respondToMmr(MMRItem.nativeShapeLatched.address, [0, 0, 0, 0]);
     final writesBeforeShotSettingsRefresh = serialTransport.writes.length;
     await connecting;
 

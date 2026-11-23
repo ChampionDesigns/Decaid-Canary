@@ -6,6 +6,7 @@ import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
+import 'package:reaprime/src/models/errors.dart';
 
 import '../../helpers/fake_ble_transport.dart';
 
@@ -53,6 +54,7 @@ Future<(Bengle, FakeBleTransport)> _connectBengle() async {
   );
   final bengle = Bengle(transport: transport);
   await bengle.onConnect();
+  await transport.completeNativeShapeConnectRead();
   transport.writes.clear();
   return (bengle, transport);
 }
@@ -99,7 +101,93 @@ List<String> _collapsed(List<String> kinds) => [
     if (i == 0 || kinds[i - 1] != kind) kind,
 ];
 
+Profile _withSteps(Profile profile, int count) => profile.copyWith(
+  steps: [
+    for (var i = 0; i < count; i++) profile.steps[i % profile.steps.length],
+  ],
+);
+
+List<FakeBleWrite> _profileWrites(FakeBleTransport transport) => transport
+    .writes
+    .where((w) => w.characteristicUUID != Endpoint.readFromMMR.uuid)
+    .toList();
+
 void main() {
+  group('step limit', () {
+    test('a Bengle uploads a 20-step profile with the tail at 20 and the '
+        'block at 21-23', () async {
+      final (bengle, transport) = await _connectBengle();
+      final profile = _withSteps(_profile(), 20);
+
+      await bengle.setProfile(profile);
+
+      final kinds = _profileWrites(transport)
+          .map((w) => _kind(w, profile))
+          .toList();
+      expect(_collapsed(kinds), [
+        'header',
+        'frame',
+        'extension',
+        'block21',
+        'block22',
+        'block23',
+        'tail',
+        'tank',
+      ]);
+      expect(kinds.where((k) => k == 'frame'), hasLength(20));
+      expect(_frames(transport).map((w) => w.data[0]).where((i) => i < 32), [
+        for (var i = 0; i < 20; i++) i,
+        21,
+        22,
+        23,
+        20,
+      ]);
+    });
+
+    test('a DE1 uploads a 20-step profile with no block', () async {
+      final (de1, transport) = await _connectDe1(model: 1);
+      final profile = _withSteps(_profile(), 20);
+
+      await de1.setProfile(profile);
+
+      final kinds = _profileWrites(transport)
+          .map((w) => _kind(w, profile))
+          .toList();
+      expect(_collapsed(kinds), [
+        'header',
+        'frame',
+        'extension',
+        'tail',
+        'tank',
+      ]);
+      expect(kinds.where((k) => k == 'frame'), hasLength(20));
+    });
+
+    for (final (machine, connect) in [
+      ('Bengle', () async => await _connectBengle()),
+      ('DE1', () async => await _connectDe1(model: 1)),
+    ]) {
+      test('a $machine refuses a 21-step profile with no write', () async {
+        final (device, transport) = await connect();
+        final profile = _withSteps(_profile(), 21);
+
+        await expectLater(
+          device.setProfile(profile),
+          throwsA(
+            isA<ProfileModeUnsupportedException>().having(
+              (e) => e.message,
+              'message',
+              'Profile "${profile.title}" has 21 steps; the machine runs at '
+                  'most 20 steps.',
+            ),
+          ),
+        );
+
+        expect(transport.writes, isEmpty);
+      });
+    }
+  });
+
   group('native shaping block upload', () {
     test(
       'a Bengle writes Ben\'s first values to slots 21, 22 and 23',

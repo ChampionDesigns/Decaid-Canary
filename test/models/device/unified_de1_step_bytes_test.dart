@@ -164,6 +164,7 @@ Future<void> _capableBengle(FakeBleTransport transport, UnifiedDe1 de1) async {
   transport.queueMmrResponseInt(MMRItem.calFlowEst, 100);
   transport.queueOnConnectResponses(v13Model: 128, profileModeCaps: 0x7);
   await de1.onConnect();
+  await transport.completeNativeShapeConnectRead();
 }
 
 void main() {

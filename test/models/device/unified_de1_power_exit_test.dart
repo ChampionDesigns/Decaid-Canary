@@ -88,6 +88,7 @@ void main() {
     transport.queueMmrResponseInt(MMRItem.calFlowEst, 100);
     transport.queueOnConnectResponses(v13Model: 128, profileModeCaps: caps);
     await de1.onConnect();
+    await transport.completeNativeShapeConnectRead();
     await de1.setProfile(profile);
     final frames = transport.writes
         .where((w) => w.characteristicUUID == Endpoint.frameWrite.uuid)
@@ -525,6 +526,7 @@ void main() {
       transport.queueMmrResponseInt(MMRItem.calFlowEst, 100);
       transport.queueOnConnectResponses(v13Model: 128, profileModeCaps: 0xF);
       await de1.onConnect();
+      await transport.completeNativeShapeConnectRead();
       addTearDown(transport.dispose);
       transport.writes.clear();
       return (de1, transport);
@@ -561,6 +563,7 @@ void main() {
       transport.queueMmrResponseInt(MMRItem.calFlowEst, 100);
       transport.queueOnConnectResponses(v13Model: 128, profileModeCaps: caps);
       await de1.onConnect();
+      await transport.completeNativeShapeConnectRead();
       addTearDown(transport.dispose);
       return de1;
     }

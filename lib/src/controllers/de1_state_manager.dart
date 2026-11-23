@@ -23,6 +23,7 @@ import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/device.dart' as device;
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/de1_emulation_reporter.dart';
+import 'package:reaprime/src/models/data/native_shaping.dart';
 import 'package:reaprime/src/models/device/native_shaping_reporter.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/device/machine.dart';
@@ -70,6 +71,9 @@ class De1StateManager with WidgetsBindingObserver {
   String? _currentShotId;
   WorkflowMachine? _currentShotMachine;
   Profile? _currentShotProfile;
+  bool _currentShotLeftEspresso = false;
+  bool _currentShotEspressoReentered = false;
+  NativeShapingReport? _currentShotReportAtExit;
 
   MachineSnapshot? _latestSnapshot;
 
@@ -533,6 +537,8 @@ class De1StateManager with WidgetsBindingObserver {
     final currentState = snapshot.state.state;
     final currentSubstate = snapshot.state.substate;
 
+    _trackShotReportAfterEspresso(currentState);
+
     if (_previousMachineState == currentState) {
       return;
     }
@@ -559,6 +565,18 @@ class De1StateManager with WidgetsBindingObserver {
     }
 
     _previousMachineState = currentState;
+  }
+
+  void _trackShotReportAfterEspresso(MachineState currentState) {
+    if (_currentShotSequencer == null || _currentShotEspressoReentered) return;
+    if (currentState == MachineState.espresso) {
+      _currentShotEspressoReentered = _currentShotLeftEspresso;
+      return;
+    }
+    _currentShotLeftEspresso = true;
+    _currentShotReportAtExit =
+        nativeShapingReportedBy(_de1Controller.connectedDe1OrNull) ??
+        _currentShotReportAtExit;
   }
 
   void _handleScalePowerManagement(MachineState currentState) {
@@ -912,7 +930,9 @@ class De1StateManager with WidgetsBindingObserver {
   }
 
   WorkflowMachine? _withNativeShapingReport(WorkflowMachine? machine) {
-    final report = nativeShapingReportedBy(_de1Controller.connectedDe1OrNull);
+    final report = _currentShotEspressoReentered
+        ? _currentShotReportAtExit
+        : nativeShapingReportedBy(_de1Controller.connectedDe1OrNull);
     if (machine == null || report == null) return machine;
     return machine.copyWith(nativeShaping: report);
   }
@@ -975,11 +995,18 @@ class De1StateManager with WidgetsBindingObserver {
     _currentShotSnapshots.clear();
     _currentShotMachine = null;
     _currentShotProfile = null;
+    _resetShotReportTracking();
 
     if (_currentShotId != null) {
       _currentShotId = null;
       _publishIdleFrame();
     }
+  }
+
+  void _resetShotReportTracking() {
+    _currentShotLeftEspresso = false;
+    _currentShotEspressoReentered = false;
+    _currentShotReportAtExit = null;
   }
 
   void _publishIdleFrame() {
