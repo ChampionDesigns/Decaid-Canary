@@ -663,6 +663,37 @@ void main() {
       expect(flaky.totalCalls, 1);
     });
 
+    test('a raw profile write during an upload makes a reselect of the same '
+        'profile upload again', () async {
+      final gated = _GatedDe1();
+      final controller = await connect(gated);
+      buildSync(controller);
+      await settleConnectPush(gated: gated);
+      gated.setProfileCalls.clear();
+
+      applyProfile('P1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(gated.pendingUploads, 1);
+      gated.emitRawMessage(
+        De1RawMessage(
+          type: De1RawMessageType.response,
+          operation: De1RawOperationType.write,
+          characteristicUUID: Endpoint.headerWrite.uuid,
+          payload: '0102000000',
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      applyProfile('P1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(gated.setProfileCalls.map((p) => p.title), ['P1', 'P1']);
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+
     test('reverting to the last-pushed profile while another upload is in '
         'flight still converges to the reverted profile', () async {
       final gated = _GatedDe1();

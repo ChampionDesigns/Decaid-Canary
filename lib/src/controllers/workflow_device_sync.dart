@@ -68,6 +68,7 @@ class WorkflowDeviceSync {
   StreamSubscription<De1Interface?>? _de1Sub;
   StreamSubscription<int?>? _initSettledSub;
   StreamSubscription<De1RawMessage>? _rawWriteSub;
+  int _rawProfileWrites = 0;
 
   void _onChange() {
     final next = _workflow.currentWorkflow.profile;
@@ -106,9 +107,12 @@ class WorkflowDeviceSync {
           return;
         }
         try {
+          final rawWritesBefore = _rawProfileWrites;
           await _de1.runDeviceWrite((device) => device.setProfile(profile));
           if (generation != _generation) return;
-          _lastPushedProfile = profile;
+          _lastPushedProfile = rawWritesBefore == _rawProfileWrites
+              ? profile
+              : null;
           _attempt = 0;
           if (_errorSurfaced) {
             _errorSurfaced = false;
@@ -197,9 +201,10 @@ class WorkflowDeviceSync {
 
   void _watchRawProfileWrites(De1Interface? device) {
     _rawWriteSub?.cancel();
-    _rawWriteSub = device?.rawOutStream
-        .where(_isRawProfileWrite)
-        .listen((_) => _lastPushedProfile = null, onError: (Object _) {});
+    _rawWriteSub = device?.rawOutStream.where(_isRawProfileWrite).listen((_) {
+      _rawProfileWrites++;
+      _lastPushedProfile = null;
+    }, onError: (Object _) {});
   }
 
   static bool _isRawProfileWrite(De1RawMessage message) {
