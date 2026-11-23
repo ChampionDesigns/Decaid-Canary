@@ -173,7 +173,8 @@ then writes no key. Every machine parses and stores the block.
 The curve starts at a fixed point of 0 bar and 20 mL/s, which is not in the
 array. A key that is absent inside the block takes its default.
 
-`NativeShaping.fromJson` rounds each number half up to its wire step first,
+`NativeShaping.fromJson` rounds each number half up to its wire step first
+(a decimal half step such as `0.29` s rounds up to `0.30` s),
 then checks the rounded value. So the stored value is the value the machine
 runs, and two blocks that round to the same bytes are equal. A value that
 breaks a rule throws an `ArgumentError`, and the REST API returns `400`.

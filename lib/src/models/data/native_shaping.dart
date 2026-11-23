@@ -47,6 +47,7 @@ class NativeShaping extends Equatable {
   static const maxPumpCurvePoints = 8;
   static const blockLength = 21;
 
+  static const _halfStepTolerance = 1e-9;
   static const _tauDivisor = 50.0;
   static const _rampDivisor = 50.0;
   static const _pointDivisor = 10.0;
@@ -263,7 +264,8 @@ class NativeShaping extends Equatable {
     if (!number.isFinite) {
       throw ArgumentError('native_shaping "$field" must be a finite number');
     }
-    final scaled = (number * divisor).roundToDouble();
+    final scaled = (number * divisor + 0.5 + _halfStepTolerance)
+        .floorToDouble();
     if (scaled < 0 || scaled > 255) {
       throw ArgumentError(
         'native_shaping "$field" is out of range, got $number',

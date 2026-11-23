@@ -115,6 +115,41 @@ void main() {
       ]);
     });
 
+    test('rounds a decimal half step up, whatever its binary product', () {
+      for (final (raw, rounded) in [
+        (0.29, 0.3),
+        (0.57, 0.58),
+        (1.13, 1.14),
+        (1.15, 1.16),
+        (2.01, 2.02),
+        (2.03, 2.04),
+        (0.01, 0.02),
+      ]) {
+        final shaping = NativeShaping.fromJson({
+          'flow_tau': raw,
+          'pressure_tau': raw,
+          'ramp_factor': raw,
+        });
+        expect(shaping.flowTau, rounded, reason: 'flow_tau $raw');
+        expect(shaping.pressureTau, rounded, reason: 'pressure_tau $raw');
+        expect(shaping.rampFactor, rounded, reason: 'ramp_factor $raw');
+      }
+      for (var tenths = 5; tenths < 135; tenths++) {
+        final raw = tenths / 10 + 0.05;
+        final shaping = NativeShaping.fromJson(
+          _withCurve([
+            [raw, raw > 20 ? 20 : raw],
+          ]),
+        );
+        expect(
+          shaping.pumpCurve.single.pressure,
+          (tenths + 1) / 10,
+          reason: 'pressure $raw',
+        );
+      }
+      expect(NativeShaping.fromJson({'flow_tau': 0.2899}).flowTau, 0.28);
+    });
+
     test('accepts a value that passes its rule only after rounding', () {
       final shaping = NativeShaping.fromJson({
         ..._withCurve([
