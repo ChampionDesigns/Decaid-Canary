@@ -265,6 +265,7 @@ void main() {
             profileModeCaps: 0x7,
           );
           await de1.onConnect();
+          await transport.completeNativeShapeConnectRead();
           transport.writes.clear();
 
           await expectLater(

@@ -133,6 +133,7 @@ Future<(Bengle, FakeBleTransport)> _connectBengle([
   transport.queueOnConnectResponses(v13Model: _bengleModel);
   final bengle = Bengle(transport: transport);
   await bengle.onConnect();
+  await transport.completeNativeShapeConnectRead();
   return (bengle, transport);
 }
 
@@ -142,6 +143,7 @@ Future<(UnifiedDe1, FakeBleTransport)> _connectDe1({required int model}) async {
   final de1 = UnifiedDe1(transport: transport);
   transport.queueOnConnectResponses(v13Model: model);
   await de1.onConnect();
+  if (de1.isBengle) await transport.completeNativeShapeConnectRead();
   return (de1, transport);
 }
 
