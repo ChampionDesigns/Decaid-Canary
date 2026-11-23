@@ -10,6 +10,8 @@ import 'package:reaprime/src/controllers/workflow_device_sync.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
+import 'package:reaprime/src/models/device/de1_rawmessage.dart';
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/device.dart';
 import 'package:reaprime/src/models/errors.dart';
 
@@ -341,6 +343,60 @@ void main() {
       equals(1),
       reason: 'equal profile value must not trigger a second BLE upload',
     );
+  });
+
+  group('a raw profile write', () {
+    De1RawMessage receipt(
+      Endpoint endpoint, {
+      De1RawOperationType? operation,
+    }) => De1RawMessage(
+      type: De1RawMessageType.response,
+      operation: operation ?? De1RawOperationType.write,
+      characteristicUUID: endpoint.uuid,
+      payload: '0102000000',
+    );
+
+    Future<Workflow> pushOnce() async {
+      final next = workflow.currentWorkflow.copyWith(
+        profile: _profile('Adaptive v2'),
+      );
+      workflow.setWorkflow(next);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(de1.setProfileCalls, hasLength(1));
+      return next;
+    }
+
+    for (final endpoint in [Endpoint.headerWrite, Endpoint.frameWrite]) {
+      test('to ${endpoint.name} makes a reselect of the same profile upload '
+          'again', () async {
+        final next = await pushOnce();
+
+        de1.emitRawMessage(receipt(endpoint));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        workflow.setWorkflow(next.copyWith(profile: _profile('Adaptive v2')));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        expect(de1.setProfileCalls, hasLength(2));
+        expect(de1.setProfileCalls.last.title, 'Adaptive v2');
+      });
+    }
+
+    test('a reselect with no raw profile write still skips', () async {
+      final next = await pushOnce();
+
+      de1.emitRawMessage(receipt(Endpoint.requestedState));
+      de1.emitRawMessage(
+        receipt(Endpoint.headerWrite, operation: De1RawOperationType.read),
+      );
+      de1.emitRawMessage(
+        receipt(Endpoint.frameWrite, operation: De1RawOperationType.notify),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      workflow.setWorkflow(next.copyWith(profile: _profile('Adaptive v2')));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(de1.setProfileCalls, hasLength(1));
+    });
   });
 
   test('non-profile workflow changes do not trigger setProfile', () async {
