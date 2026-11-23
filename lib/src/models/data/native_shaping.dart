@@ -397,12 +397,15 @@ class NativeShapingReport extends Equatable {
       refusalCode: bytes[1],
       latchCount: bytes[2],
       settingsRounded: bytes[3] & _roundedFlag != 0,
-      settings: _settingsOrNull(
-        bytes.sublist(
-          _settingsOffset,
-          _settingsOffset + NativeShaping.blockLength,
-        ),
-      ),
+      settings:
+          NativeShapingSource.fromCode(bytes[0]) == NativeShapingSource.inactive
+          ? null
+          : _settingsOrNull(
+              bytes.sublist(
+                _settingsOffset,
+                _settingsOffset + NativeShaping.blockLength,
+              ),
+            ),
     );
   }
 

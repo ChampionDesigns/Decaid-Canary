@@ -576,6 +576,19 @@ void main() {
       expect(machine['nativeShaping'], report(5).toJson());
       expect(workflowController.currentWorkflow.machine?.nativeShaping, isNull);
     });
+
+    test('a shot after a cleared report does not keep the old one', () async {
+      testDe1.lastNativeShapingReport = report(1);
+      await driveShot();
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = null;
+      await driveShot();
+
+      expect(storage.storedShots, hasLength(2));
+      expect(storage.storedShots[0].workflow.machine?.nativeShaping, report(1));
+      expect(storage.storedShots[1].workflow.machine?.nativeShaping, isNull);
+    });
   });
 
   test(

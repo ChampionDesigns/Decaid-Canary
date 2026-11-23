@@ -7385,8 +7385,9 @@ components:
           $ref: '#/components/schemas/NativeShaping'
           description: >
             The settings that the shot ran with, in the profile block format.
-            Absent when the report has no block that Decaid can decode, for
-            example in DE1 emulation.
+            Absent when the source is `inactive` (DE1 emulation: the machine
+            latched settings but did not use them) and when the report has no
+            block that Decaid can decode.
 
     ProfileStep:
       type: object

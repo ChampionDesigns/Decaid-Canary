@@ -510,6 +510,13 @@ void main() {
       expect(report.toJson().containsKey('settings'), isFalse);
     });
 
+    test('gives no settings in DE1 emulation even for a valid block', () {
+      final report = NativeShapingReport.fromBytes(_report(source: 3));
+
+      expect(report.source, NativeShapingSource.inactive);
+      expect(report.settings, isNull);
+    });
+
     test('reads bit 0 of the flags as rounded settings', () {
       expect(
         NativeShapingReport.fromBytes(_report(flags: 1)).settingsRounded,
