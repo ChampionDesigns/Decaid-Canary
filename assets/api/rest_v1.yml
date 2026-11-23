@@ -8282,7 +8282,8 @@ components:
             latch count equals the count read before the shot, so the machine
             did not latch for this shot; and after a raw profile write. A
             profile upload while no shot runs clears the report of the last
-            shot. Read-only: `PUT /api/v1/shots/{id}` ignores this key and
+            shot, unless the profile is the one already on the machine (that
+            upload sends nothing). Read-only: `PUT /api/v1/shots/{id}` ignores this key and
             keeps the recorded report. A request cannot change, remove or add
             it, and a partial object is ignored as a whole.
 

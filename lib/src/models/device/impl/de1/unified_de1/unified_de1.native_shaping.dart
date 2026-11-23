@@ -22,6 +22,7 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
   void _watchShotStateForNativeShaping() {
     _nativeShapingStateSubscription?.cancel();
     _lastStateByteSeen = null;
+    _lastSeenLatchCount = null;
     _nativeShapingStateSubscription = _transport.state.listen(
       _onStateForNativeShaping,
       onError: (Object _) {},
@@ -32,6 +33,7 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
     _nativeShapingStateSubscription?.cancel();
     _nativeShapingStateSubscription = null;
     _lastStateByteSeen = null;
+    _lastSeenLatchCount = null;
     _nativeShapingShotRunning = false;
     _nativeShapingEpoch++;
   }

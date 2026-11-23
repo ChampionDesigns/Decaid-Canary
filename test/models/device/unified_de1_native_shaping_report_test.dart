@@ -358,6 +358,22 @@ void main() {
       expect(bengle.lastNativeShapingReport, isNull);
     });
 
+    test('a reconnect forgets the baseline, so a restarted latch count equal '
+        'to the old baseline gives the report', () async {
+      final (bengle, transport) = await _connectBengle();
+      await _uploadWithBaseline(bengle, transport, 1);
+      await bengle.onDisconnect();
+      transport.queuePaletteHydrationResponses();
+      transport.queueOnConnectResponses(v13Model: 128);
+      await bengle.onConnect();
+      transport.image = _image(latch: 1);
+
+      transport.enterState(_espresso);
+      await _until(() => nativeShapingReportedBy(bengle) != null);
+
+      expect(bengle.lastNativeShapingReport!.latchCount, 1);
+    });
+
     test('case (b): with no baseline the first good read gives the report '
         'and one log line', () async {
       final (bengle, transport) = await _connectBengle();
