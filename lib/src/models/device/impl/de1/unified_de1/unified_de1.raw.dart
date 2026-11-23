@@ -27,7 +27,13 @@ extension UnifiedDe1Raw on UnifiedDe1 {
             );
           case De1RawOperationType.write:
             var payload = _hexToBytes(data.payload);
-            await _transport.writeWithResponse(endpoint, payload);
+            final profileWrite = _isProfileEndpoint(endpoint);
+            if (profileWrite) _forgetUploadedProfile();
+            try {
+              await _transport.writeWithResponse(endpoint, payload);
+            } finally {
+              if (profileWrite) _forgetUploadedProfile();
+            }
             _rawMessageController.add(
               packToRaw(data.operation, data.characteristicUUID, payload),
             );
@@ -37,6 +43,15 @@ extension UnifiedDe1Raw on UnifiedDe1 {
         _log.severe("Failed to process raw: $e", e, st);
       }
     });
+  }
+
+  bool _isProfileEndpoint(Endpoint endpoint) =>
+      endpoint == Endpoint.headerWrite || endpoint == Endpoint.frameWrite;
+
+  void _forgetUploadedProfile() {
+    _rawProfileWrites++;
+    _currentProfile = null;
+    _lastTailDe1Emulation = false;
   }
 
   void notifyFrom(Endpoint e, Uint8List data) {
