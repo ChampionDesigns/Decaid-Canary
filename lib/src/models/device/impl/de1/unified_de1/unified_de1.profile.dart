@@ -11,6 +11,7 @@ const double _maxStepTemperature = 127.5;
 const int _maxStepVolume = 1023;
 const double _maxPowerExitWatts = 25.5;
 const _nativeShapingSlots = [21, 22, 23];
+const _maxProfileSteps = 20;
 
 class ProfileValueUnsupportedException extends ProfileModeUnsupportedException
     implements UnsupportedError {
@@ -78,6 +79,12 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       step.transition == TransitionType.hold && step is! ProfileStepLever;
 
   void _assertProfileEncodable(Profile profile) {
+    if (profile.steps.length > _maxProfileSteps) {
+      throw ProfileModeUnsupportedException(
+        'Profile "${profile.title}" has ${profile.steps.length} steps; the '
+        'machine runs at most $_maxProfileSteps steps.',
+      );
+    }
     void refuse(String field, double value, String problem, [int? step]) =>
         throw ProfileValueUnsupportedException(
           field: field,

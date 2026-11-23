@@ -536,6 +536,10 @@ bitmask as `extra.profileModeCaps`: `0x1` Power, `0x2` Lever, `0x4` HOLD, `0x8` 
 exit. An absent or zero mask means the machine cannot run those steps, and
 `POST /api/v1/machine/profile` refuses the upload with a `400` before it writes anything.
 
+A profile with more than 20 steps is refused the same way on every machine (`error`
+`Unsupported profile`, `message` `Profile "<title>" has <n> steps; the machine runs at most 20
+steps.`).
+
 ### Workflow
 
 | Method | Path | Description | Handler |

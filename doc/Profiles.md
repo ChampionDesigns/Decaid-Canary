@@ -198,7 +198,10 @@ Example:
 }
 ```
 
-Upload: on a Bengle, Decaid writes the 21-byte block to frame slots 21, 22
+Upload: a profile has at most 20 steps. Decaid refuses a profile with more
+steps before it writes anything, on a DE1 and on a Bengle: steps use frame
+slots 0 to 19 and the tail goes in the slot after the last step. On a Bengle,
+Decaid writes the 21-byte block to frame slots 21, 22
 and 23, after the extension frames and before the tail. Each write is the slot
 index and 7 block bytes. The upload skips the block on a DE1, with DE1
 emulation on (the tail byte that `de1_emulation` sets is 1), and for a profile

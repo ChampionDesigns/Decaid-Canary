@@ -7212,7 +7212,10 @@ components:
         `target_volume_count_start` must be finite. A value that parses to NaN
         or an infinity (for example the string `"NaN"` or the number `1e400`)
         is refused with a `400` that names the field, before the profile is
-        stored or sent to the machine.
+        stored or sent to the machine. An upload to the machine of a profile
+        with more than 20 `steps` is refused with a `400` (`Unsupported
+        profile`) before any write, on every machine; the profile still stores
+        and round-trips unchanged.
       required:
         - title
         - steps
