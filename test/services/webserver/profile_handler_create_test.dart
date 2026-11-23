@@ -124,6 +124,44 @@ void main() {
       expect(profile['title'], equals('Imported profile'));
     });
 
+    test('stores native_shaping rounded to its wire steps', () async {
+      final body = profileWithoutMetadata()
+        ..['native_shaping'] = {
+          'pump_curve': [
+            {'pressure': 2.96, 'flow': 12.04},
+          ],
+          'flow_tau': 0.509,
+        };
+
+      final response = await postProfile({'profile': body});
+
+      expect(response.statusCode, 201);
+      final record =
+          jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      final profile = record['profile'] as Map<String, dynamic>;
+      expect(profile['native_shaping'], {
+        'version': 1,
+        'pump_curve': [
+          {'pressure': 3.0, 'flow': 12.0},
+        ],
+        'flow_tau': 0.5,
+        'flow_mode': 'both',
+        'pressure_tau': 0.0,
+        'pressure_mode': 'both',
+        'ramp_factor': 1.0,
+      });
+    });
+
+    test('returns 400 when native_shaping breaks a rule', () async {
+      final body = profileWithoutMetadata()
+        ..['native_shaping'] = {'flow_tau': 6};
+
+      final response = await postProfile({'profile': body});
+
+      expect(response.statusCode, 400);
+      expect(await response.readAsString(), contains('flow_tau'));
+    });
+
     test('returns 400 (not 500) when title is missing', () async {
       final body = profileWithoutMetadata()..remove('title');
 

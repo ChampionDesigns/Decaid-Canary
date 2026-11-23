@@ -419,6 +419,15 @@ and do not add the prefix to a title that already starts with it. The profile
 title and profile id never change, so `profileTitle` filters match the plain
 title and find both kinds of shot.
 
+**Native shaping report.** A shot can carry `workflow.machine.nativeShaping`,
+the native shaping that a Bengle reported for the shot: `source` (`cli`,
+`profile`, `cliBlockRefused`, `inactive` or `unknown`), `sourceCode`, `refusal`
+(the rule that refused the profile block, or `none`), `refusalCode`,
+`latchCount`, `settingsRounded`, and `settings` in the `native_shaping` format
+of `doc/Profiles.md`. The app takes it when it saves the shot. The key is
+absent when the machine gave no report. The schema is `NativeShapingReport` in
+`assets/api/rest_v1.yml`.
+
 **Modification tracking.** Every shot carries `createdAt` and `updatedAt`
 (ISO-8601 UTC, always serialized with a trailing `Z`). `createdAt` is set
 when the shot enters local storage; the extraction `timestamp` is the fallback
@@ -495,6 +504,11 @@ in-app stop will trigger on.
 Profile updates use tri-state patch semantics: omitting `metadata` preserves it,
 `metadata: null` clears it, and an object replaces it. The profile itself is
 non-nullable; `profile: null` returns `400`.
+
+A profile may carry a `native_shaping` block (`doc/Profiles.md`, Native Shaping).
+Decaid rounds each number to its wire step, checks it, and returns the rounded
+block. A value that breaks a rule, for example `"flow_tau": 6`, returns `400`.
+The block is part of the profile ID only when present.
 
 #### Extended step types (capability-gated)
 

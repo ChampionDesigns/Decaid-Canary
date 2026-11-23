@@ -14,6 +14,8 @@ class ProfileHash {
       'target_volume': profile.targetVolume,
       'target_volume_count_start': profile.targetVolumeCountStart,
       if (profile.de1Emulation) 'de1_emulation': true,
+      if (profile.nativeShaping != null)
+        'native_shaping': profile.nativeShaping!.toJson(),
     };
 
     final jsonStr = _encodeJsonStable(data);

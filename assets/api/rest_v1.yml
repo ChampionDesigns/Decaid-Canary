@@ -7259,6 +7259,135 @@ components:
             and every step is a pressure or flow step with a fast or smooth
             transition; otherwise the profile uploads with the flag off. The
             stored value does not change.
+        native_shaping:
+          $ref: '#/components/schemas/NativeShaping'
+
+    NativeShaping:
+      type: object
+      description: >
+        Optional profile block with the native shaping settings of a Bengle:
+        the pump curve, the flow and pressure time constants and modes, and
+        the ramp factor. An absent or null block means no block, and the JSON
+        then has no `native_shaping` key. A key that is absent inside the
+        block takes its default. Decaid rounds each number half up to its wire
+        step first (0.02 for `flow_tau`, `pressure_tau` and `ramp_factor`;
+        0.1 for `pressure` and `flow`), then checks the rounded value, and
+        stores and returns the rounded value with every key. A value that
+        breaks a rule is refused with a `400` that names the field. The block
+        is part of the profile hash only when present, so a profile without
+        it keeps its ID and a change to the block makes a new profile ID.
+        Every machine stores the block.
+      properties:
+        version:
+          type: integer
+          enum: [1]
+          default: 1
+        pump_curve:
+          type: array
+          maxItems: 8
+          default: []
+          description: >
+            0-8 points after the fixed point 0 bar, 20 mL/s. An empty curve
+            turns the pump curve off. Each pressure is at least 0.5 bar above
+            the previous point, and the flow never rises.
+          items:
+            type: object
+            required: [pressure, flow]
+            properties:
+              pressure:
+                type: number
+                minimum: 0.5
+                maximum: 13.5
+                description: bar, step 0.1.
+              flow:
+                type: number
+                minimum: 0
+                maximum: 20
+                description: mL/s, step 0.1.
+        flow_tau:
+          type: number
+          minimum: 0
+          maximum: 5
+          default: 0
+          description: Flow time constant in seconds, step 0.02.
+        flow_mode:
+          type: string
+          enum: [both, rise, fall]
+          default: both
+        pressure_tau:
+          type: number
+          minimum: 0
+          maximum: 5
+          default: 0
+          description: Pressure time constant in seconds, step 0.02.
+        pressure_mode:
+          type: string
+          enum: [both, rise, fall]
+          default: both
+        ramp_factor:
+          type: number
+          minimum: 0
+          maximum: 4
+          default: 1
+          description: Step 0.02.
+      example:
+        version: 1
+        pump_curve:
+          - {pressure: 1.0, flow: 20.0}
+          - {pressure: 3.0, flow: 12.0}
+          - {pressure: 6.0, flow: 6.0}
+          - {pressure: 9.0, flow: 5.0}
+          - {pressure: 12.0, flow: 4.0}
+        flow_tau: 0.5
+        flow_mode: both
+        pressure_tau: 0.5
+        pressure_mode: both
+        ramp_factor: 1.0
+
+    NativeShapingReport:
+      type: object
+      description: >
+        The native shaping that a Bengle reported for the shot. Decaid decodes
+        it from the 32 bytes of the machine's native shaping report. An unknown
+        source or refusal code reads as `unknown` and keeps its number in
+        `sourceCode` or `refusalCode`. Bytes 25-31 are ignored.
+      required: [source, sourceCode, refusal, refusalCode, latchCount, settingsRounded]
+      properties:
+        source:
+          type: string
+          enum: [cli, profile, cliBlockRefused, inactive, unknown]
+          description: >
+            Where the settings came from: the machine's own settings (`cli`),
+            the profile block (`profile`), the machine's own settings because
+            it refused the block (`cliBlockRefused`), or no native shaping
+            because the shot ran in DE1 emulation (`inactive`).
+        sourceCode:
+          type: integer
+          description: Byte 0 of the report.
+        refusal:
+          type: string
+          enum: [none, version, modeCode, pointCount, tauRange, rampRange, unusedBytes, pressureRange, pressureRise, flowRange, flowRise, unknown]
+          description: The rule that refused the block, or `none`.
+        refusalCode:
+          type: integer
+          description: Byte 1 of the report.
+        latchCount:
+          type: integer
+          description: >
+            Byte 2 of the report. The machine adds 1 at each latch, so a client
+            can pair a report with a shot.
+        settingsRounded:
+          type: boolean
+          description: >
+            True when a machine setting was not on its wire step, so the
+            settings are rounded.
+        settings:
+          $ref: '#/components/schemas/NativeShaping'
+          description: >
+            The settings that the shot ran with, in the profile block format.
+            Absent when the source is `inactive` (DE1 emulation: the machine
+            latched settings but did not use them) and when the report has no
+            block that Decaid can decode.
 
     ProfileStep:
       type: object
@@ -8132,6 +8261,12 @@ components:
             steps with a fast or smooth transition). Absent
             otherwise. Captured by the app and read-only: PUT /shots/{id}
             ignores it. ShotRecord.de1Emulation mirrors it.
+        nativeShaping:
+          $ref: '#/components/schemas/NativeShapingReport'
+          description: >
+            The native shaping that the machine reported for the shot, taken
+            by the app when it saves the shot. Absent when the machine gave no
+            report.
 
     SteamSettingsPatch:
       type: object

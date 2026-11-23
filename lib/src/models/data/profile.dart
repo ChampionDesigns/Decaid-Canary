@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:equatable/equatable.dart';
 
+import 'native_shaping.dart';
 import 'utils.dart';
 
 @immutable
@@ -16,6 +17,7 @@ class Profile extends Equatable {
   final int targetVolumeCountStart;
   final double tankTemperature;
   final bool de1Emulation;
+  final NativeShaping? nativeShaping;
 
   const Profile({
     required this.version,
@@ -29,6 +31,7 @@ class Profile extends Equatable {
     required this.targetVolumeCountStart,
     required this.tankTemperature,
     this.de1Emulation = false,
+    this.nativeShaping,
   });
 
   @override
@@ -44,6 +47,7 @@ class Profile extends Equatable {
     targetVolumeCountStart,
     tankTemperature,
     de1Emulation,
+    nativeShaping,
   ];
 
   static const unknownTitle = 'Unknown profile';
@@ -95,6 +99,7 @@ class Profile extends Equatable {
       ),
       tankTemperature: _requireFiniteProfileNumber(json, 'tank_temperature'),
       de1Emulation: json['de1_emulation'] == true,
+      nativeShaping: _parseNativeShaping(json['native_shaping']),
     );
   }
 
@@ -111,6 +116,7 @@ class Profile extends Equatable {
       'target_volume_count_start': targetVolumeCountStart,
       'tank_temperature': tankTemperature,
       if (de1Emulation) 'de1_emulation': true,
+      if (nativeShaping != null) 'native_shaping': nativeShaping!.toJson(),
     };
   }
 
@@ -126,6 +132,8 @@ class Profile extends Equatable {
     int? targetVolumeCountStart,
     double? tankTemperature,
     bool? de1Emulation,
+    NativeShaping? nativeShaping,
+    bool clearNativeShaping = false,
   }) {
     return Profile(
       version: version ?? this.version,
@@ -140,6 +148,9 @@ class Profile extends Equatable {
           targetVolumeCountStart ?? this.targetVolumeCountStart,
       tankTemperature: tankTemperature ?? this.tankTemperature,
       de1Emulation: de1Emulation ?? this.de1Emulation,
+      nativeShaping: clearNativeShaping
+          ? null
+          : nativeShaping ?? this.nativeShaping,
     );
   }
 
@@ -181,6 +192,14 @@ enum TemperatureSensor { coffee, water }
 enum ExitType { pressure, flow, power }
 
 enum ExitCondition { over, under }
+
+NativeShaping? _parseNativeShaping(Object? raw) {
+  if (raw == null) return null;
+  if (raw is! Map) {
+    throw ArgumentError('Profile "native_shaping" must be an object');
+  }
+  return NativeShaping.fromJson(Map<String, dynamic>.from(raw));
+}
 
 double _requireLimiterNumber(Map<String, dynamic> json, String field) {
   final raw = json[field];

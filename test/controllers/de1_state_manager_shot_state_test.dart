@@ -9,6 +9,7 @@ import 'package:reaprime/src/controllers/device_controller.dart';
 import 'package:reaprime/src/controllers/persistence_controller.dart';
 import 'package:reaprime/src/controllers/scale_controller.dart';
 import 'package:reaprime/src/controllers/workflow_controller.dart';
+import 'package:reaprime/src/models/data/native_shaping.dart';
 import 'package:reaprime/src/models/data/shot_record.dart';
 import 'package:reaprime/src/models/data/shot_state_event.dart';
 import 'package:reaprime/src/models/data/steam_record.dart';
@@ -49,6 +50,9 @@ class _TestDe1Controller extends De1Controller {
     if (de1 == null) throw 'no de1 connected';
     return de1;
   }
+
+  @override
+  De1Interface? get connectedDe1OrNull => current;
 
   void connect(De1Interface de1) {
     current = de1;
@@ -517,6 +521,73 @@ void main() {
       expect(record.de1Emulation, isTrue);
       expect(record.displayProfileTitle, 'B-DE1 · Recipe A');
       expect(workflowController.currentWorkflow.profile, profileB);
+    });
+  });
+
+  group('native shaping report', () {
+    NativeShapingReport report(int latchCount) =>
+        NativeShapingReport.fromBytes([
+          1,
+          0,
+          latchCount,
+          0,
+          ...[0x01, 0x05, 0x19, 0x19, 0x32, 0x0A, 0xC8],
+          ...[0x1E, 0x78, 0x3C, 0x3C, 0x5A, 0x32, 0x78],
+          ...[0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+          ...List.filled(7, 0),
+        ]);
+
+    test('a shot without a report has no nativeShaping key', () async {
+      await driveShot();
+
+      final record = storage.storedShots.single;
+      expect(record.workflow.machine?.nativeShaping, isNull);
+      final machine = record.workflow.toJson()['machine'] as Map;
+      expect(machine.containsKey('nativeShaping'), isFalse);
+    });
+
+    test('the report that the machine gives during the shot lands in '
+        'workflow.machine.nativeShaping', () async {
+      testDe1.lastNativeShapingReport = report(4);
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.preparingForShot,
+      );
+      await pump();
+      testDe1.lastNativeShapingReport = report(5);
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouring,
+      );
+      await pump();
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouringDone,
+      );
+      await pump();
+
+      final record = storage.storedShots.single;
+      expect(record.workflow.machine?.nativeShaping, report(5));
+      expect(
+        record.workflow.machine?.provenanceStatus,
+        WorkflowMachineProvenanceStatus.captured,
+      );
+      final machine = record.workflow.toJson()['machine'] as Map;
+      expect(machine['nativeShaping'], report(5).toJson());
+      expect(workflowController.currentWorkflow.machine?.nativeShaping, isNull);
+    });
+
+    test('a shot after a cleared report does not keep the old one', () async {
+      testDe1.lastNativeShapingReport = report(1);
+      await driveShot();
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = null;
+      await driveShot();
+
+      expect(storage.storedShots, hasLength(2));
+      expect(storage.storedShots[0].workflow.machine?.nativeShaping, report(1));
+      expect(storage.storedShots[1].workflow.machine?.nativeShaping, isNull);
     });
   });
 
