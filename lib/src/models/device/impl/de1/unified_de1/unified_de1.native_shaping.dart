@@ -132,13 +132,14 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
       : _readNativeShapingBaseline(timeout);
 
   Future<void> _readNativeShapingRelatch() async {
+    final countBefore = _lastSeenLatchCount;
     final report = await _readNativeShapeLatched();
     if (report == null || !_nativeShapingShotRunning) return;
-    final accepted = _nativeShapingReport;
-    if (accepted == null || accepted.latchCount == report.latchCount) return;
+    final known = _nativeShapingReport?.latchCount ?? countBefore;
+    if (known == null || known == report.latchCount) return;
     _log.info(
       'Native shaping re-latched after a profile upload during the shot '
-      '(latch ${accepted.latchCount} to ${report.latchCount})',
+      '(latch $known to ${report.latchCount})',
     );
     _nativeShapingReport = report;
   }

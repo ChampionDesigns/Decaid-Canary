@@ -47,6 +47,38 @@ void main() {
       expect(bengle.lastNativeShapingReport, same(accepted));
     });
 
+    Future<(Bengle, NativeShapeMachineTransport)> shotWithNoLatch() async {
+      final (bengle, transport) = await nsConnectBengle(connectLatch: 4);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => transport.reportReads >= 6);
+      await nsSettle();
+      expect(bengle.lastNativeShapingReport, isNull);
+      return (bengle, transport);
+    }
+
+    test('a new count at the post-upload read gives the report when the '
+        'shot reads saw only the baseline', () async {
+      final (bengle, transport) = await shotWithNoLatch();
+      transport.image = nsImage(latch: 5, block: nsOtherBlock);
+
+      await bengle.setProfile(nsProfile(title: 'during the shot'));
+
+      final report = bengle.lastNativeShapingReport!;
+      expect(report.latchCount, 5);
+      expect(report.settings, NativeShaping.fromBlockBytes(nsOtherBlock));
+    });
+
+    test('the baseline count at the post-upload read gives no report when '
+        'the shot reads saw only the baseline', () async {
+      final (bengle, transport) = await shotWithNoLatch();
+      final readsBefore = transport.reportReads;
+
+      await bengle.setProfile(nsProfile(title: 'during the shot'));
+
+      expect(transport.reportReads - readsBefore, 3);
+      expect(bengle.lastNativeShapingReport, isNull);
+    });
+
     test('an upload after the machine left espresso does not replace the '
         'report', () async {
       final (bengle, transport) = await shotWithReport();

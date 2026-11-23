@@ -221,8 +221,8 @@ connect sequence, and again after each profile upload. A shot that starts
 before the connect read ends has no count: Decaid keeps the first good read
 and logs that it had no baseline. After a profile upload while the shot runs,
 Decaid does the full read. When its latch count differs from the kept report,
-it replaces the report: the machine latches again in heat-up when an upload
-changes the block. A read waits for a profile upload that is in progress, and
+or from the last count read when no report is kept yet, it replaces the
+report: the machine latches again in heat-up when an upload changes the block. A read waits for a profile upload that is in progress, and
 no read starts after the machine leaves espresso. Decaid clears the report
 only when the next shot starts. A shot record gets the report that the machine
 has when the shot is saved. When the machine starts the next espresso before

@@ -427,7 +427,8 @@ the native shaping that a Bengle reported for the shot: `source` (`cli`,
 of `doc/Profiles.md`. The app reads the report from a Bengle after the machine
 enters espresso, and once more later in the shot if the first read gives
 nothing. After a profile upload during the shot, the app reads it again, and a
-new latch count replaces the report (the machine latches again in heat-up).
+new latch count replaces the report, or gives the first one when the shot has
+no report yet (the machine latches again in heat-up).
 The app takes the report when it saves the shot. A shot can settle (the scale
 weight comes to rest) after the machine starts the next espresso. Then the
 record keeps the last report that the app saw before that start. The key is
