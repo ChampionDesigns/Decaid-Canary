@@ -154,6 +154,85 @@ of the shot tail frame only when all of these are true:
 The stored flag does not change when the steps block it. Only the byte that
 Decaid sends changes.
 
+#### Native Shaping
+
+`native_shaping` is an optional profile-level block with the native shaping
+settings of a Bengle. An absent or `null` block means no block, and `toJson`
+then writes no key. Every machine parses and stores the block.
+
+| Key | Type | Unit | Range | Step | Default |
+|---|---|---|---|---|---|
+| `version` | integer | - | 1 | - | 1 |
+| `pump_curve` | array of 0-8 `{pressure, flow}` | bar, mL/s | pressure 0.5-13.5, each at least 0.5 above the previous point; flow 0-20, never rises | 0.1, 0.1 | `[]` (off) |
+| `flow_tau` | number | s | 0-5 | 0.02 | 0 |
+| `flow_mode` | string | - | `both`, `rise`, `fall` | - | `both` |
+| `pressure_tau` | number | s | 0-5 | 0.02 | 0 |
+| `pressure_mode` | string | - | `both`, `rise`, `fall` | - | `both` |
+| `ramp_factor` | number | - | 0-4 | 0.02 | 1 |
+
+The curve starts at a fixed point of 0 bar and 20 mL/s, which is not in the
+array. A key that is absent inside the block takes its default.
+
+`NativeShaping.fromJson` rounds each number half up to its wire step first
+(a decimal half step such as `0.29` s rounds up to `0.30` s),
+then checks the rounded value. So the stored value is the value the machine
+runs, and two blocks that round to the same bytes are equal. A PUT
+`/api/v1/workflow` treats the block as one value: a sent block replaces the
+stored one with no merge of keys or points (see `doc/Api.md`, Workflow). A value that
+breaks a rule throws an `ArgumentError`, and the REST API returns `400`.
+`toJson` writes every key of the block.
+
+Example:
+
+```json
+"native_shaping": {
+  "version": 1,
+  "pump_curve": [
+    {"pressure": 1.0, "flow": 20.0}, {"pressure": 3.0, "flow": 12.0},
+    {"pressure": 6.0, "flow": 6.0}, {"pressure": 9.0, "flow": 5.0},
+    {"pressure": 12.0, "flow": 4.0}
+  ],
+  "flow_tau": 0.5, "flow_mode": "both",
+  "pressure_tau": 0.5, "pressure_mode": "both",
+  "ramp_factor": 1.0
+}
+```
+
+Upload: a profile has at most 20 steps. Decaid refuses a profile with more
+steps before it writes anything, on a DE1 and on a Bengle: steps use frame
+slots 0 to 19 and the tail goes in the slot after the last step. On a Bengle,
+Decaid writes the 21-byte block to frame slots 21, 22
+and 23, after the extension frames and before the tail. Each write is the slot
+index and 7 block bytes. The upload skips the block on a DE1, with DE1
+emulation on (the tail byte that `de1_emulation` sets is 1), and for a profile
+without the block. The upload never refuses a profile because of the block. A
+header write clears all slots, so a profile without the block runs the
+machine's own settings.
+
+A shot records what the machine reported that it ran in
+`workflow.machine.nativeShaping` (see `doc/Api.md`, Shots). Decaid reads the
+machine's native shaping report (MMR `NativeShapeLatched`, 32 bytes) after the
+machine enters espresso. The read takes bytes 0-15 and 16-31, then bytes 0-15
+again; the latch count (byte 2) of the first and the last read must agree, or
+the read starts again (at most three passes). Each read waits 1 s for a reply.
+When a read gets no reply in that time (firmware without the report), Decaid
+logs that reg 66 did not answer and makes no more reg 66 reads until the next
+connect: no shot read, no read after an upload. A short reply, an error or a
+latch count that changed on each pass does not stop the reads. Decaid keeps a
+report only when its latch count differs from the count of the last read before the shot. It
+forgets that count at each connect, then reads bytes 0-15 once after the
+connect sequence, and again after each profile upload. A shot that starts
+before the connect read ends has no count: Decaid keeps the first good read
+and logs that it had no baseline. After a profile upload while the shot runs,
+Decaid does the full read. When its latch count differs from the kept report,
+or from the last count read when no report is kept yet, it replaces the
+report: the machine latches again in heat-up when an upload changes the block. A read waits for a profile upload that is in progress, and
+no read starts after the machine leaves espresso. Decaid clears the report
+only when the next shot starts. A shot record gets the report that the machine
+has when the shot is saved. When the machine starts the next espresso before
+the shot is saved (the scale weight did not settle yet), the record gets the
+last report seen before that start.
+
 #### Hash Types
 
 Profiles use three SHA-256 hashes:
@@ -162,6 +241,7 @@ Profiles use three SHA-256 hashes:
 - Calculated from execution-relevant fields:
   - `beverage_type`, `steps`, `tank_temperature`, `target_weight`, `target_volume`, `target_volume_count_start`, `version`
   - `de1_emulation`, only when it is `true`, so a profile without the flag keeps the hash it had before the field existed
+  - `native_shaping`, only when present, so a profile without the block keeps its hash and a change to the block makes a new ID
 - Format: `profile:<first_20_chars_of_hash>`
 - Example: `profile:a3f2c8b4d1e6f9a21c7d`
 - Used as the profile record's unique ID
@@ -307,7 +387,7 @@ Content-Type: application/json
 
 Omitted fields are preserved. Set `metadata` to `null` to clear stored metadata, or pass an object to replace it. The `profile` field is non-nullable; explicit `null` returns 400.
 
-Cannot modify the `profile` field of default profiles (only metadata). If execution changes produce a new ID, replacement is atomic. If that ID already exists, the update is rejected and both profiles remain unchanged.
+Cannot modify the `profile` field of default profiles (only metadata). If execution changes produce a new ID, replacement is atomic: the new record keeps the old visibility, and child profiles (`parentId`) move to the new ID. If that ID already exists, the response is the existing record (200), as for a POST of an equal profile, and both profiles remain unchanged.
 
 Response: Updated `ProfileRecord` (200) or error (400/404)
 

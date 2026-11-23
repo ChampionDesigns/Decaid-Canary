@@ -324,6 +324,7 @@ void main() {
       transport.queueMmrResponseInt(MMRItem.calFlowEst, 100);
       transport.queueOnConnectResponses(v13Model: 128, profileModeCaps: 0xF);
       await de1.onConnect();
+      await transport.completeNativeShapeConnectRead();
       addTearDown(transport.dispose);
       final writesBefore = transport.writes.length;
       const leverHold = Profile(

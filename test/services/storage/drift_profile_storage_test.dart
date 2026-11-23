@@ -53,6 +53,27 @@ void main() {
     expect(await storage.get(replacement.id), replacement);
   });
 
+  test('moves the children of the replaced profile to the new id', () async {
+    final child = domain.ProfileRecord.create(
+      profile: _profile(91),
+      parentId: original.id,
+    );
+    final unrelated = domain.ProfileRecord.create(
+      profile: _profile(92),
+      parentId: 'other',
+    );
+    await storage.store(child);
+    await storage.store(unrelated);
+    final replacement = original.copyWith(profile: _profile(94));
+
+    await storage.replace(original.id, replacement);
+
+    expect((await storage.get(child.id))?.parentId, replacement.id);
+    expect((await storage.get(unrelated.id))?.parentId, 'other');
+    expect(await storage.getByParentId(original.id), isEmpty);
+    expect(await storage.count(), 3);
+  });
+
   test('rolls back when storing the replacement fails', () async {
     final replacement = original.copyWith(
       profile: _profile(94),

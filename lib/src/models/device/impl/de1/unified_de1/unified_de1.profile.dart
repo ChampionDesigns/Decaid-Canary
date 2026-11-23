@@ -10,6 +10,8 @@ const double _bengleMaxFlowMlPerSec = 20.0;
 const double _maxStepTemperature = 127.5;
 const int _maxStepVolume = 1023;
 const double _maxPowerExitWatts = 25.5;
+const _nativeShapingSlots = [21, 22, 23];
+const _maxProfileSteps = 20;
 
 class ProfileValueUnsupportedException extends ProfileModeUnsupportedException
     implements UnsupportedError {
@@ -37,9 +39,18 @@ class ProfileValueUnsupportedException extends ProfileModeUnsupportedException
 extension UnifiedDe1Profile on UnifiedDe1 {
   Future<void> _sendProfile(Profile profile) async {
     _assertProfileEncodable(profile);
+    _lastTailDe1Emulation = false;
+    final rawProfileWrites = _rawProfileWrites;
     await _writeHeader(profile);
     await _writeSteps(profile);
-    await _writeTail(profile);
+    final tailDe1Emulation = profile.usesDe1Emulation(
+      machineSupported: implementation == .bengle,
+    );
+    await _writeNativeShapingBlock(profile, tailDe1Emulation);
+    await _writeTail(profile, tailDe1Emulation);
+    if (rawProfileWrites == _rawProfileWrites) {
+      _lastTailDe1Emulation = tailDe1Emulation;
+    }
     await _writeMMRInt(MMRItem.tankTemp, profile.tankTemperature.round());
   }
 
@@ -68,6 +79,12 @@ extension UnifiedDe1Profile on UnifiedDe1 {
       step.transition == TransitionType.hold && step is! ProfileStepLever;
 
   void _assertProfileEncodable(Profile profile) {
+    if (profile.steps.length > _maxProfileSteps) {
+      throw ProfileModeUnsupportedException(
+        'Profile "${profile.title}" has ${profile.steps.length} steps; the '
+        'machine runs at most $_maxProfileSteps steps.',
+      );
+    }
     void refuse(String field, double value, String problem, [int? step]) =>
         throw ProfileValueUnsupportedException(
           field: field,
@@ -316,21 +333,32 @@ extension UnifiedDe1Profile on UnifiedDe1 {
     }
   }
 
-  Future<void> _writeTail(Profile profile) async {
+  Future<void> _writeNativeShapingBlock(
+    Profile profile,
+    bool tailDe1Emulation,
+  ) async {
+    final shaping = profile.nativeShaping;
+    if (!isBengle || shaping == null || tailDe1Emulation) return;
+    final block = shaping.toBlockBytes();
+    for (final (i, slot) in _nativeShapingSlots.indexed) {
+      final data = Uint8List(8);
+      data[0] = slot;
+      data.setRange(1, 8, block, i * 7);
+      await _transport.writeWithResponse(Endpoint.frameWrite, data);
+    }
+  }
+
+  Future<void> _writeTail(Profile profile, bool de1Emulation) async {
     Uint8List data = Uint8List(8);
 
     data[0] = profile.steps.length;
 
-    data[3] =
-        profile.usesDe1Emulation(machineSupported: implementation == .bengle)
-        ? 1
-        : 0;
+    data[3] = de1Emulation ? 1 : 0;
     data[4] = 0;
     data[5] = 0;
     data[6] = 0;
     data[7] = 0;
     await _transport.writeWithResponse(Endpoint.frameWrite, data);
-    _lastTailDe1Emulation = data[3] == 1;
   }
 }
 

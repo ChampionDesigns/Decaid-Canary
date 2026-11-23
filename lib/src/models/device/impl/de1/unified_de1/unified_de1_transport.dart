@@ -68,7 +68,7 @@ class UnifiedDe1Transport {
   ReplaySubject<ByteData> _bengleShotSampleSubject = ReplaySubject(maxSize: 1);
   PublishSubject<ByteData> _calibrationSubject = PublishSubject();
   bool _bengleShotSampleEnabled = false;
-  bool _estimatorEnabled = false;
+  bool _estimatorFoundOnLink = false;
 
   Stream<ByteData> get state => _stateSubject.asBroadcastStream();
   ByteData? get latestStateInfo => _stateSubject.valueOrNull;
@@ -262,10 +262,7 @@ class UnifiedDe1Transport {
     final present = await t.discoverCharacteristics(de1ServiceUUID);
     final wanted = BleServiceIdentifier.parse(Endpoint.estimator.uuid);
     if (!wanted.matchesAny(present)) {
-      if (generation == _linkGeneration) {
-        _estimatorEnabled = false;
-        _setEstimatorAvailable(false);
-      }
+      if (generation == _linkGeneration) _setEstimatorAvailable(false);
       _log.info(
         'BengleEstSample characteristic not present on this machine; '
         'skipping the estimator subscribe (firmware predates it, or the '
@@ -282,7 +279,7 @@ class UnifiedDe1Transport {
       ),
     );
     if (generation == _linkGeneration) {
-      _estimatorEnabled = true;
+      _estimatorFoundOnLink = true;
       _setEstimatorAvailable(true);
     }
     return true;
@@ -473,7 +470,7 @@ class UnifiedDe1Transport {
     _bengleShotSampleSubject = ReplaySubject(maxSize: 1);
     _calibrationSubject = PublishSubject();
     _bengleShotSampleEnabled = false;
-    _estimatorEnabled = false;
+    _estimatorFoundOnLink = false;
     _setEstimatorAvailable(false);
     _estimatorSubject.close();
     _estimatorSubject = BehaviorSubject.seeded(ByteData(0));
@@ -1031,7 +1028,7 @@ class UnifiedDe1Transport {
     final appConnects = _appConnects;
     _recovering = true;
     final restoreBengleShotSample = _bengleShotSampleEnabled;
-    final restoreEstimator = _estimatorEnabled;
+    final restoreEstimator = _estimatorFoundOnLink;
     try {
       await _transport.disconnect();
       if (generation != _linkGeneration) {

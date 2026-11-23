@@ -22,6 +22,14 @@ import '../../helpers/mock_device_discovery_service.dart';
 class _TimeoutOnceTransport extends FakeBleTransport {
   bool timeoutNextWrite = false;
   bool failEstimatorSubscribe = false;
+  int discoverCalls = 0;
+  int estimatorSubscribes = 0;
+
+  @override
+  Future<List<String>> discoverCharacteristics(String serviceUUID) {
+    discoverCalls++;
+    return super.discoverCharacteristics(serviceUUID);
+  }
 
   @override
   Future<void> subscribe(
@@ -33,6 +41,7 @@ class _TimeoutOnceTransport extends FakeBleTransport {
         characteristicUUID == Endpoint.estimator.uuid) {
       throw StateError('estimator subscribe failed');
     }
+    if (characteristicUUID == Endpoint.estimator.uuid) estimatorSubscribes++;
     await super.subscribe(serviceUUID, characteristicUUID, callback);
   }
 
@@ -220,6 +229,71 @@ void main() {
 
     expect(frames, hasLength(1));
     expect(frames.single['r1'], closeTo(3.2, 1e-9));
+  });
+
+  test('a recovery that misses A014 and a later recovery that finds it '
+      'register the sensor again', () async {
+    final t = _transport(hasEstimator: true);
+    final bengle = await connectedBengle(t);
+    final seen = <bool>[];
+    final sub = bengle.puckEstimatorAvailable.listen(seen.add);
+    addTearDown(sub.cancel);
+    de1Controller.emit(bengle);
+    await settle();
+    t.emitNotification(Endpoint.estimator, _frame(450));
+    await settle();
+    expect(estimator(), isNotNull);
+
+    t.presentCharacteristics = const [];
+    t.timeoutNextWrite = true;
+    await bengle.requestState(MachineState.idle);
+    await settle();
+    expect(seen, [true, false]);
+    expect(estimator(), isNull);
+
+    t.presentCharacteristics = [Endpoint.estimator.uuid];
+    t.timeoutNextWrite = true;
+    await bengle.requestState(MachineState.idle);
+    await settle();
+
+    expect(seen, [true, false, true]);
+    expect(t.estimatorSubscribes, 2);
+    expect(t.subscribers.containsKey(Endpoint.estimator.uuid), isTrue);
+    final restored = estimator();
+    expect(restored, isNotNull);
+    final frames = <Map<String, dynamic>>[];
+    final dataSub = restored!.data.listen(frames.add);
+    addTearDown(dataSub.cancel);
+    t.emitNotification(Endpoint.estimator, _frame(320));
+    await settle();
+    expect(frames, hasLength(1));
+    expect(frames.single['r1'], closeTo(3.2, 1e-9));
+  });
+
+  test('firmware without A014 makes no probe in a recovery', () async {
+    final t = _transport(hasEstimator: false);
+    final bengle = await connectedBengle(t);
+    de1Controller.emit(bengle);
+    await settle();
+    final discoverAfterConnect = t.discoverCalls;
+
+    for (var i = 0; i < 2; i++) {
+      t.timeoutNextWrite = true;
+      await bengle.requestState(MachineState.idle);
+      await settle();
+    }
+
+    expect(t.discoverCalls, discoverAfterConnect);
+    expect(t.estimatorSubscribes, 0);
+    expect(await bengle.puckEstimatorAvailable.first, isFalse);
+    expect(estimator(), isNull);
+    expect(sensors.unregisters, 0);
+    expect(
+      t.writes.where(
+        (w) => w.characteristicUUID == Endpoint.requestedState.uuid,
+      ),
+      hasLength(2),
+    );
   });
 
   test('a recovery that keeps A014 leaves the sensor registered', () async {

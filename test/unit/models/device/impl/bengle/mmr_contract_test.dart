@@ -17,9 +17,9 @@ const String _contractPath = 'assets/api/bengle_hw_v1.yml';
 
 /// The contract_version this registration table was written against.
 /// Bump deliberately, together with the enum updates the new contract needs.
-const int _expectedContractVersion = 4;
+const int _expectedContractVersion = 5;
 
-const int _expectedRegisterCount = 61;
+const int _expectedRegisterCount = 62;
 
 /// One app-declared register under test: the app enum entry and the FIRMWARE
 /// register name of its row in bengle_hw_v1.yml.
@@ -66,6 +66,7 @@ const List<ContractEntry> entriesUnderTest = <ContractEntry>[
   ContractEntry(MMRItem.refillKitPresent, 'RefillKitPresent'),
   ContractEntry(MMRItem.userPresent, 'UserPresent'),
   ContractEntry(MMRItem.profileModeCaps, 'ProfileModeCaps'),
+  ContractEntry(MMRItem.nativeShapeLatched, 'NativeShapeLatched'),
   ContractEntry(BengleScaleMmr.endOfShotWeight, 'EndOfShotWeight'),
   ContractEntry(BengleScaleMmr.scaleTare, 'ScaleTare'),
   ContractEntry(BengleMmr.matSetPoint, 'MatSetPoint'),
@@ -106,6 +107,7 @@ class ContractRegister {
     this.hasEffectiveBound = false,
     this.effectiveMin,
     this.effectiveMax,
+    this.since,
   });
 
   final String name;
@@ -122,8 +124,11 @@ class ContractRegister {
   final bool hasEffectiveBound;
   final int? effectiveMin;
   final int? effectiveMax;
+  final String? since;
 
   bool get writable => perms.contains('W');
+
+  bool get unreleased => since == 'unreleased';
 }
 
 class HwContract {
@@ -180,6 +185,7 @@ ContractRegister _register(YamlMap fields) {
         fields.containsKey('effective_max'),
     effectiveMin: _intOrNull(fields['effective_min']),
     effectiveMax: _intOrNull(fields['effective_max']),
+    since: fields['since']?.toString(),
   );
 }
 
@@ -465,8 +471,11 @@ registers:
       expect(_contract().firmwareCommit, firmwareRowsCommit);
     });
 
-    test('holds the same row names as the fixture', () {
-      final contractNames = _contract().rows.map((r) => r.name).toSet();
+    test('holds the same released row names as the fixture', () {
+      final contractNames = _contract().rows
+          .where((r) => !r.unreleased)
+          .map((r) => r.name)
+          .toSet();
       final fixtureNames = firmwareRows.map((r) => r.name).toSet();
       expect(
         contractNames.difference(fixtureNames),
@@ -478,6 +487,40 @@ registers:
         isEmpty,
         reason: 'firmware fixture rows absent from the contract',
       );
+    });
+
+    test('a since: unreleased row is not in the fixture and has a row '
+        'number', () {
+      final unreleased = _contract().rows.where((r) => r.unreleased).toList();
+      final fixtureNames = firmwareRows.map((r) => r.name).toSet();
+      final fixtureRows = firmwareRows.map((r) => r.fwRow).toSet();
+      expect(unreleased.map((r) => r.name), ['NativeShapeLatched']);
+      for (final row in unreleased) {
+        expect(fixtureNames, isNot(contains(row.name)));
+        expect(row.fwRow, isNotNull, reason: '${row.name} has no fw_row');
+        expect(
+          fixtureRows,
+          isNot(contains(row.fwRow)),
+          reason: 'fw_row ${row.fwRow} of ${row.name} is a released row',
+        );
+      }
+    });
+
+    test('every since is a contract_version up to the current one, or '
+        'unreleased', () {
+      final contract = _contract();
+      bool isVersion(String since) {
+        final version = int.tryParse(since);
+        return version != null &&
+            version >= 1 &&
+            version <= contract.contractVersion;
+      }
+
+      final bad = contract.rows
+          .where((r) => r.since != null && !r.unreleased)
+          .where((r) => !isVersion(r.since!))
+          .map((r) => '${r.name}: ${r.since}');
+      expect(bad, isEmpty);
     });
 
     for (final fw in firmwareRows) {

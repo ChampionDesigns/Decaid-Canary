@@ -1769,6 +1769,12 @@ paths:
         A complete profile that omits `de1_emulation` turns DE1 emulation off. A partial
         `profile` object without `steps` is deep-merged and keeps the current `de1_emulation`
         unless it sends the key.
+        `native_shaping` is one value and is never deep-merged. A complete profile replaces
+        it: the block it sends, or no block when it omits the key. A partial profile that
+        sends the key replaces the whole block, and `"native_shaping": null` removes it; a
+        partial profile without the key keeps the block. A key that is absent inside a sent
+        block takes its default, not the value of the stored block. A block that breaks a
+        rule returns `400`.
         The server does not debounce or combine separate requests. Machine side effects from
         workflow PUT requests do not execute concurrently,
         so a request may wait behind an in-flight machine operation. Each response describes
@@ -4142,9 +4148,11 @@ paths:
         `metadata: null` clears metadata; supplied metadata replaces it. The profile
         itself is non-nullable, so `profile: null` returns `400`.
         Cannot modify default profiles' content, only metadata. Execution changes
-        that produce a new profile ID replace the old record atomically. If the
-        target ID already exists, the update is rejected and both records remain
-        unchanged.
+        that produce a new profile ID replace the old record atomically, keep its
+        visibility, and move its child profiles (`parentId`) to the new ID. If the
+        target ID already exists, the response is that existing record with `200`,
+        as POST /api/v1/profiles does for an equal profile, and both records
+        remain unchanged.
       tags: [Profiles]
       parameters:
         - name: id
@@ -4175,8 +4183,8 @@ paths:
                 $ref: '#/components/schemas/ProfileRecord'
         "400":
           description: >-
-            Bad Request (profile not found, target ID already exists, cannot
-            modify default profile, or an invalid step limiter). A step limiter
+            Bad Request (profile not found, cannot modify default profile, or an
+            invalid step limiter). A step limiter
             without a numeric `value` or `range` is refused with the same
             message that POST /api/v1/profiles returns.
         "500":
@@ -7204,7 +7212,10 @@ components:
         `target_volume_count_start` must be finite. A value that parses to NaN
         or an infinity (for example the string `"NaN"` or the number `1e400`)
         is refused with a `400` that names the field, before the profile is
-        stored or sent to the machine.
+        stored or sent to the machine. An upload to the machine of a profile
+        with more than 20 `steps` is refused with a `400` (`Unsupported
+        profile`) before any write, on every machine; the profile still stores
+        and round-trips unchanged.
       required:
         - title
         - steps
@@ -7257,6 +7268,147 @@ components:
             and every step is a pressure or flow step with a fast or smooth
             transition; otherwise the profile uploads with the flag off. The
             stored value does not change.
+        native_shaping:
+          allOf:
+            - $ref: '#/components/schemas/NativeShaping'
+          nullable: true
+          description: >
+            Optional. The native shaping block of a Bengle. On PUT
+            /api/v1/workflow, `null` removes the block. A partial profile
+            (no `steps`) that does not send the key keeps the block; a
+            complete profile (with `steps`) that does not send the key has no
+            block. Responses never contain `null`: a profile without a block
+            has no `native_shaping` key.
+
+    NativeShaping:
+      type: object
+      description: >
+        Optional profile block with the native shaping settings of a Bengle:
+        the pump curve, the flow and pressure time constants and modes, and
+        the ramp factor. An absent or null block means no block, and the JSON
+        then has no `native_shaping` key. A key that is absent inside the
+        block takes its default. Decaid rounds each number half up to its wire
+        step first (0.02 for `flow_tau`, `pressure_tau` and `ramp_factor`;
+        0.1 for `pressure` and `flow`), then checks the rounded value, and
+        stores and returns the rounded value with every key. A value that
+        breaks a rule is refused with a `400` that names the field. The block
+        is part of the profile hash only when present, so a profile without
+        it keeps its ID and a change to the block makes a new profile ID.
+        Every machine stores the block. The profile upload sends the block to
+        frame slots 21-23 of a Bengle only: it is skipped on a DE1 and with
+        DE1 emulation on (tail byte 1). The upload never refuses a profile
+        because of the block.
+      properties:
+        version:
+          type: integer
+          enum: [1]
+          default: 1
+        pump_curve:
+          type: array
+          maxItems: 8
+          default: []
+          description: >
+            0-8 points after the fixed point 0 bar, 20 mL/s. An empty curve
+            turns the pump curve off. Each pressure is at least 0.5 bar above
+            the previous point, and the flow never rises.
+          items:
+            type: object
+            required: [pressure, flow]
+            properties:
+              pressure:
+                type: number
+                minimum: 0.5
+                maximum: 13.5
+                description: bar, step 0.1.
+              flow:
+                type: number
+                minimum: 0
+                maximum: 20
+                description: mL/s, step 0.1.
+        flow_tau:
+          type: number
+          minimum: 0
+          maximum: 5
+          default: 0
+          description: Flow time constant in seconds, step 0.02.
+        flow_mode:
+          type: string
+          enum: [both, rise, fall]
+          default: both
+        pressure_tau:
+          type: number
+          minimum: 0
+          maximum: 5
+          default: 0
+          description: Pressure time constant in seconds, step 0.02.
+        pressure_mode:
+          type: string
+          enum: [both, rise, fall]
+          default: both
+        ramp_factor:
+          type: number
+          minimum: 0
+          maximum: 4
+          default: 1
+          description: Step 0.02.
+      example:
+        version: 1
+        pump_curve:
+          - {pressure: 1.0, flow: 20.0}
+          - {pressure: 3.0, flow: 12.0}
+          - {pressure: 6.0, flow: 6.0}
+          - {pressure: 9.0, flow: 5.0}
+          - {pressure: 12.0, flow: 4.0}
+        flow_tau: 0.5
+        flow_mode: both
+        pressure_tau: 0.5
+        pressure_mode: both
+        ramp_factor: 1.0
+
+    NativeShapingReport:
+      type: object
+      description: >
+        The native shaping that a Bengle reported for the shot. Decaid decodes
+        it from the 32 bytes of the machine's native shaping report. An unknown
+        source or refusal code reads as `unknown` and keeps its number in
+        `sourceCode` or `refusalCode`. Bytes 25-31 are ignored.
+      required: [source, sourceCode, refusal, refusalCode, latchCount, settingsRounded]
+      properties:
+        source:
+          type: string
+          enum: [cli, profile, cliBlockRefused, inactive, unknown]
+          description: >
+            Where the settings came from: the machine's own settings (`cli`),
+            the profile block (`profile`), the machine's own settings because
+            it refused the block (`cliBlockRefused`), or no native shaping
+            because the shot ran in DE1 emulation (`inactive`).
+        sourceCode:
+          type: integer
+          description: Byte 0 of the report.
+        refusal:
+          type: string
+          enum: [none, version, modeCode, pointCount, tauRange, rampRange, unusedBytes, pressureRange, pressureRise, flowRange, flowRise, unknown]
+          description: The rule that refused the block, or `none`.
+        refusalCode:
+          type: integer
+          description: Byte 1 of the report.
+        latchCount:
+          type: integer
+          description: >
+            Byte 2 of the report. The machine adds 1 at each latch, so a client
+            can pair a report with a shot.
+        settingsRounded:
+          type: boolean
+          description: >
+            True when a machine setting was not on its wire step, so the
+            settings are rounded.
+        settings:
+          $ref: '#/components/schemas/NativeShaping'
+          description: >
+            The settings that the shot ran with, in the profile block format.
+            Absent when the source is `inactive` (DE1 emulation: the machine
+            latched settings but did not use them) and when the report has no
+            block that Decaid can decode.
 
     ProfileStep:
       type: object
@@ -8130,6 +8282,22 @@ components:
             steps with a fast or smooth transition). Absent
             otherwise. Captured by the app and read-only: PUT /shots/{id}
             ignores it. ShotRecord.de1Emulation mirrors it.
+        nativeShaping:
+          $ref: '#/components/schemas/NativeShapingReport'
+          description: >
+            The native shaping that the machine reported for the shot, taken
+            by the app when it saves the shot. The app reads it from a Bengle
+            after the machine enters espresso (one read, and one more later
+            in the shot if needed). Absent when the machine gave no report: on
+            a DE1; when the read failed (an error, a timeout, a short reply,
+            or a latch count that changed on each of three passes); when the
+            latch count equals the count read before the shot, so the machine
+            did not latch for this shot. The app clears the report only when
+            the next shot starts, so a profile upload or a raw profile write
+            after the shot does not remove it from that shot's record.
+            Read-only: `PUT /api/v1/shots/{id}` ignores this key and
+            keeps the recorded report. A request cannot change, remove or add
+            it, and a partial object is ignored as a whole.
 
     SteamSettingsPatch:
       type: object

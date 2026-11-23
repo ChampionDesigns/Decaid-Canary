@@ -217,6 +217,7 @@ void main() {
         profileModeCaps: 0x7,
       );
       await de1.machine.onConnect();
+      await de1.transport.completeNativeShapeConnectRead();
       expect(de1.machine.isBengle, isTrue);
       de1.transport.writes.clear();
 
@@ -284,6 +285,7 @@ void main() {
           profileModeCaps: 0xF,
         );
         await de1.machine.onConnect();
+        await de1.transport.completeNativeShapeConnectRead();
         expect(de1.machine.isBengle, isTrue);
         de1.transport.writes.clear();
 

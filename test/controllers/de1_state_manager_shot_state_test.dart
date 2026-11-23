@@ -9,12 +9,17 @@ import 'package:reaprime/src/controllers/device_controller.dart';
 import 'package:reaprime/src/controllers/persistence_controller.dart';
 import 'package:reaprime/src/controllers/scale_controller.dart';
 import 'package:reaprime/src/controllers/workflow_controller.dart';
+import 'package:reaprime/src/models/data/native_shaping.dart';
 import 'package:reaprime/src/models/data/shot_record.dart';
 import 'package:reaprime/src/models/data/shot_state_event.dart';
 import 'package:reaprime/src/models/data/steam_record.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/data/workflow_context.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
+import 'package:reaprime/src/models/device/de1_rawmessage.dart';
+import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/services/storage/storage_service.dart';
 import 'package:reaprime/src/settings/gateway_mode.dart';
@@ -23,8 +28,21 @@ import 'package:rxdart/rxdart.dart';
 
 import '../helpers/mock_device_discovery_service.dart';
 import '../helpers/mock_settings_service.dart';
+import '../helpers/native_shape_machine_transport.dart';
 import '../helpers/non_de1_profile_step.dart';
 import '../helpers/test_de1.dart';
+import '../helpers/test_scale.dart';
+import '../helpers/test_scale_controller.dart';
+
+class _BengleReportingDe1 extends TestDe1 {
+  _BengleReportingDe1(this.bengle);
+
+  final Bengle bengle;
+
+  @override
+  NativeShapingReport? get lastNativeShapingReport =>
+      bengle.lastNativeShapingReport;
+}
 
 class _TestDe1Controller extends De1Controller {
   final BehaviorSubject<De1Interface?> de1Subject = BehaviorSubject.seeded(
@@ -49,6 +67,9 @@ class _TestDe1Controller extends De1Controller {
     if (de1 == null) throw 'no de1 connected';
     return de1;
   }
+
+  @override
+  De1Interface? get connectedDe1OrNull => current;
 
   void connect(De1Interface de1) {
     current = de1;
@@ -138,6 +159,8 @@ void main() {
   late _CapturingStorageService storage;
   late WorkflowController workflowController;
   late De1StateManager manager;
+  late SettingsController settingsController;
+  late ConnectionManager connectionManager;
   late List<ShotStateEvent> events;
   late StreamSubscription<ShotStateEvent> eventsSub;
 
@@ -154,10 +177,10 @@ void main() {
 
     final settingsService = MockSettingsService();
     await settingsService.updateGatewayMode(GatewayMode.tracking);
-    final settingsController = SettingsController(settingsService);
+    settingsController = SettingsController(settingsService);
     await settingsController.loadSettings();
 
-    final connectionManager = ConnectionManager(
+    connectionManager = ConnectionManager(
       deviceScanner: deviceController,
       de1Controller: de1Controller,
       scaleController: scaleController,
@@ -472,6 +495,389 @@ void main() {
         expect(storage.storedShots.single.de1Emulation, isTrue);
       },
     );
+
+    test('a workflow change during the shot keeps the recipe and the mode '
+        'that the shot started with', () async {
+      final workflow = workflowController.currentWorkflow;
+      final profileA = workflow.profile.copyWith(
+        title: 'Recipe A',
+        de1Emulation: true,
+      );
+      workflowController.setWorkflow(
+        workflow.copyWith(id: workflow.id, profile: profileA),
+      );
+      testDe1.de1EmulationSupported = true;
+      await testDe1.setProfile(profileA);
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.preparingForShot,
+      );
+      await pump();
+
+      final started = workflowController.currentWorkflow;
+      final profileB = started.profile.copyWith(
+        title: 'Recipe B',
+        de1Emulation: false,
+      );
+      workflowController.setWorkflow(
+        started.copyWith(id: started.id, profile: profileB),
+      );
+      await testDe1.setProfile(profileB);
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouring,
+      );
+      await pump();
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouringDone,
+      );
+      await pump();
+
+      final record = storage.storedShots.single;
+      expect(record.workflow.profile, profileA);
+      expect(record.workflow.profile.title, 'Recipe A');
+      expect(record.de1Emulation, isTrue);
+      expect(record.displayProfileTitle, 'B-DE1 · Recipe A');
+      expect(workflowController.currentWorkflow.profile, profileB);
+    });
+  });
+
+  group('native shaping report', () {
+    NativeShapingReport report(int latchCount) =>
+        NativeShapingReport.fromBytes([
+          1,
+          0,
+          latchCount,
+          0,
+          ...[0x01, 0x05, 0x19, 0x19, 0x32, 0x0A, 0xC8],
+          ...[0x1E, 0x78, 0x3C, 0x3C, 0x5A, 0x32, 0x78],
+          ...[0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+          ...List.filled(7, 0),
+        ]);
+
+    test('a shot without a report has no nativeShaping key', () async {
+      await driveShot();
+
+      final record = storage.storedShots.single;
+      expect(record.workflow.machine?.nativeShaping, isNull);
+      final machine = record.workflow.toJson()['machine'] as Map;
+      expect(machine.containsKey('nativeShaping'), isFalse);
+    });
+
+    test('the report that the machine gives during the shot lands in '
+        'workflow.machine.nativeShaping', () async {
+      testDe1.lastNativeShapingReport = report(4);
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.preparingForShot,
+      );
+      await pump();
+      testDe1.lastNativeShapingReport = report(5);
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouring,
+      );
+      await pump();
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouringDone,
+      );
+      await pump();
+
+      final record = storage.storedShots.single;
+      expect(record.workflow.machine?.nativeShaping, report(5));
+      expect(
+        record.workflow.machine?.provenanceStatus,
+        WorkflowMachineProvenanceStatus.captured,
+      );
+      final machine = record.workflow.toJson()['machine'] as Map;
+      expect(machine['nativeShaping'], report(5).toJson());
+      expect(workflowController.currentWorkflow.machine?.nativeShaping, isNull);
+    });
+
+    test('a shot after a cleared report does not keep the old one', () async {
+      testDe1.lastNativeShapingReport = report(1);
+      await driveShot();
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = null;
+      await driveShot();
+
+      expect(storage.storedShots, hasLength(2));
+      expect(storage.storedShots[0].workflow.machine?.nativeShaping, report(1));
+      expect(storage.storedShots[1].workflow.machine?.nativeShaping, isNull);
+    });
+
+    Future<TestScaleController> trackWithStoppingScale() async {
+      manager.dispose();
+      final scale = TestScaleController(TestScale());
+      addTearDown(scale.dispose);
+      manager = De1StateManager(
+        de1Controller: de1Controller,
+        scaleController: scale,
+        workflowController: workflowController,
+        persistenceController: PersistenceController(storageService: storage),
+        settingsController: settingsController,
+        connectionManager: connectionManager,
+        navigatorKey: GlobalKey<NavigatorState>(),
+      );
+      await pump();
+      scale.emitWeight(30.0, weightFlow: 2.0);
+      await pump();
+      return scale;
+    }
+
+    Future<void> settleStoppingShot(TestScaleController scale) async {
+      scale.emitWeight(36.0);
+      await pump();
+      for (var sample = 0; sample < 10; sample++) {
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.preparingForShot,
+        );
+        await pump();
+      }
+    }
+
+    Future<void> pourUntilStopping() async {
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.preparingForShot,
+      );
+      await pump();
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouring,
+      );
+      await pump();
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.pouringDone,
+      );
+      await pump();
+    }
+
+    test('a shot that settles after the next espresso start keeps the report '
+        'of its own shot', () async {
+      final scale = await trackWithStoppingScale();
+      final shotStates = <ShotState>[];
+      final sub = de1Controller.shotState.listen(
+        (e) => shotStates.add(e.state),
+      );
+      addTearDown(sub.cancel);
+      testDe1.lastNativeShapingReport = report(4);
+      await pourUntilStopping();
+      expect(shotStates.last, ShotState.stopping);
+
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = null;
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.preparingForShot,
+      );
+      await pump();
+      testDe1.lastNativeShapingReport = report(7);
+      expect(storage.storedShots, isEmpty);
+      await settleStoppingShot(scale);
+
+      expect(
+        storage.storedShots.single.workflow.machine?.nativeShaping,
+        report(4),
+      );
+
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = report(9);
+      scale.emitWeight(30.0, weightFlow: 2.0);
+      await pump();
+      await pourUntilStopping();
+      await settleStoppingShot(scale);
+
+      expect(storage.storedShots, hasLength(2));
+      expect(storage.storedShots[1].workflow.machine?.nativeShaping, report(9));
+    });
+
+    test('a report that arrives after espresso ends and before the next '
+        'espresso start is the report of the settling shot', () async {
+      final scale = await trackWithStoppingScale();
+      await pourUntilStopping();
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = report(4);
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = null;
+      testDe1.emitStateAndSubstate(
+        MachineState.espresso,
+        MachineSubstate.preparingForShot,
+      );
+      await pump();
+      testDe1.lastNativeShapingReport = report(7);
+      await settleStoppingShot(scale);
+
+      expect(
+        storage.storedShots.single.workflow.machine?.nativeShaping,
+        report(4),
+      );
+    });
+
+    test('a shot that settles with no next espresso start takes the report '
+        'that the machine has at the save', () async {
+      final scale = await trackWithStoppingScale();
+      await pourUntilStopping();
+      testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+      await pump();
+      testDe1.lastNativeShapingReport = report(4);
+      scale.emitWeight(36.0);
+      await pump();
+      for (var sample = 0; sample < 10; sample++) {
+        testDe1.emitStateAndSubstate(MachineState.idle, MachineSubstate.idle);
+        await pump();
+      }
+
+      expect(
+        storage.storedShots.single.workflow.machine?.nativeShaping,
+        report(4),
+      );
+    });
+
+    Future<(Bengle, NativeShapeMachineTransport)> connectReportingBengle({
+      List<int>? image,
+      Object? readError,
+    }) async {
+      final transport = NativeShapeMachineTransport()
+        ..image = nativeShapeReportImage(latch: 0)
+        ..readError = readError;
+      addTearDown(transport.dispose);
+      transport.queuePaletteHydrationResponses();
+      transport.queueOnConnectResponses(v13Model: 128);
+      final bengle = Bengle(
+        transport: transport,
+        nativeShapingReadTimings: const NativeShapingReadTimings(
+          firstReadDelay: Duration(milliseconds: 10),
+          retryDelay: Duration(milliseconds: 50),
+          requestTimeout: Duration(milliseconds: 50),
+        ),
+      );
+      await bengle.onConnect();
+      addTearDown(bengle.onDisconnect);
+      final connectRead = DateTime.now().add(const Duration(seconds: 5));
+      while (transport.reportRequests.isEmpty &&
+          DateTime.now().isBefore(connectRead)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      transport.image = image;
+      await testDe1.dispose();
+      testDe1 = _BengleReportingDe1(bengle);
+      de1Controller.connect(testDe1);
+      await pump();
+      return (bengle, transport);
+    }
+
+    test('a Bengle report with a new latch count is saved with the shot, '
+        'source profile', () async {
+      final (bengle, transport) = await connectReportingBengle(
+        image: nativeShapeReportImage(latch: 9),
+      );
+
+      transport.emitNotification(Endpoint.stateInfo, [espressoStateByte, 0]);
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (bengle.lastNativeShapingReport == null &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      await driveShot();
+
+      final saved = storage.storedShots.single.workflow.machine?.nativeShaping;
+      expect(saved, isNotNull);
+      expect(saved!.source, NativeShapingSource.profile);
+      expect(saved.latchCount, 9);
+      final machine =
+          storage.storedShots.single.workflow.toJson()['machine'] as Map;
+      expect((machine['nativeShaping'] as Map)['source'], 'profile');
+    });
+
+    for (final action in ['a profile upload', 'a raw profile write']) {
+      test('$action between espresso end and the shot save keeps the report '
+          'in the saved record', () async {
+        final (bengle, transport) = await connectReportingBengle(
+          image: nativeShapeReportImage(latch: 9),
+        );
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.preparingForShot,
+        );
+        await pump();
+        transport.emitNotification(Endpoint.stateInfo, [espressoStateByte, 0]);
+        final deadline = DateTime.now().add(const Duration(seconds: 5));
+        while (bengle.lastNativeShapingReport == null &&
+            DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        expect(bengle.lastNativeShapingReport, isNotNull);
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.pouring,
+        );
+        await pump();
+        transport.emitNotification(Endpoint.stateInfo, [idleStateByte, 0]);
+        await pump();
+
+        if (action == 'a profile upload') {
+          await bengle.setProfile(
+            workflowController.currentWorkflow.profile.copyWith(title: 'next'),
+          );
+        } else {
+          bengle.sendRawMessage(
+            De1RawMessage(
+              type: De1RawMessageType.request,
+              operation: De1RawOperationType.write,
+              characteristicUUID: Endpoint.headerWrite.uuid,
+              payload: '0102000000',
+            ),
+          );
+        }
+        await pump();
+        testDe1.emitStateAndSubstate(
+          MachineState.espresso,
+          MachineSubstate.pouringDone,
+        );
+        await pump();
+
+        final saved =
+            storage.storedShots.single.workflow.machine?.nativeShaping;
+        expect(saved, isNotNull);
+        expect(saved!.latchCount, 9);
+        final machine =
+            storage.storedShots.single.workflow.toJson()['machine'] as Map;
+        expect((machine['nativeShaping'] as Map)['latchCount'], 9);
+      });
+    }
+
+    for (final (label, image, error) in [
+      ('times out', null, null),
+      ('throws', null, StateError('link lost')),
+    ]) {
+      test('a Bengle reg 66 read that $label gives no report and the shot is '
+          'still saved', () async {
+        final (bengle, transport) = await connectReportingBengle(
+          image: image,
+          readError: error,
+        );
+
+        transport.emitNotification(Endpoint.stateInfo, [espressoStateByte, 0]);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await driveShot();
+
+        expect(transport.reportRequests, isNotEmpty);
+        expect(bengle.lastNativeShapingReport, isNull);
+        final record = storage.storedShots.single;
+        expect(record.workflow.machine?.nativeShaping, isNull);
+      });
+    }
   });
 
   test(

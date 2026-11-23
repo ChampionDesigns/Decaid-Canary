@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/controllers/connection_error.dart';
+import 'package:reaprime/src/controllers/connection/connection_timings.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/controllers/de1_controller.dart';
 import 'package:reaprime/src/controllers/device_controller.dart';
@@ -10,6 +12,8 @@ import 'package:reaprime/src/controllers/workflow_device_sync.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
+import 'package:reaprime/src/models/device/de1_rawmessage.dart';
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/device.dart';
 import 'package:reaprime/src/models/errors.dart';
 
@@ -289,6 +293,43 @@ class _GatedRefusingDe1 extends TestDe1 {
   }
 }
 
+class _RawWriteTransport extends FakeBleTransport {
+  Object? _nextFrameError;
+  Future<void>? _nextFrameGate;
+
+  void failNextFrameWrite(Object error) => _nextFrameError = error;
+
+  void holdNextFrameWrite(Future<void> gate) => _nextFrameGate = gate;
+
+  int get headerWrites => writes
+      .where((w) => w.characteristicUUID == Endpoint.headerWrite.uuid)
+      .length;
+
+  @override
+  Future<void> write(
+    String serviceUUID,
+    String characteristicUUID,
+    Uint8List data, {
+    bool withResponse = true,
+    Duration? timeout,
+  }) async {
+    await super.write(
+      serviceUUID,
+      characteristicUUID,
+      data,
+      withResponse: withResponse,
+      timeout: timeout,
+    );
+    if (characteristicUUID != Endpoint.frameWrite.uuid) return;
+    final gate = _nextFrameGate;
+    final error = _nextFrameError;
+    _nextFrameGate = null;
+    _nextFrameError = null;
+    if (gate != null) await gate;
+    if (error != null) throw error;
+  }
+}
+
 void main() {
   late WorkflowController workflow;
   late DeviceController deviceController;
@@ -341,6 +382,60 @@ void main() {
       equals(1),
       reason: 'equal profile value must not trigger a second BLE upload',
     );
+  });
+
+  group('a raw profile write', () {
+    De1RawMessage receipt(
+      Endpoint endpoint, {
+      De1RawOperationType? operation,
+    }) => De1RawMessage(
+      type: De1RawMessageType.response,
+      operation: operation ?? De1RawOperationType.write,
+      characteristicUUID: endpoint.uuid,
+      payload: '0102000000',
+    );
+
+    Future<Workflow> pushOnce() async {
+      final next = workflow.currentWorkflow.copyWith(
+        profile: _profile('Adaptive v2'),
+      );
+      workflow.setWorkflow(next);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(de1.setProfileCalls, hasLength(1));
+      return next;
+    }
+
+    for (final endpoint in [Endpoint.headerWrite, Endpoint.frameWrite]) {
+      test('to ${endpoint.name} makes a reselect of the same profile upload '
+          'again', () async {
+        final next = await pushOnce();
+
+        de1.emitRawMessage(receipt(endpoint));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        workflow.setWorkflow(next.copyWith(profile: _profile('Adaptive v2')));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        expect(de1.setProfileCalls, hasLength(2));
+        expect(de1.setProfileCalls.last.title, 'Adaptive v2');
+      });
+    }
+
+    test('a reselect with no raw profile write still skips', () async {
+      final next = await pushOnce();
+
+      de1.emitRawMessage(receipt(Endpoint.requestedState));
+      de1.emitRawMessage(
+        receipt(Endpoint.headerWrite, operation: De1RawOperationType.read),
+      );
+      de1.emitRawMessage(
+        receipt(Endpoint.frameWrite, operation: De1RawOperationType.notify),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      workflow.setWorkflow(next.copyWith(profile: _profile('Adaptive v2')));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(de1.setProfileCalls, hasLength(1));
+    });
   });
 
   test('non-profile workflow changes do not trigger setProfile', () async {
@@ -605,6 +700,37 @@ void main() {
       s.dispose();
       await Future<void>.delayed(const Duration(milliseconds: 150));
       expect(flaky.totalCalls, 1);
+    });
+
+    test('a raw profile write during an upload makes a reselect of the same '
+        'profile upload again', () async {
+      final gated = _GatedDe1();
+      final controller = await connect(gated);
+      buildSync(controller);
+      await settleConnectPush(gated: gated);
+      gated.setProfileCalls.clear();
+
+      applyProfile('P1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(gated.pendingUploads, 1);
+      gated.emitRawMessage(
+        De1RawMessage(
+          type: De1RawMessageType.response,
+          operation: De1RawOperationType.write,
+          characteristicUUID: Endpoint.headerWrite.uuid,
+          payload: '0102000000',
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      applyProfile('P1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(gated.setProfileCalls.map((p) => p.title), ['P1', 'P1']);
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     });
 
     test('reverting to the last-pushed profile while another upload is in '
@@ -1236,6 +1362,120 @@ void main() {
         writesBeforeDedup,
         reason: 'same-profile upload without reconnect must deduplicate',
       );
+    });
+  });
+
+  group('a raw profile write on a UnifiedDe1', () {
+    late WorkflowController wf;
+    late _RawWriteTransport transport;
+    late UnifiedDe1 machine;
+    WorkflowDeviceSync? activeSync;
+
+    De1RawMessage rawFrameWrite() => De1RawMessage(
+      type: De1RawMessageType.request,
+      operation: De1RawOperationType.write,
+      characteristicUUID: Endpoint.frameWrite.uuid,
+      payload: '00000000000000000000',
+    );
+
+    Future<void> settle() =>
+        Future<void>.delayed(const Duration(milliseconds: 30));
+
+    Future<void> settleUpload() => Future<void>.delayed(
+      ConnectionTimings.profileDownloadGuard + const Duration(milliseconds: 60),
+    );
+
+    void select(String title) =>
+        wf.setWorkflow(wf.currentWorkflow.copyWith(profile: _profile(title)));
+
+    setUp(() async {
+      wf = WorkflowController();
+      transport = _RawWriteTransport()
+        ..queueOnConnectResponses()
+        ..queueMmrResponseInt(MMRItem.targetSteamFlow, 150)
+        ..queueMmrResponseInt(MMRItem.hotWaterFlowRate, 400)
+        ..queueMmrResponseInt(MMRItem.flushFlowRate, 600)
+        ..queueMmrResponseInt(MMRItem.flushTimeout, 50)
+        ..queueMmrResponseInt(MMRItem.flushTemp, 900)
+        ..queueRead(
+          Endpoint.stateInfo.uuid,
+          Uint8List.fromList([2, ...List.filled(19, 0)]),
+        )
+        ..queueRead(
+          Endpoint.shotSettings.uuid,
+          Uint8List.fromList([
+            0,
+            150,
+            30,
+            75,
+            50,
+            30,
+            36,
+            94,
+            0,
+            ...List.filled(11, 0),
+          ]),
+        );
+      machine = UnifiedDe1(transport: transport);
+      final devices = DeviceController([MockDeviceDiscoveryService()]);
+      await devices.initialize();
+      final controller = De1Controller(controller: devices);
+      await controller.connectToDe1(machine);
+      await controller.initSettled.firstWhere(
+        (generation) => generation != null,
+      );
+      activeSync = WorkflowDeviceSync(
+        workflowController: wf,
+        de1Controller: controller,
+        retryDelays: const [Duration(milliseconds: 20)],
+      );
+      select('P1');
+      await settleUpload();
+    });
+
+    tearDown(() {
+      activeSync?.dispose();
+    });
+
+    test('a reselect with no raw write does not upload', () async {
+      final uploads = transport.headerWrites;
+      select('P1');
+      await settleUpload();
+
+      expect(transport.headerWrites, uploads);
+    });
+
+    test('a raw frame write that throws makes a reselect upload', () async {
+      transport.failNextFrameWrite(StateError('link lost'));
+      machine.sendRawMessage(rawFrameWrite());
+      await settle();
+      final uploads = transport.headerWrites;
+
+      select('P1');
+      await settleUpload();
+
+      expect(transport.headerWrites, uploads + 1);
+    });
+
+    test('a reselect while a raw frame write is in progress uploads, and '
+        'the next reselect uploads again', () async {
+      final gate = Completer<void>();
+      transport.holdNextFrameWrite(gate.future);
+      machine.sendRawMessage(rawFrameWrite());
+      await settle();
+      final uploads = transport.headerWrites;
+
+      select('P1');
+      await settleUpload();
+      expect(transport.headerWrites, uploads + 1);
+
+      gate.complete();
+      await settleUpload();
+      final afterRawWrite = transport.headerWrites;
+      select('P1');
+      await settleUpload();
+
+      expect(transport.headerWrites, afterRawWrite + 1);
     });
   });
 

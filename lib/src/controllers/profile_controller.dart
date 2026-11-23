@@ -265,6 +265,15 @@ class ProfileController {
     );
 
     if (updated.id != existing.id) {
+      final target = await _storage.get(updated.id);
+      if (target != null) {
+        _log.info(
+          'Profile with hash ${updated.id} already exists '
+          '(${updated.profile.title})',
+        );
+        return target;
+      }
+
       _log.warning(
         'Profile hash changed from ${existing.id} to ${updated.id}. '
         'This creates a new profile. Consider using parentId for versioning.',

@@ -7,6 +7,7 @@ import 'package:reaprime/src/controllers/de1_controller.dart';
 import 'package:reaprime/src/controllers/device_controller.dart';
 import 'package:reaprime/src/controllers/workflow_controller.dart';
 import 'package:reaprime/src/controllers/workflow_device_sync.dart';
+import 'package:reaprime/src/models/data/native_shaping.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/firmware_update_state.dart';
@@ -1130,6 +1131,174 @@ void main() {
 
       expect(body['profile']['de1_emulation'], isTrue);
       expect(workflowController.currentWorkflow.profile.de1Emulation, isTrue);
+    });
+  });
+
+  group('PUT /api/v1/workflow — native_shaping is one value', () {
+    Map<String, dynamic> example() => {
+      'version': 1,
+      'pump_curve': [
+        {'pressure': 1.0, 'flow': 20.0},
+        {'pressure': 3.0, 'flow': 12.0},
+        {'pressure': 6.0, 'flow': 6.0},
+        {'pressure': 9.0, 'flow': 5.0},
+        {'pressure': 12.0, 'flow': 4.0},
+      ],
+      'flow_tau': 0.5,
+      'flow_mode': 'both',
+      'pressure_tau': 0.5,
+      'pressure_mode': 'both',
+      'ramp_factor': 1.0,
+    };
+
+    final storedBlock = {
+      ...example(),
+      'pump_curve': [
+        {'pressure': 2.0, 'flow': 15.0},
+        {'pressure': 8.0, 'flow': 7.0},
+      ],
+      'flow_tau': 0.2,
+      'flow_mode': 'rise',
+      'pressure_tau': 2.0,
+      'ramp_factor': 2.0,
+    };
+
+    Future<void> seedStoredBlock() async {
+      final current = workflowController.currentWorkflow;
+      workflowController.setWorkflow(
+        current.copyWith(
+          profile: current.profile.copyWith(
+            nativeShaping: NativeShaping.fromJson(storedBlock),
+          ),
+        ),
+      );
+      await _settleHandler(spy);
+    }
+
+    Map<String, dynamic>? storedJson() =>
+        workflowController.currentWorkflow.profile.nativeShaping?.toJson();
+
+    Map<String, dynamic> completeProfileJson() {
+      final json = workflowController.currentWorkflow.profile
+          .copyWith(clearNativeShaping: true)
+          .toJson();
+      expect(json.containsKey('native_shaping'), isFalse);
+      return json;
+    }
+
+    Future<Map<String, dynamic>> putAndDecode(Map<String, dynamic> body) async {
+      final response = await put(body);
+      final text = await response.readAsString();
+      expect(response.statusCode, 200, reason: text);
+      return jsonDecode(text) as Map<String, dynamic>;
+    }
+
+    test('a complete profile with the key gives the new block', () async {
+      await seedStoredBlock();
+
+      final body = await putAndDecode({
+        'profile': {...completeProfileJson(), 'native_shaping': example()},
+      });
+
+      expect(body['profile']['native_shaping'], example());
+      expect(storedJson(), example());
+    });
+
+    test('a complete profile without the key gives no block', () async {
+      await seedStoredBlock();
+
+      final body = await putAndDecode({'profile': completeProfileJson()});
+
+      expect(body['profile'].containsKey('native_shaping'), isFalse);
+      expect(storedJson(), isNull);
+    });
+
+    test('a partial profile with the key replaces the whole block, with no '
+        'merge of points', () async {
+      await seedStoredBlock();
+
+      final body = await putAndDecode({
+        'profile': {
+          'native_shaping': {
+            'pump_curve': [
+              {'pressure': 1.0, 'flow': 20.0},
+            ],
+          },
+        },
+      });
+
+      final expected = NativeShaping.fromJson({
+        'pump_curve': [
+          {'pressure': 1.0, 'flow': 20.0},
+        ],
+      }).toJson();
+      expect(body['profile']['native_shaping'], expected);
+      expect(storedJson(), expected);
+      expect(storedJson()!['pump_curve'], hasLength(1));
+    });
+
+    test('a partial profile with null removes the block', () async {
+      await seedStoredBlock();
+
+      final body = await putAndDecode({
+        'profile': {'native_shaping': null},
+      });
+
+      expect(body['profile'].containsKey('native_shaping'), isFalse);
+      expect(storedJson(), isNull);
+    });
+
+    test('a partial profile without the key keeps the block', () async {
+      await seedStoredBlock();
+      final before = storedJson();
+
+      final body = await putAndDecode({
+        'profile': {'title': 'Renamed'},
+      });
+
+      expect(body['profile']['native_shaping'], before);
+      expect(storedJson(), before);
+      expect(workflowController.currentWorkflow.profile.title, 'Renamed');
+    });
+
+    test(
+      'a block that breaks a rule gives 400 and keeps the stored block',
+      () async {
+        await seedStoredBlock();
+        final before = storedJson();
+
+        final response = await put({
+          'profile': {
+            'native_shaping': {...example(), 'flow_tau': 6},
+          },
+        });
+
+        expect(response.statusCode, 400);
+        expect(await response.readAsString(), contains('flow_tau'));
+        expect(storedJson(), before);
+      },
+    );
+
+    test('a sparse block takes the defaults for absent keys, not the stored '
+        'values', () async {
+      await seedStoredBlock();
+      expect(storedJson()!['pressure_tau'], 2.0);
+
+      final body = await putAndDecode({
+        'profile': {
+          'native_shaping': {'flow_tau': 1.0},
+        },
+      });
+
+      final defaults = NativeShaping.fromJson(const {});
+      final block = body['profile']['native_shaping'] as Map<String, dynamic>;
+      expect(block['flow_tau'], 1.0);
+      expect(block['pressure_tau'], defaults.pressureTau);
+      expect(block['pressure_tau'], isNot(2.0));
+      expect(block['flow_mode'], 'both');
+      expect(block['ramp_factor'], defaults.rampFactor);
+      expect(block['pump_curve'], isEmpty);
+      expect(storedJson(), block);
     });
   });
 

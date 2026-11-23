@@ -426,6 +426,31 @@ class FakeBleTransport extends BLETransport {
     queueMmrResponseInt(MMRItem.profileModeCaps, profileModeCaps);
   }
 
+  Future<void> completeNativeShapeConnectRead({int latchCount = 0}) async {
+    final address = MMRItem.nativeShapeLatched.address & 0xFFFFFF;
+    FakeBleWrite? request() => writes
+        .where(
+          (w) =>
+              w.characteristicUUID == Endpoint.readFromMMR.uuid &&
+              w.data.length >= 4 &&
+              (w.data[1] << 16 | w.data[2] << 8 | w.data[3]) == address,
+        )
+        .lastOrNull;
+    for (var i = 0; i < 200 && request() == null; i++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    final sent = request();
+    if (sent == null) {
+      throw StateError('no native shaping read after the Bengle connect');
+    }
+    final reply = Uint8List(20)..setRange(0, 4, sent.data);
+    reply[4 + 2] = latchCount;
+    emitNotification(Endpoint.readFromMMR, reply);
+    for (var i = 0; i < 20; i++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
+
   @override
   Future<void> dispose() async => _connState.close();
 }

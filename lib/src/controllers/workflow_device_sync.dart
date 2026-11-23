@@ -7,6 +7,9 @@ import 'package:reaprime/src/controllers/de1_controller.dart';
 import 'package:reaprime/src/controllers/workflow_controller.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
+import 'package:reaprime/src/models/device/de1_rawmessage.dart';
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
+import 'package:reaprime/src/models/device/raw_profile_write_counter.dart';
 import 'package:reaprime/src/models/errors.dart';
 
 class WorkflowDeviceSync {
@@ -38,6 +41,7 @@ class WorkflowDeviceSync {
   final void Function()? onUploadErrorCleared;
 
   Profile? _lastPushedProfile;
+  int _lastPushedRawWrites = 0;
   Profile? _desiredProfile;
 
   /// The profile the connected machine PERMANENTLY refused — a
@@ -65,6 +69,8 @@ class WorkflowDeviceSync {
 
   StreamSubscription<De1Interface?>? _de1Sub;
   StreamSubscription<int?>? _initSettledSub;
+  StreamSubscription<De1RawMessage>? _rawWriteSub;
+  int _rawProfileWrites = 0;
 
   void _onChange() {
     final next = _workflow.currentWorkflow.profile;
@@ -95,7 +101,7 @@ class WorkflowDeviceSync {
     try {
       while (generation == _generation) {
         final profile = _desiredProfile;
-        if (profile == null || profile == _lastPushedProfile) {
+        if (profile == null || _isOnMachine(profile)) {
           _desiredProfile = null;
           return;
         }
@@ -103,9 +109,14 @@ class WorkflowDeviceSync {
           return;
         }
         try {
+          final rawWritesBefore = _rawWrites();
           await _de1.runDeviceWrite((device) => device.setProfile(profile));
           if (generation != _generation) return;
-          _lastPushedProfile = profile;
+          final rawWritesAfter = _rawWrites();
+          _lastPushedProfile = rawWritesBefore == rawWritesAfter
+              ? profile
+              : null;
+          _lastPushedRawWrites = rawWritesAfter;
           _attempt = 0;
           if (_errorSurfaced) {
             _errorSurfaced = false;
@@ -162,6 +173,12 @@ class WorkflowDeviceSync {
     }
   }
 
+  int _rawWrites() =>
+      _rawProfileWrites + rawProfileWritesOf(_de1.connectedDe1OrNull);
+
+  bool _isOnMachine(Profile profile) =>
+      profile == _lastPushedProfile && _lastPushedRawWrites == _rawWrites();
+
   void _surfaceRefusal(ProfileModeUnsupportedException refusal) {
     _errorSurfaced = true;
     _refusalSurfaced = true;
@@ -192,7 +209,22 @@ class WorkflowDeviceSync {
     _retryTimer = null;
   }
 
+  void _watchRawProfileWrites(De1Interface? device) {
+    _rawWriteSub?.cancel();
+    _rawWriteSub = device?.rawOutStream.where(_isRawProfileWrite).listen((_) {
+      _rawProfileWrites++;
+      _lastPushedProfile = null;
+    }, onError: (Object _) {});
+  }
+
+  static bool _isRawProfileWrite(De1RawMessage message) {
+    if (message.operation != De1RawOperationType.write) return false;
+    final endpoint = Endpoint.fromUuid(message.characteristicUUID);
+    return endpoint == Endpoint.headerWrite || endpoint == Endpoint.frameWrite;
+  }
+
   void _onDe1Change(De1Interface? device) {
+    _watchRawProfileWrites(device);
     if (device == null) {
       _generation++;
       _cancelRetry();
@@ -219,6 +251,8 @@ class WorkflowDeviceSync {
     _de1Sub = null;
     _initSettledSub?.cancel();
     _initSettledSub = null;
+    _rawWriteSub?.cancel();
+    _rawWriteSub = null;
     if (_errorSurfaced) {
       _errorSurfaced = false;
       _refusalSurfaced = false;

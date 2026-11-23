@@ -1,10 +1,17 @@
 # =============================================================================
 # Bengle firmware <-> app hardware contract (bengle_hw_v1.yml)
 # =============================================================================
-# contract_version: 4
+# contract_version: 5
 #
 # Generated from the firmware register table at firmware commit
 # ebb12ab36a571dd248319e946e89d09d41d366b7 (rev-list count 711).
+#
+# contract_version 5: adds row 66 NativeShapeLatched (read-only, 32 bytes),
+# with `since: unreleased`: no released firmware serves it yet, so the pin
+# above stays and the row is not in that firmware's register table. The other
+# rows do not change. A row with `since: unreleased` is checked against this
+# file only; when a released build serves it, the pin moves and the row gets
+# that build as its `since`.
 #
 # contract_version 4: every writable row adds its effective write bound
 # (effective_min / effective_max, bound_note).
@@ -80,13 +87,13 @@
 #     addresses is discarded).
 # =============================================================================
 
-contract_version: 4
+contract_version: 5
 firmware:
   commit: ebb12ab36a571dd248319e946e89d09d41d366b7
   build: 90
   source: the firmware register table
 generated: 2026-07-11
-updated: 2026-11-08 # contract_version 4: effective write bound on every writable row (same firmware pin)
+updated: 2026-11-23 # contract_version 5: row 66 NativeShapeLatched
 
 # -----------------------------------------------------------------------------
 # MMR register table
@@ -967,6 +974,21 @@ registers:
     max: 15 # 0xF
     unit: bitmask
     semantics: "Pump extended-mode capabilities: bit0 constant-power steps, bit1 lever steps, bit2 hold transitions, bit3 cross-variable power-exit steps. Read-only; 0xF at this pin."
+
+  # --- Native shaping report (contract_version 5) -----------------------------
+  - name: NativeShapeLatched
+    fw_row: 66
+    address: "0x00803974"
+    length: 32 # 0x20
+    perms: R # read-only; RAM only, a reset clears it
+    mult: 1
+    value_kind: bytes
+    min: null
+    max: null
+    unit: null
+    since: unreleased
+    requires_firmware: "firmware newer than the pin (contract_version 5); not in a released build yet -- on firmware without it, reads fail and the app records no report"
+    semantics: "The native shaping settings that the machine latched for the shot. Byte n is at address 0x00803974 + n. Byte 0 source: 0 CLI values, 1 profile block, 2 CLI values because the profile block was refused, 3 DE1 emulation (latched but not used). Byte 1 block rule that refused the block: 0 none, 1 version, 2 mode code, 3 point count, 4 tau range, 5 ramp range, 6 unused bytes, 7 P range, 8 P rise, 9 Q range, 10 Q rise. Byte 2 latch count: +1 at each latch for a shot (espresso entry, or a re-latch after a profile upload in heat-up); the latches in the first second after boot do not count. Byte 3 flags: bit 0 = a CLI value is not on the wire step, so bytes 4-24 are rounded and can break the block rules (the app keeps the report with no settings). Bytes 4-24 the settings the shot runs with, in the profile block format (version 1), also for a CLI source. Bytes 25-31 zero. Read rule: read bytes 0-15 (Len 3 at 0x00803974) and bytes 16-31 (Len 3 at 0x00803984), then read bytes 0-15 again; equal byte 2 in the first and the last read means one latch, else start again (the app makes at most 3 passes). One Len 7 request gives the same 32 bytes in two reply frames (0x00803974, 0x00803984). The app reads it after the shot starts and accepts a latch count that differs from the count it read before the shot."
 
 # -----------------------------------------------------------------------------
 # 0xA013 BengleShotSample -- the sole shot/telemetry source on a Bengle

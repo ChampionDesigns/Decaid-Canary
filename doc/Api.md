@@ -419,6 +419,37 @@ and do not add the prefix to a title that already starts with it. The profile
 title and profile id never change, so `profileTitle` filters match the plain
 title and find both kinds of shot.
 
+**Native shaping report.** A shot can carry `workflow.machine.nativeShaping`,
+the native shaping that a Bengle reported for the shot: `source` (`cli`,
+`profile`, `cliBlockRefused`, `inactive` or `unknown`), `sourceCode`, `refusal`
+(the rule that refused the profile block, or `none`), `refusalCode`,
+`latchCount`, `settingsRounded`, and `settings` in the `native_shaping` format
+of `doc/Profiles.md`. The app reads the report from a Bengle after the machine
+enters espresso, and once more later in the shot if the first read gives
+nothing. After a profile upload during the shot, the app reads it again, and a
+new latch count replaces the report, or gives the first one when the shot has
+no report yet (the machine latches again in heat-up).
+On a Bengle, the app reads the report once after each connect, 1 s after
+espresso entry, 5 s after that read ends when it gives no new report, and after each
+profile upload. Each read waits 1 s for a reply. When a read gets no reply in
+that time (firmware without the report), the app logs that reg 66 did not
+answer and makes no more reg 66 reads until the next connect. A short reply, an
+error or a latch count that changed on each pass does not stop the reads.
+The app takes the report when it saves the shot. A shot can settle (the scale
+weight comes to rest) after the machine starts the next espresso. Then the
+record keeps the last report that the app saw before that start. The key is
+absent when the machine gave no report: on a DE1; when the read failed (an error, a timeout, a
+short reply, or a latch count that changed on each of three passes); after a
+read with no reply stopped the reads until the next connect; when the
+latch count equals the count read before the shot (the machine did not latch
+for this shot). The app clears the report only when the next shot starts, so a
+profile upload or a raw profile write after the shot does not remove it from
+that shot's record. The report is read-only:
+`PUT /api/v1/shots/:id` ignores `workflow.machine.nativeShaping` (a full or a
+partial object, or `null`) and keeps the recorded report, so a request cannot
+change, remove or add it. The schema is `NativeShapingReport` in
+`assets/api/rest_v1.yml`.
+
 **Modification tracking.** Every shot carries `createdAt` and `updatedAt`
 (ISO-8601 UTC, always serialized with a trailing `Z`). `createdAt` is set
 when the shot enters local storage; the extraction `timestamp` is the fallback
@@ -496,6 +527,12 @@ Profile updates use tri-state patch semantics: omitting `metadata` preserves it,
 `metadata: null` clears it, and an object replaces it. The profile itself is
 non-nullable; `profile: null` returns `400`.
 
+A profile may carry a `native_shaping` block (`doc/Profiles.md`, Native Shaping).
+Decaid rounds each number to its wire step, checks it, and returns the rounded
+block. A value that breaks a rule, for example `"flow_tau": 6`, returns `400`.
+The block is part of the profile ID only when present. The profile upload sends
+the block to a Bengle only: it is skipped on a DE1 and with DE1 emulation on.
+
 #### Extended step types (capability-gated)
 
 A profile step may set `pump: "power"` — a constant-hydraulic-power step carrying a `power` field and
@@ -510,6 +547,10 @@ needs firmware that advertises the matching capability. `GET /api/v1/machine/inf
 bitmask as `extra.profileModeCaps`: `0x1` Power, `0x2` Lever, `0x4` HOLD, `0x8` cross-variable power
 exit. An absent or zero mask means the machine cannot run those steps, and
 `POST /api/v1/machine/profile` refuses the upload with a `400` before it writes anything.
+
+A profile with more than 20 steps is refused the same way on every machine (`error`
+`Unsupported profile`, `message` `Profile "<title>" has <n> steps; the machine runs at most 20
+steps.`).
 
 ### Workflow
 
@@ -536,6 +577,12 @@ A `profile` object that contains `steps` is a complete profile, so its `de1_emul
 replaces the current value: DE1 emulation is on only when the request sends `true`, and a
 saved profile that omits the key turns it off. A partial `profile` object without `steps`
 keeps the current `de1_emulation` unless it sends the key.
+`native_shaping` is one value and is never deep-merged. A complete profile replaces it:
+the block it sends, or no block when it omits the key. A partial profile that sends the
+key replaces the whole block (`"native_shaping": null` removes it); a partial profile
+without the key keeps the block. A key that is absent inside a sent block takes its
+default (`doc/Profiles.md`, Native Shaping), not the value of the stored block. A block
+that breaks a rule returns `400`.
 Requests may wait behind machine I/O; the server does not debounce high-frequency
 input, so clients should throttle controls themselves. Bodies larger than 1 MiB return `413`,
 requests beyond the eight-entry active/queued limit return `429`, and requests waiting more
@@ -1057,6 +1104,9 @@ For clients this means:
 - **A gap in frames is not a dead socket.** If a client needs a liveness signal, use `/ws/v1/devices`.
 - `/ws/v1/machine/raw` writes are delivered to the machine the socket is *currently* bound to, not the
   one that was present when the socket was opened.
+- A raw write to the profile header or frame characteristic replaces the profile on the machine.
+  After it, the app sends the selected profile again when the workflow selects it, also when the
+  raw write failed or did not finish yet.
 - A `write` response echoes the payload the client submitted, as `payload` in uppercase hex — the
   same encoding a `read` response uses, so a client can correlate **the payload that completed**. It
   does not identify an individual write: two writes carrying the same payload are indistinguishable,

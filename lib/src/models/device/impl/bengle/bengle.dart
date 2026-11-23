@@ -21,7 +21,7 @@ class Bengle extends UnifiedDe1
         WakeScheduleCapability,
         PuckEstimatorCapability
     implements BengleInterface {
-  Bengle({required super.transport});
+  Bengle({required super.transport, super.nativeShapingReadTimings});
 
   @override
   DeviceImplementation get implementation => DeviceImplementation.bengle;
@@ -103,7 +103,7 @@ class Bengle extends UnifiedDe1
 
   @override
   Future<void> onConnect() async {
-    await super.onConnect();
+    await runConnectSequence();
     if (!isBengleModelValue(connectedModelValue)) {
       await dispose();
       throw DeviceIdentityMismatchException(
@@ -120,6 +120,7 @@ class Bengle extends UnifiedDe1
         .listen(_handleProbeSample);
     await initIntegratedScale();
     await initLedStrip();
+    startNativeShapingConnectRead();
   }
 
   @override
