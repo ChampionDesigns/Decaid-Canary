@@ -7344,6 +7344,50 @@ components:
         pressure_mode: both
         ramp_factor: 1.0
 
+    NativeShapingReport:
+      type: object
+      description: >
+        The native shaping that a Bengle reported for the shot. Decaid decodes
+        it from the 32 bytes of the machine's native shaping report. An unknown
+        source or refusal code reads as `unknown` and keeps its number in
+        `sourceCode` or `refusalCode`. Bytes 25-31 are ignored.
+      required: [source, sourceCode, refusal, refusalCode, latchCount, settingsRounded]
+      properties:
+        source:
+          type: string
+          enum: [cli, profile, cliBlockRefused, inactive, unknown]
+          description: >
+            Where the settings came from: the machine's own settings (`cli`),
+            the profile block (`profile`), the machine's own settings because
+            it refused the block (`cliBlockRefused`), or no native shaping
+            because the shot ran in DE1 emulation (`inactive`).
+        sourceCode:
+          type: integer
+          description: Byte 0 of the report.
+        refusal:
+          type: string
+          enum: [none, version, modeCode, pointCount, tauRange, rampRange, unusedBytes, pressureRange, pressureRise, flowRange, flowRise, unknown]
+          description: The rule that refused the block, or `none`.
+        refusalCode:
+          type: integer
+          description: Byte 1 of the report.
+        latchCount:
+          type: integer
+          description: >
+            Byte 2 of the report. The machine adds 1 at each latch, so a client
+            can pair a report with a shot.
+        settingsRounded:
+          type: boolean
+          description: >
+            True when a machine setting was not on its wire step, so the
+            settings are rounded.
+        settings:
+          $ref: '#/components/schemas/NativeShaping'
+          description: >
+            The settings that the shot ran with, in the profile block format.
+            Absent when the report has no block that Decaid can decode, for
+            example in DE1 emulation.
+
     ProfileStep:
       type: object
       description: |
@@ -8216,6 +8260,12 @@ components:
             steps with a fast or smooth transition). Absent
             otherwise. Captured by the app and read-only: PUT /shots/{id}
             ignores it. ShotRecord.de1Emulation mirrors it.
+        nativeShaping:
+          $ref: '#/components/schemas/NativeShapingReport'
+          description: >
+            The native shaping that the machine reported for the shot, taken
+            by the app when it saves the shot. Absent when the machine gave no
+            report.
 
     SteamSettingsPatch:
       type: object

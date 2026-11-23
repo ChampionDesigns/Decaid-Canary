@@ -195,6 +195,9 @@ Example:
 }
 ```
 
+A shot records what the machine reported that it ran in
+`workflow.machine.nativeShaping` (see `doc/Api.md`, Shots).
+
 #### Hash Types
 
 Profiles use three SHA-256 hashes:

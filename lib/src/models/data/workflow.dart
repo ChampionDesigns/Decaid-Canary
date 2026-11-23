@@ -1,4 +1,5 @@
 import 'package:reaprime/src/models/data/profile.dart';
+import 'package:reaprime/src/models/data/native_shaping.dart';
 import 'package:reaprime/src/models/data/utils.dart';
 import 'package:reaprime/src/models/data/workflow_context.dart';
 import 'package:uuid/uuid.dart';
@@ -153,6 +154,7 @@ class WorkflowMachine {
   final String? model;
   final String? firmwareVersion;
   final bool de1Emulation;
+  final NativeShapingReport? nativeShaping;
 
   const WorkflowMachine({
     this.provenanceStatus,
@@ -161,6 +163,7 @@ class WorkflowMachine {
     this.model,
     this.firmwareVersion,
     this.de1Emulation = false,
+    this.nativeShaping,
   });
 
   WorkflowMachine copyWith({
@@ -170,6 +173,7 @@ class WorkflowMachine {
     String? model,
     String? firmwareVersion,
     bool? de1Emulation,
+    NativeShapingReport? nativeShaping,
   }) => WorkflowMachine(
     provenanceStatus: provenanceStatus ?? this.provenanceStatus,
     flowCalibration: flowCalibration ?? this.flowCalibration,
@@ -177,6 +181,7 @@ class WorkflowMachine {
     model: model ?? this.model,
     firmwareVersion: firmwareVersion ?? this.firmwareVersion,
     de1Emulation: de1Emulation ?? this.de1Emulation,
+    nativeShaping: nativeShaping ?? this.nativeShaping,
   );
 
   Map<String, dynamic> toJson() => {
@@ -186,6 +191,7 @@ class WorkflowMachine {
     if (model != null) 'model': model,
     if (firmwareVersion != null) 'firmwareVersion': firmwareVersion,
     if (de1Emulation) 'de1Emulation': true,
+    if (nativeShaping != null) 'nativeShaping': nativeShaping!.toJson(),
   };
 
   factory WorkflowMachine.fromJson(Map<String, dynamic> json) =>
@@ -198,6 +204,7 @@ class WorkflowMachine {
         model: parseOptionalString(json['model']),
         firmwareVersion: parseOptionalString(json['firmwareVersion']),
         de1Emulation: json['de1Emulation'] == true,
+        nativeShaping: NativeShapingReport.tryFromJson(json['nativeShaping']),
       );
 
   @override
@@ -208,7 +215,8 @@ class WorkflowMachine {
       other.serialNumber == serialNumber &&
       other.model == model &&
       other.firmwareVersion == firmwareVersion &&
-      other.de1Emulation == de1Emulation;
+      other.de1Emulation == de1Emulation &&
+      other.nativeShaping == nativeShaping;
 
   @override
   int get hashCode => Object.hash(
@@ -218,6 +226,7 @@ class WorkflowMachine {
     model,
     firmwareVersion,
     de1Emulation,
+    nativeShaping,
   );
 }
 

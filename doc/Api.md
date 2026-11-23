@@ -419,6 +419,15 @@ and do not add the prefix to a title that already starts with it. The profile
 title and profile id never change, so `profileTitle` filters match the plain
 title and find both kinds of shot.
 
+**Native shaping report.** A shot can carry `workflow.machine.nativeShaping`,
+the native shaping that a Bengle reported for the shot: `source` (`cli`,
+`profile`, `cliBlockRefused`, `inactive` or `unknown`), `sourceCode`, `refusal`
+(the rule that refused the profile block, or `none`), `refusalCode`,
+`latchCount`, `settingsRounded`, and `settings` in the `native_shaping` format
+of `doc/Profiles.md`. The app takes it when it saves the shot. The key is
+absent when the machine gave no report. The schema is `NativeShapingReport` in
+`assets/api/rest_v1.yml`.
+
 **Modification tracking.** Every shot carries `createdAt` and `updatedAt`
 (ISO-8601 UTC, always serialized with a trailing `Z`). `createdAt` is set
 when the shot enters local storage; the extraction `timestamp` is the fallback

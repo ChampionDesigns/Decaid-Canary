@@ -321,3 +321,137 @@ class NativeShaping extends Equatable {
     rampFactor,
   ];
 }
+
+enum NativeShapingSource {
+  cli(0),
+  profile(1),
+  cliBlockRefused(2),
+  inactive(3),
+  unknown(-1);
+
+  const NativeShapingSource(this.code);
+
+  final int code;
+
+  static NativeShapingSource fromCode(int code) =>
+      values.firstWhere((s) => s.code == code, orElse: () => unknown);
+}
+
+enum NativeShapingRefusal {
+  none(0),
+  version(1),
+  modeCode(2),
+  pointCount(3),
+  tauRange(4),
+  rampRange(5),
+  unusedBytes(6),
+  pressureRange(7),
+  pressureRise(8),
+  flowRange(9),
+  flowRise(10),
+  unknown(-1);
+
+  const NativeShapingRefusal(this.code);
+
+  final int code;
+
+  static NativeShapingRefusal fromCode(int code) =>
+      values.firstWhere((r) => r.code == code, orElse: () => unknown);
+}
+
+@immutable
+class NativeShapingReport extends Equatable {
+  static const length = 32;
+  static const _settingsOffset = 4;
+  static const _roundedFlag = 0x01;
+
+  final int sourceCode;
+  final int refusalCode;
+  final int latchCount;
+  final bool settingsRounded;
+  final NativeShaping? settings;
+
+  const NativeShapingReport({
+    required this.sourceCode,
+    required this.refusalCode,
+    required this.latchCount,
+    required this.settingsRounded,
+    required this.settings,
+  });
+
+  NativeShapingSource get source => NativeShapingSource.fromCode(sourceCode);
+
+  NativeShapingRefusal get refusal =>
+      NativeShapingRefusal.fromCode(refusalCode);
+
+  factory NativeShapingReport.fromBytes(List<int> bytes) {
+    if (bytes.length != length) {
+      throw ArgumentError(
+        'native shaping report must be $length bytes, got ${bytes.length}',
+      );
+    }
+    return NativeShapingReport(
+      sourceCode: bytes[0],
+      refusalCode: bytes[1],
+      latchCount: bytes[2],
+      settingsRounded: bytes[3] & _roundedFlag != 0,
+      settings: _settingsOrNull(
+        bytes.sublist(
+          _settingsOffset,
+          _settingsOffset + NativeShaping.blockLength,
+        ),
+      ),
+    );
+  }
+
+  static NativeShaping? _settingsOrNull(List<int> block) {
+    try {
+      return NativeShaping.fromBlockBytes(block);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  static NativeShapingReport? tryFromJson(Object? json) {
+    if (json is! Map) return null;
+    try {
+      return NativeShapingReport.fromJson(Map<String, dynamic>.from(json));
+    } on ArgumentError {
+      return null;
+    } on TypeError {
+      return null;
+    }
+  }
+
+  factory NativeShapingReport.fromJson(Map<String, dynamic> json) {
+    final settings = json['settings'];
+    return NativeShapingReport(
+      sourceCode: json['sourceCode'] as int,
+      refusalCode: json['refusalCode'] as int,
+      latchCount: json['latchCount'] as int,
+      settingsRounded: json['settingsRounded'] == true,
+      settings: settings is Map
+          ? NativeShaping.fromJson(Map<String, dynamic>.from(settings))
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'source': source.name,
+    'sourceCode': sourceCode,
+    'refusal': refusal.name,
+    'refusalCode': refusalCode,
+    'latchCount': latchCount,
+    'settingsRounded': settingsRounded,
+    if (settings != null) 'settings': settings!.toJson(),
+  };
+
+  @override
+  List<Object?> get props => [
+    sourceCode,
+    refusalCode,
+    latchCount,
+    settingsRounded,
+    settings,
+  ];
+}

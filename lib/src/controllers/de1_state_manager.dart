@@ -23,6 +23,7 @@ import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/device.dart' as device;
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/de1_emulation_reporter.dart';
+import 'package:reaprime/src/models/device/native_shaping_reporter.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/realtime_shot_feature/realtime_shot_feature.dart';
@@ -885,12 +886,13 @@ class De1StateManager with WidgetsBindingObserver {
     final measurements = List<ShotSnapshot>.from(_currentShotSnapshots);
     final baseWorkflow = _workflowController.currentWorkflow;
     final startTime = _currentShotSequencer!.shotStartTime;
+    final machine = _withNativeShapingReport(_currentShotMachine);
 
     final workflow = baseWorkflow.copyWith(
       id: baseWorkflow.id,
       profile: profile,
-      machine: _currentShotMachine,
-      clearMachine: _currentShotMachine == null,
+      machine: machine,
+      clearMachine: machine == null,
     );
 
     _persistenceController.persistShot(
@@ -907,6 +909,12 @@ class De1StateManager with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  WorkflowMachine? _withNativeShapingReport(WorkflowMachine? machine) {
+    final report = nativeShapingReportedBy(_de1Controller.connectedDe1OrNull);
+    if (machine == null || report == null) return machine;
+    return machine.copyWith(nativeShaping: report);
   }
 
   WorkflowMachine? _captureMachineSnapshot() {

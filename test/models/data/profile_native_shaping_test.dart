@@ -43,6 +43,15 @@ Matcher _refuses(String field) => throwsA(
   isA<ArgumentError>().having((e) => e.message, 'message', contains(field)),
 );
 
+List<int> _report({
+  int source = 1,
+  int rule = 0,
+  int latch = 7,
+  int flags = 0,
+  List<int> block = _exampleBlock,
+  List<int> tail = const [0, 0, 0, 0, 0, 0, 0],
+}) => [source, rule, latch, flags, ...block, ...tail];
+
 void main() {
   group('NativeShaping.fromJson', () {
     test('round-trips the example and encodes the example bytes', () {
@@ -424,6 +433,129 @@ void main() {
         ProfileHash.calculateProfileHash(
           shapedWith(NativeShaping.fromJson({}).toJson()),
         ),
+      );
+    });
+  });
+
+  group('NativeShapingReport.fromBytes', () {
+    test('decodes a profile source with the example settings', () {
+      final report = NativeShapingReport.fromBytes(_report());
+
+      expect(report.source, NativeShapingSource.profile);
+      expect(report.refusal, NativeShapingRefusal.none);
+      expect(report.latchCount, 7);
+      expect(report.settingsRounded, isFalse);
+      expect(report.settings, NativeShaping.fromJson(_example()));
+    });
+
+    test('decodes a CLI source', () {
+      final report = NativeShapingReport.fromBytes(_report(source: 0));
+
+      expect(report.source, NativeShapingSource.cli);
+      expect(report.settings, NativeShaping.fromJson(_example()));
+    });
+
+    test('decodes a refused block with its rule', () {
+      final report = NativeShapingReport.fromBytes(
+        _report(source: 2, rule: 10),
+      );
+
+      expect(report.source, NativeShapingSource.cliBlockRefused);
+      expect(report.refusal, NativeShapingRefusal.flowRise);
+      expect(report.toJson()['refusal'], 'flowRise');
+    });
+
+    test('decodes DE1 emulation with no settings', () {
+      final report = NativeShapingReport.fromBytes(
+        _report(source: 3, block: List.filled(21, 0)),
+      );
+
+      expect(report.source, NativeShapingSource.inactive);
+      expect(report.settings, isNull);
+      expect(report.toJson().containsKey('settings'), isFalse);
+    });
+
+    test('reads bit 0 of the flags as rounded settings', () {
+      expect(
+        NativeShapingReport.fromBytes(_report(flags: 1)).settingsRounded,
+        isTrue,
+      );
+      expect(
+        NativeShapingReport.fromBytes(_report(flags: 0xFE)).settingsRounded,
+        isFalse,
+      );
+    });
+
+    test('ignores bytes 25-31', () {
+      expect(
+        NativeShapingReport.fromBytes(_report(tail: [1, 2, 3, 4, 5, 6, 7])),
+        NativeShapingReport.fromBytes(_report()),
+      );
+    });
+
+    test('keeps an unknown source or rule code as unknown', () {
+      final report = NativeShapingReport.fromBytes(
+        _report(source: 9, rule: 42),
+      );
+
+      expect(report.source, NativeShapingSource.unknown);
+      expect(report.sourceCode, 9);
+      expect(report.refusal, NativeShapingRefusal.unknown);
+      expect(report.refusalCode, 42);
+      expect(report.settings, NativeShaping.fromJson(_example()));
+    });
+
+    test('gives no settings for a block it cannot decode', () {
+      final badBlock = List.of(_exampleBlock)..[0] = 2;
+
+      expect(
+        NativeShapingReport.fromBytes(_report(block: badBlock)).settings,
+        isNull,
+      );
+    });
+
+    test('refuses a length that is not 32 bytes', () {
+      expect(
+        () => NativeShapingReport.fromBytes(_report().sublist(0, 31)),
+        throwsArgumentError,
+      );
+    });
+
+    test('round-trips through JSON', () {
+      for (final bytes in [
+        _report(flags: 1),
+        _report(source: 2, rule: 10),
+        _report(source: 3, block: List.filled(21, 0)),
+        _report(source: 9, rule: 42),
+      ]) {
+        final report = NativeShapingReport.fromBytes(bytes);
+        final json =
+            jsonDecode(jsonEncode(report.toJson())) as Map<String, dynamic>;
+        expect(NativeShapingReport.fromJson(json), report);
+      }
+      expect(NativeShapingReport.fromBytes(_report()).toJson(), {
+        'source': 'profile',
+        'sourceCode': 1,
+        'refusal': 'none',
+        'refusalCode': 0,
+        'latchCount': 7,
+        'settingsRounded': false,
+        'settings': _example(),
+      });
+    });
+
+    test('tryFromJson gives null for a value it cannot read', () {
+      expect(NativeShapingReport.tryFromJson(null), isNull);
+      expect(NativeShapingReport.tryFromJson(true), isNull);
+      expect(NativeShapingReport.tryFromJson({'sourceCode': 'x'}), isNull);
+      expect(
+        NativeShapingReport.tryFromJson({
+          'sourceCode': 1,
+          'refusalCode': 0,
+          'latchCount': 1,
+          'settings': {'flow_tau': 9},
+        }),
+        isNull,
       );
     });
   });
