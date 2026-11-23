@@ -54,6 +54,7 @@ Future<(Bengle, FakeBleTransport)> _connectBengle() async {
   );
   final bengle = Bengle(transport: transport);
   await bengle.onConnect();
+  await transport.completeNativeShapeConnectRead();
   transport.writes.clear();
   return (bengle, transport);
 }

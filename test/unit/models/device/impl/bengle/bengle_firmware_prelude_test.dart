@@ -36,6 +36,7 @@ void main() {
 
         final bengle = Bengle(transport: transport);
         await bengle.onConnect();
+        await transport.completeNativeShapeConnectRead();
 
         final preFwWrites = transport.writes.length;
 

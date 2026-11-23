@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reaprime/src/models/data/native_shaping.dart';
 import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
+import 'package:reaprime/src/models/device/impl/bengle/bengle_mmr.dart';
 import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/device/native_shaping_reporter.dart';
 
+import '../../helpers/fake_ble_transport.dart';
 import '../../helpers/native_shape_machine_transport.dart';
 import '../../helpers/native_shape_report_harness.dart';
 
@@ -111,6 +113,37 @@ void main() {
       expect(transport.reportReads, 6);
       expect(log.where((l) => l.contains('equals the baseline')), hasLength(1));
       expect(log.where((l) => l.contains('no baseline')), isEmpty);
+    });
+
+    test('a Bengle with no reg 66 reply ends its connect without waiting for '
+        'the read, and reads its palette first', () async {
+      final transport = NativeShapeMachineTransport();
+      addTearDown(transport.dispose);
+      transport.queuePaletteHydrationResponses();
+      transport.queueOnConnectResponses(v13Model: 128);
+      final bengle = Bengle(
+        transport: transport,
+        nativeShapingReadTimings: const NativeShapingReadTimings(
+          requestTimeout: Duration(seconds: 3),
+        ),
+      );
+      addTearDown(bengle.onDisconnect);
+      final paletteRead = BengleMmr.frontLedAwake.address & 0xFFFFFF;
+      int firstIndexOf(bool Function(FakeBleWrite w) match) =>
+          transport.writes.indexWhere(match);
+      bool isPaletteRead(FakeBleWrite w) =>
+          w.characteristicUUID == Endpoint.readFromMMR.uuid &&
+          (w.data[1] << 16 | w.data[2] << 8 | w.data[3]) == paletteRead;
+
+      await bengle.onConnect().timeout(const Duration(seconds: 2));
+      await nsUntil(() => transport.reportRequests.isNotEmpty);
+
+      final reportRequest = transport.reportRequests.first;
+      expect(firstIndexOf(isPaletteRead), greaterThanOrEqualTo(0));
+      expect(
+        firstIndexOf(isPaletteRead),
+        lessThan(firstIndexOf((w) => identical(w, reportRequest))),
+      );
     });
 
     test('reads one head on a Bengle connect and none on a DE1', () async {

@@ -455,11 +455,17 @@ class UnifiedDe1
 
   @override
   Future<void> onConnect() async {
-    await _runConnectSequence();
+    await runConnectSequence();
+    startNativeShapingConnectRead();
+  }
+
+  @protected
+  void startNativeShapingConnectRead() {
     if (isBengle) _readNativeShapingAtConnect();
   }
 
-  Future<void> _runConnectSequence() async {
+  @protected
+  Future<void> runConnectSequence() async {
     initRawStream();
     await _transport.connect();
     _watchShotStateForNativeShaping();
