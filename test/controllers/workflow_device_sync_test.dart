@@ -10,6 +10,8 @@ import 'package:reaprime/src/controllers/workflow_device_sync.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
+import 'package:reaprime/src/models/device/de1_rawmessage.dart';
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
 import 'package:reaprime/src/models/device/device.dart';
 import 'package:reaprime/src/models/errors.dart';
 
@@ -343,6 +345,60 @@ void main() {
     );
   });
 
+  group('a raw profile write', () {
+    De1RawMessage receipt(
+      Endpoint endpoint, {
+      De1RawOperationType? operation,
+    }) => De1RawMessage(
+      type: De1RawMessageType.response,
+      operation: operation ?? De1RawOperationType.write,
+      characteristicUUID: endpoint.uuid,
+      payload: '0102000000',
+    );
+
+    Future<Workflow> pushOnce() async {
+      final next = workflow.currentWorkflow.copyWith(
+        profile: _profile('Adaptive v2'),
+      );
+      workflow.setWorkflow(next);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(de1.setProfileCalls, hasLength(1));
+      return next;
+    }
+
+    for (final endpoint in [Endpoint.headerWrite, Endpoint.frameWrite]) {
+      test('to ${endpoint.name} makes a reselect of the same profile upload '
+          'again', () async {
+        final next = await pushOnce();
+
+        de1.emitRawMessage(receipt(endpoint));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        workflow.setWorkflow(next.copyWith(profile: _profile('Adaptive v2')));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        expect(de1.setProfileCalls, hasLength(2));
+        expect(de1.setProfileCalls.last.title, 'Adaptive v2');
+      });
+    }
+
+    test('a reselect with no raw profile write still skips', () async {
+      final next = await pushOnce();
+
+      de1.emitRawMessage(receipt(Endpoint.requestedState));
+      de1.emitRawMessage(
+        receipt(Endpoint.headerWrite, operation: De1RawOperationType.read),
+      );
+      de1.emitRawMessage(
+        receipt(Endpoint.frameWrite, operation: De1RawOperationType.notify),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      workflow.setWorkflow(next.copyWith(profile: _profile('Adaptive v2')));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(de1.setProfileCalls, hasLength(1));
+    });
+  });
+
   test('non-profile workflow changes do not trigger setProfile', () async {
     final initial = workflow.currentWorkflow;
     workflow.setWorkflow(initial.copyWith(name: 'renamed'));
@@ -605,6 +661,37 @@ void main() {
       s.dispose();
       await Future<void>.delayed(const Duration(milliseconds: 150));
       expect(flaky.totalCalls, 1);
+    });
+
+    test('a raw profile write during an upload makes a reselect of the same '
+        'profile upload again', () async {
+      final gated = _GatedDe1();
+      final controller = await connect(gated);
+      buildSync(controller);
+      await settleConnectPush(gated: gated);
+      gated.setProfileCalls.clear();
+
+      applyProfile('P1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(gated.pendingUploads, 1);
+      gated.emitRawMessage(
+        De1RawMessage(
+          type: De1RawMessageType.response,
+          operation: De1RawOperationType.write,
+          characteristicUUID: Endpoint.headerWrite.uuid,
+          payload: '0102000000',
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      applyProfile('P1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(gated.setProfileCalls.map((p) => p.title), ['P1', 'P1']);
+      gated.completeNext();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     });
 
     test('reverting to the last-pushed profile while another upload is in '

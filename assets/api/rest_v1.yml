@@ -1769,6 +1769,12 @@ paths:
         A complete profile that omits `de1_emulation` turns DE1 emulation off. A partial
         `profile` object without `steps` is deep-merged and keeps the current `de1_emulation`
         unless it sends the key.
+        `native_shaping` is one value and is never deep-merged. A complete profile replaces
+        it: the block it sends, or no block when it omits the key. A partial profile that
+        sends the key replaces the whole block, and `"native_shaping": null` removes it; a
+        partial profile without the key keeps the block. A key that is absent inside a sent
+        block takes its default, not the value of the stored block. A block that breaks a
+        rule returns `400`.
         The server does not debounce or combine separate requests. Machine side effects from
         workflow PUT requests do not execute concurrently,
         so a request may wait behind an in-flight machine operation. Each response describes
@@ -7276,7 +7282,10 @@ components:
         breaks a rule is refused with a `400` that names the field. The block
         is part of the profile hash only when present, so a profile without
         it keeps its ID and a change to the block makes a new profile ID.
-        Every machine stores the block.
+        Every machine stores the block. The profile upload sends the block to
+        frame slots 21-23 of a Bengle only: it is skipped on a DE1 and with
+        DE1 emulation on (tail byte 1). The upload never refuses a profile
+        because of the block.
       properties:
         version:
           type: integer
@@ -8265,8 +8274,18 @@ components:
           $ref: '#/components/schemas/NativeShapingReport'
           description: >
             The native shaping that the machine reported for the shot, taken
-            by the app when it saves the shot. Absent when the machine gave no
-            report.
+            by the app when it saves the shot. The app reads it from a Bengle
+            after the machine enters espresso (one read, and one more later
+            in the shot if needed). Absent when the machine gave no report: on
+            a DE1; when the read failed (an error, a timeout, a short reply,
+            or a latch count that changed on each of three passes); when the
+            latch count equals the count read before the shot, so the machine
+            did not latch for this shot. The app clears the report only when
+            the next shot starts, so a profile upload or a raw profile write
+            after the shot does not remove it from that shot's record.
+            Read-only: `PUT /api/v1/shots/{id}` ignores this key and
+            keeps the recorded report. A request cannot change, remove or add
+            it, and a partial object is ignored as a whole.
 
     SteamSettingsPatch:
       type: object

@@ -176,7 +176,9 @@ array. A key that is absent inside the block takes its default.
 `NativeShaping.fromJson` rounds each number half up to its wire step first
 (a decimal half step such as `0.29` s rounds up to `0.30` s),
 then checks the rounded value. So the stored value is the value the machine
-runs, and two blocks that round to the same bytes are equal. A value that
+runs, and two blocks that round to the same bytes are equal. A PUT
+`/api/v1/workflow` treats the block as one value: a sent block replaces the
+stored one with no merge of keys or points (see `doc/Api.md`, Workflow). A value that
 breaks a rule throws an `ArgumentError`, and the REST API returns `400`.
 `toJson` writes every key of the block.
 
@@ -196,8 +198,25 @@ Example:
 }
 ```
 
+Upload: on a Bengle, Decaid writes the 21-byte block to frame slots 21, 22
+and 23, after the extension frames and before the tail. Each write is the slot
+index and 7 block bytes. The upload skips the block on a DE1, with DE1
+emulation on (the tail byte that `de1_emulation` sets is 1), and for a profile
+without the block. The upload never refuses a profile because of the block. A
+header write clears all slots, so a profile without the block runs the
+machine's own settings.
+
 A shot records what the machine reported that it ran in
-`workflow.machine.nativeShaping` (see `doc/Api.md`, Shots).
+`workflow.machine.nativeShaping` (see `doc/Api.md`, Shots). Decaid reads the
+machine's native shaping report (MMR `NativeShapeLatched`, 32 bytes) after the
+machine enters espresso. The read takes bytes 0-15 and 16-31, then bytes 0-15
+again; the latch count (byte 2) of the first and the last read must agree, or
+the read starts again (at most three passes). Decaid keeps a report only when
+its latch count differs from the count of the last read before the shot. It
+takes that count after each profile upload, and forgets it at each connect.
+With no count known before the shot, Decaid keeps the first good read and logs
+that it had no baseline. Decaid clears the report only when the next shot
+starts.
 
 #### Hash Types
 

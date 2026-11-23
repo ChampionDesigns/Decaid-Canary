@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:logging/logging.dart';
 import 'package:reaprime/src/controllers/persistence_controller.dart';
 import 'package:reaprime/src/import/parsers/enjoyment_scale.dart';
+import 'package:reaprime/src/models/data/native_shaping.dart';
 import 'package:reaprime/src/models/data/shot_record.dart';
 import 'package:reaprime/src/services/storage/bean_storage_service.dart';
 import 'package:reaprime/src/services/webserver/bounded_request_body.dart';
@@ -260,6 +261,10 @@ class ShotsHandler {
         _representClearedNoteAsEmpty(normalizedPatch, merged);
         _synchronizeLegacyAnnotationAliases(merged);
         _keepRecordedDe1Emulation(merged, existingShot.de1Emulation);
+        _keepRecordedNativeShaping(
+          merged,
+          existingShot.workflow.machine?.nativeShaping,
+        );
         merged['id'] = id;
 
         final contentChanged = !ShotRecord.fromRecordedJson(merged)
@@ -304,6 +309,24 @@ class ShotsHandler {
       }
     } else if (recorded) {
       workflow['machine'] = {'de1Emulation': true};
+    }
+  }
+
+  static void _keepRecordedNativeShaping(
+    Map<String, dynamic> merged,
+    NativeShapingReport? recorded,
+  ) {
+    final workflow = merged['workflow'];
+    if (workflow is! Map) return;
+    final machine = workflow['machine'];
+    if (machine is Map) {
+      if (recorded != null) {
+        machine['nativeShaping'] = recorded.toJson();
+      } else {
+        machine.remove('nativeShaping');
+      }
+    } else if (recorded != null) {
+      workflow['machine'] = {'nativeShaping': recorded.toJson()};
     }
   }
 

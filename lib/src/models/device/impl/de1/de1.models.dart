@@ -371,6 +371,13 @@ enum MMRItem implements MmrAddress {
     MmrValueKind.int32,
     "ProfileModeCaps bitmask: 0x1 = per-frame Power, 0x2 = per-frame Lever, "
     "0x4 = per-frame HOLD, 0x8 = cross-variable power exit",
+  ),
+  nativeShapeLatched(
+    0x00803974,
+    32,
+    MmrValueKind.bytes,
+    "NativeShapeLatched: the native shaping settings latched for the shot "
+    "(source, block rule, latch count, flags, block bytes)",
   );
 
   @override

@@ -424,8 +424,18 @@ the native shaping that a Bengle reported for the shot: `source` (`cli`,
 `profile`, `cliBlockRefused`, `inactive` or `unknown`), `sourceCode`, `refusal`
 (the rule that refused the profile block, or `none`), `refusalCode`,
 `latchCount`, `settingsRounded`, and `settings` in the `native_shaping` format
-of `doc/Profiles.md`. The app takes it when it saves the shot. The key is
-absent when the machine gave no report. The schema is `NativeShapingReport` in
+of `doc/Profiles.md`. The app reads the report from a Bengle after the machine
+enters espresso, and once more later in the shot if the first read gives
+nothing. The app takes it when it saves the shot. The key is absent when the
+machine gave no report: on a DE1; when the read failed (an error, a timeout, a
+short reply, or a latch count that changed on each of three passes); when the
+latch count equals the count read before the shot (the machine did not latch
+for this shot). The app clears the report only when the next shot starts, so a
+profile upload or a raw profile write after the shot does not remove it from
+that shot's record. The report is read-only:
+`PUT /api/v1/shots/:id` ignores `workflow.machine.nativeShaping` (a full or a
+partial object, or `null`) and keeps the recorded report, so a request cannot
+change, remove or add it. The schema is `NativeShapingReport` in
 `assets/api/rest_v1.yml`.
 
 **Modification tracking.** Every shot carries `createdAt` and `updatedAt`
@@ -508,7 +518,8 @@ non-nullable; `profile: null` returns `400`.
 A profile may carry a `native_shaping` block (`doc/Profiles.md`, Native Shaping).
 Decaid rounds each number to its wire step, checks it, and returns the rounded
 block. A value that breaks a rule, for example `"flow_tau": 6`, returns `400`.
-The block is part of the profile ID only when present.
+The block is part of the profile ID only when present. The profile upload sends
+the block to a Bengle only: it is skipped on a DE1 and with DE1 emulation on.
 
 #### Extended step types (capability-gated)
 
@@ -550,6 +561,12 @@ A `profile` object that contains `steps` is a complete profile, so its `de1_emul
 replaces the current value: DE1 emulation is on only when the request sends `true`, and a
 saved profile that omits the key turns it off. A partial `profile` object without `steps`
 keeps the current `de1_emulation` unless it sends the key.
+`native_shaping` is one value and is never deep-merged. A complete profile replaces it:
+the block it sends, or no block when it omits the key. A partial profile that sends the
+key replaces the whole block (`"native_shaping": null` removes it); a partial profile
+without the key keeps the block. A key that is absent inside a sent block takes its
+default (`doc/Profiles.md`, Native Shaping), not the value of the stored block. A block
+that breaks a rule returns `400`.
 Requests may wait behind machine I/O; the server does not debounce high-frequency
 input, so clients should throttle controls themselves. Bodies larger than 1 MiB return `413`,
 requests beyond the eight-entry active/queued limit return `429`, and requests waiting more

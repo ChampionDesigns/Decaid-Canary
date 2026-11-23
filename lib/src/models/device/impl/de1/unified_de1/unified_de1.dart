@@ -5,9 +5,11 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:logging/logging.dart';
 import 'package:reaprime/src/controllers/connection/connection_timings.dart';
+import 'package:reaprime/src/models/data/native_shaping.dart';
 import 'package:reaprime/src/models/data/profile.dart';
 import 'package:reaprime/src/models/device/de1_firmwaremodel.dart';
 import 'package:reaprime/src/models/device/de1_emulation_reporter.dart';
+import 'package:reaprime/src/models/device/native_shaping_reporter.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
 import 'package:reaprime/src/models/device/bengle_interface.dart';
 import 'package:reaprime/src/models/device/firmware_wake_entry.dart';
@@ -43,6 +45,7 @@ part 'unified_de1.parsing.dart';
 part 'unified_de1.profile.dart';
 part 'unified_de1.firmware.dart';
 part 'unified_de1.raw.dart';
+part 'unified_de1.native_shaping.dart';
 part 'integrated_scale_capability.dart';
 part 'led_strip_capability.dart';
 part 'scale_calibration_capability.dart';
@@ -62,7 +65,11 @@ final class _FirmwareCancellationToken {
 }
 
 class UnifiedDe1
-    implements De1Interface, CanonicalDeviceIdentity, De1EmulationReporter {
+    implements
+        De1Interface,
+        CanonicalDeviceIdentity,
+        De1EmulationReporter,
+        NativeShapingReporter {
   static final BleServiceIdentifier advertisingIdentifier =
       BleServiceIdentifier.short('ffff');
   final UnifiedDe1Transport _transport;
@@ -71,6 +78,7 @@ class UnifiedDe1
   final Duration firmwareEraseTimeout;
   final Duration firmwareVerificationTimeout;
   final Duration calibrationTimeout;
+  final NativeShapingReadTimings nativeShapingReadTimings;
   Future<void> _calibrationQueue = Future<void>.value();
   Future<void> _flowEstimationQueue = Future<void>.value();
 
@@ -83,6 +91,7 @@ class UnifiedDe1
     this.firmwareEraseTimeout = const Duration(seconds: 60),
     this.firmwareVerificationTimeout = const Duration(seconds: 120),
     this.calibrationTimeout = const Duration(seconds: 4),
+    this.nativeShapingReadTimings = const NativeShapingReadTimings(),
   }) : _transport = UnifiedDe1Transport(transport: transport),
        _transportIdentity = transport is CanonicalDeviceIdentity
            ? transport as CanonicalDeviceIdentity
@@ -411,6 +420,16 @@ class UnifiedDe1
 
   @override
   bool get lastUploadedProfileDe1Emulation => _lastTailDe1Emulation;
+
+  NativeShapingReport? _nativeShapingReport;
+  int? _lastSeenLatchCount;
+  int _nativeShapingEpoch = 0;
+  bool _nativeShapingShotRunning = false;
+  int? _lastStateByteSeen;
+  StreamSubscription<ByteData>? _nativeShapingStateSubscription;
+
+  @override
+  NativeShapingReport? get lastNativeShapingReport => _nativeShapingReport;
   De1RefillKitSettings _refillKitSetting = De1RefillKitSettings.auto;
   double? _cachedFlowEstimation;
   int _flowEstimationEpoch = 0;
@@ -433,6 +452,7 @@ class UnifiedDe1
   Future<void> onConnect() async {
     initRawStream();
     await _transport.connect();
+    _watchShotStateForNativeShaping();
 
     _currentProfile = null;
     _lastTailDe1Emulation = false;
@@ -524,7 +544,9 @@ class UnifiedDe1
     }
   }
 
-  Future<void> onDisconnect() async {}
+  Future<void> onDisconnect() async {
+    _stopNativeShapingWatch();
+  }
 
   final StreamController<De1RawMessage> _rawMessageController =
       StreamController.broadcast();
@@ -768,7 +790,11 @@ class UnifiedDe1
     final rawProfileWrites = _rawProfileWrites;
     await _sendProfile(profile);
     if (rawProfileWrites == _rawProfileWrites) _currentProfile = profile;
-    await Future.delayed(ConnectionTimings.profileDownloadGuard);
+    const guard = ConnectionTimings.profileDownloadGuard;
+    await Future.wait([
+      Future<void>.delayed(guard),
+      if (isBengle) _readNativeShapingBaseline(guard),
+    ]);
   }
 
   @override

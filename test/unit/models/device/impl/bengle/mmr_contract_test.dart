@@ -17,9 +17,9 @@ const String _contractPath = 'assets/api/bengle_hw_v1.yml';
 
 /// The contract_version this registration table was written against.
 /// Bump deliberately, together with the enum updates the new contract needs.
-const int _expectedContractVersion = 4;
+const int _expectedContractVersion = 5;
 
-const int _expectedRegisterCount = 61;
+const int _expectedRegisterCount = 62;
 
 /// One app-declared register under test: the app enum entry and the FIRMWARE
 /// register name of its row in bengle_hw_v1.yml.
@@ -66,6 +66,7 @@ const List<ContractEntry> entriesUnderTest = <ContractEntry>[
   ContractEntry(MMRItem.refillKitPresent, 'RefillKitPresent'),
   ContractEntry(MMRItem.userPresent, 'UserPresent'),
   ContractEntry(MMRItem.profileModeCaps, 'ProfileModeCaps'),
+  ContractEntry(MMRItem.nativeShapeLatched, 'NativeShapeLatched'),
   ContractEntry(BengleScaleMmr.endOfShotWeight, 'EndOfShotWeight'),
   ContractEntry(BengleScaleMmr.scaleTare, 'ScaleTare'),
   ContractEntry(BengleMmr.matSetPoint, 'MatSetPoint'),
