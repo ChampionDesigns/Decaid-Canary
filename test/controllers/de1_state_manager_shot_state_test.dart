@@ -16,6 +16,9 @@ import 'package:reaprime/src/models/data/steam_record.dart';
 import 'package:reaprime/src/models/data/workflow.dart';
 import 'package:reaprime/src/models/data/workflow_context.dart';
 import 'package:reaprime/src/models/device/de1_interface.dart';
+import 'package:reaprime/src/models/device/impl/bengle/bengle.dart';
+import 'package:reaprime/src/models/device/impl/de1/de1.models.dart';
+import 'package:reaprime/src/models/device/impl/de1/unified_de1/unified_de1.dart';
 import 'package:reaprime/src/models/device/machine.dart';
 import 'package:reaprime/src/services/storage/storage_service.dart';
 import 'package:reaprime/src/settings/gateway_mode.dart';
@@ -24,8 +27,19 @@ import 'package:rxdart/rxdart.dart';
 
 import '../helpers/mock_device_discovery_service.dart';
 import '../helpers/mock_settings_service.dart';
+import '../helpers/native_shape_machine_transport.dart';
 import '../helpers/non_de1_profile_step.dart';
 import '../helpers/test_de1.dart';
+
+class _BengleReportingDe1 extends TestDe1 {
+  _BengleReportingDe1(this.bengle);
+
+  final Bengle bengle;
+
+  @override
+  NativeShapingReport? get lastNativeShapingReport =>
+      bengle.lastNativeShapingReport;
+}
 
 class _TestDe1Controller extends De1Controller {
   final BehaviorSubject<De1Interface?> de1Subject = BehaviorSubject.seeded(
@@ -589,6 +603,78 @@ void main() {
       expect(storage.storedShots[0].workflow.machine?.nativeShaping, report(1));
       expect(storage.storedShots[1].workflow.machine?.nativeShaping, isNull);
     });
+
+    Future<(Bengle, NativeShapeMachineTransport)> connectReportingBengle({
+      List<int>? image,
+      Object? readError,
+    }) async {
+      final transport = NativeShapeMachineTransport()
+        ..image = image
+        ..readError = readError;
+      addTearDown(transport.dispose);
+      transport.queuePaletteHydrationResponses();
+      transport.queueOnConnectResponses(v13Model: 128);
+      final bengle = Bengle(
+        transport: transport,
+        nativeShapingReadTimings: const NativeShapingReadTimings(
+          firstReadDelay: Duration(milliseconds: 10),
+          retryDelay: Duration(milliseconds: 50),
+          requestTimeout: Duration(milliseconds: 50),
+        ),
+      );
+      await bengle.onConnect();
+      addTearDown(bengle.onDisconnect);
+      await testDe1.dispose();
+      testDe1 = _BengleReportingDe1(bengle);
+      de1Controller.connect(testDe1);
+      await pump();
+      return (bengle, transport);
+    }
+
+    test('a Bengle report with a new latch count is saved with the shot, '
+        'source profile', () async {
+      final (bengle, transport) = await connectReportingBengle(
+        image: nativeShapeReportImage(latch: 9),
+      );
+
+      transport.emitNotification(Endpoint.stateInfo, [espressoStateByte, 0]);
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (bengle.lastNativeShapingReport == null &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      await driveShot();
+
+      final saved = storage.storedShots.single.workflow.machine?.nativeShaping;
+      expect(saved, isNotNull);
+      expect(saved!.source, NativeShapingSource.profile);
+      expect(saved.latchCount, 9);
+      final machine =
+          storage.storedShots.single.workflow.toJson()['machine'] as Map;
+      expect((machine['nativeShaping'] as Map)['source'], 'profile');
+    });
+
+    for (final (label, image, error) in [
+      ('times out', null, null),
+      ('throws', null, StateError('link lost')),
+    ]) {
+      test('a Bengle reg 66 read that $label gives no report and the shot is '
+          'still saved', () async {
+        final (bengle, transport) = await connectReportingBengle(
+          image: image,
+          readError: error,
+        );
+
+        transport.emitNotification(Endpoint.stateInfo, [espressoStateByte, 0]);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await driveShot();
+
+        expect(transport.reportRequests, isNotEmpty);
+        expect(bengle.lastNativeShapingReport, isNull);
+        final record = storage.storedShots.single;
+        expect(record.workflow.machine?.nativeShaping, isNull);
+      });
+    }
   });
 
   test(

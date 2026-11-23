@@ -424,9 +424,15 @@ the native shaping that a Bengle reported for the shot: `source` (`cli`,
 `profile`, `cliBlockRefused`, `inactive` or `unknown`), `sourceCode`, `refusal`
 (the rule that refused the profile block, or `none`), `refusalCode`,
 `latchCount`, `settingsRounded`, and `settings` in the `native_shaping` format
-of `doc/Profiles.md`. The app takes it when it saves the shot. The key is
-absent when the machine gave no report. The schema is `NativeShapingReport` in
-`assets/api/rest_v1.yml`.
+of `doc/Profiles.md`. The app reads the report from a Bengle after the machine
+enters espresso, and once more later in the shot if the first read gives
+nothing. The app takes it when it saves the shot. The key is absent when the
+machine gave no report: on a DE1; when the read failed (an error, a timeout, a
+short reply, or a latch count that changed on each of three passes); when the
+latch count equals the count read before the shot (the machine did not latch
+for this shot); and after a raw profile write. A profile upload while no shot
+runs clears the report of the last shot. The schema is `NativeShapingReport`
+in `assets/api/rest_v1.yml`.
 
 **Modification tracking.** Every shot carries `createdAt` and `updatedAt`
 (ISO-8601 UTC, always serialized with a trailing `Z`). `createdAt` is set

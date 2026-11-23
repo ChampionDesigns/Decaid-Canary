@@ -8268,8 +8268,15 @@ components:
           $ref: '#/components/schemas/NativeShapingReport'
           description: >
             The native shaping that the machine reported for the shot, taken
-            by the app when it saves the shot. Absent when the machine gave no
-            report.
+            by the app when it saves the shot. The app reads it from a Bengle
+            after the machine enters espresso (one read, and one more later
+            in the shot if needed). Absent when the machine gave no report: on
+            a DE1; when the read failed (an error, a timeout, a short reply,
+            or a latch count that changed on each of three passes); when the
+            latch count equals the count read before the shot, so the machine
+            did not latch for this shot; and after a raw profile write. A
+            profile upload while no shot runs clears the report of the last
+            shot.
 
     SteamSettingsPatch:
       type: object
