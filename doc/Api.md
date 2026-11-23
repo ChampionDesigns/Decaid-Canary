@@ -431,8 +431,11 @@ machine gave no report: on a DE1; when the read failed (an error, a timeout, a
 short reply, or a latch count that changed on each of three passes); when the
 latch count equals the count read before the shot (the machine did not latch
 for this shot); and after a raw profile write. A profile upload while no shot
-runs clears the report of the last shot. The schema is `NativeShapingReport`
-in `assets/api/rest_v1.yml`.
+runs clears the report of the last shot. The report is read-only:
+`PUT /api/v1/shots/:id` ignores `workflow.machine.nativeShaping` (a full or a
+partial object, or `null`) and keeps the recorded report, so a request cannot
+change, remove or add it. The schema is `NativeShapingReport` in
+`assets/api/rest_v1.yml`.
 
 **Modification tracking.** Every shot carries `createdAt` and `updatedAt`
 (ISO-8601 UTC, always serialized with a trailing `Z`). `createdAt` is set
