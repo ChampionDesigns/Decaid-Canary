@@ -131,6 +131,17 @@ void main() {
     }
   });
 
+  test('a PUT with a null machine keeps the stored report', () async {
+    await storeBoth();
+
+    final body = await put('reported', {
+      'workflow': {'machine': null},
+    });
+
+    expect(responseReport(body), _report.toJson());
+    expect(await storedReport('reported'), _report);
+  });
+
   test('a PUT cannot add a report to a shot that has none', () async {
     await storeBoth();
 
