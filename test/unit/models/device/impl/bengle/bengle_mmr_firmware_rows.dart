@@ -686,4 +686,15 @@ const List<FirmwareRow> firmwareRows = <FirmwareRow>[
     'bitmask',
     signed: false,
   ),
+  FirmwareRow(
+    'NativeShapeLatched',
+    66,
+    0x00803974,
+    32,
+    'R',
+    1,
+    'bytes',
+    null,
+    signed: false,
+  ),
 ];
