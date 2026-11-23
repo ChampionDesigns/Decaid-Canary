@@ -427,8 +427,11 @@ the native shaping that a Bengle reported for the shot: `source` (`cli`,
 of `doc/Profiles.md`. The app reads the report from a Bengle after the machine
 enters espresso, and once more later in the shot if the first read gives
 nothing. After a profile upload during the shot, the app reads it again, and a
-new latch count replaces the report (the machine latches again in heat-up). The app takes it when it saves the shot. The key is absent when the
-machine gave no report: on a DE1; when the read failed (an error, a timeout, a
+new latch count replaces the report (the machine latches again in heat-up).
+The app takes the report when it saves the shot. A shot can settle (the scale
+weight comes to rest) after the machine starts the next espresso. Then the
+record keeps the last report that the app saw before that start. The key is
+absent when the machine gave no report: on a DE1; when the read failed (an error, a timeout, a
 short reply, or a latch count that changed on each of three passes); when the
 latch count equals the count read before the shot (the machine did not latch
 for this shot). The app clears the report only when the next shot starts, so a

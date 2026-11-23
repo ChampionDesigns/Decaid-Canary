@@ -224,7 +224,10 @@ Decaid does the full read. When its latch count differs from the kept report,
 it replaces the report: the machine latches again in heat-up when an upload
 changes the block. A read waits for a profile upload that is in progress, and
 no read starts after the machine leaves espresso. Decaid clears the report
-only when the next shot starts.
+only when the next shot starts. A shot record gets the report that the machine
+has when the shot is saved. When the machine starts the next espresso before
+the shot is saved (the scale weight did not settle yet), the record gets the
+last report seen before that start.
 
 #### Hash Types
 
