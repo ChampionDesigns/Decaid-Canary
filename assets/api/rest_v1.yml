@@ -7269,7 +7269,16 @@ components:
             transition; otherwise the profile uploads with the flag off. The
             stored value does not change.
         native_shaping:
-          $ref: '#/components/schemas/NativeShaping'
+          allOf:
+            - $ref: '#/components/schemas/NativeShaping'
+          nullable: true
+          description: >
+            Optional. The native shaping block of a Bengle. On PUT
+            /api/v1/workflow, `null` removes the block. A partial profile
+            (no `steps`) that does not send the key keeps the block; a
+            complete profile (with `steps`) that does not send the key has no
+            block. Responses never contain `null`: a profile without a block
+            has no `native_shaping` key.
 
     NativeShaping:
       type: object

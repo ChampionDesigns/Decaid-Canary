@@ -23,6 +23,8 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
     _nativeShapingStateSubscription?.cancel();
     _lastStateByteSeen = null;
     _lastSeenLatchCount = null;
+    _nativeShapingLink++;
+    _nativeShapingUnanswered = false;
     _nativeShapingStateSubscription = _transport.state.listen(
       _onStateForNativeShaping,
       onError: (Object _) {},
@@ -63,7 +65,9 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
       await Future<void>.delayed(
         read == 0 ? timings.firstReadDelay : timings.retryDelay,
       );
-      if (!_isCurrentNativeShapingRead(epoch) || !_nativeShapingShotRunning) {
+      if (!_isCurrentNativeShapingRead(epoch) ||
+          !_nativeShapingShotRunning ||
+          _nativeShapingUnanswered) {
         return;
       }
       final report = await _queuedNativeShapingRead();
@@ -94,6 +98,7 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
   }
 
   Future<NativeShapingReport?> _readNativeShapeLatched() async {
+    if (_nativeShapingUnanswered) return null;
     final timeout = nativeShapingReadTimings.requestTimeout;
     try {
       for (var pass = 0; pass < _nativeShapeMaxPasses; pass++) {
@@ -150,6 +155,7 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
   }
 
   Future<void> _readNativeShapingBaseline(Duration timeout) async {
+    if (_nativeShapingUnanswered) return;
     try {
       final head = await _readNativeShapeHalf(
         0,
@@ -162,13 +168,20 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
   }
 
   Future<List<int>> _readNativeShapeHalf(int offset, Duration timeout) async {
-    final reply = await _mmrReadRaw(
-      MMRItem.nativeShapeLatched.address + offset,
-      length: _nativeShapeLenByte,
-      label: '${MMRItem.nativeShapeLatched.name}+$offset',
-      timeout: timeout,
-      retries: 0,
-    );
+    final link = _nativeShapingLink;
+    final List<int> reply;
+    try {
+      reply = await _mmrReadRaw(
+        MMRItem.nativeShapeLatched.address + offset,
+        length: _nativeShapeLenByte,
+        label: '${MMRItem.nativeShapeLatched.name}+$offset',
+        timeout: timeout,
+        retries: 0,
+      );
+    } on MmrTimeoutException {
+      _markNativeShapingUnanswered(link);
+      rethrow;
+    }
     if (reply.length < 4 + _nativeShapeHalfLength) {
       throw FormatException(
         'native shaping reply has ${reply.length} bytes, needs '
@@ -176,5 +189,14 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
       );
     }
     return reply.sublist(4, 4 + _nativeShapeHalfLength);
+  }
+
+  void _markNativeShapingUnanswered(int link) {
+    if (link != _nativeShapingLink || _nativeShapingUnanswered) return;
+    _nativeShapingUnanswered = true;
+    _log.info(
+      'Native shaping reg 66 did not answer; no more reg 66 reads until the '
+      'next connect',
+    );
   }
 }

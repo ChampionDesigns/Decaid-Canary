@@ -429,11 +429,18 @@ enters espresso, and once more later in the shot if the first read gives
 nothing. After a profile upload during the shot, the app reads it again, and a
 new latch count replaces the report, or gives the first one when the shot has
 no report yet (the machine latches again in heat-up).
+On a Bengle, the app reads the report once after each connect, 1 s after
+espresso entry, 5 s after that read ends when it gives no new report, and after each
+profile upload. Each read waits 1 s for a reply. When a read gets no reply in
+that time (firmware without the report), the app logs that reg 66 did not
+answer and makes no more reg 66 reads until the next connect. A short reply, an
+error or a latch count that changed on each pass does not stop the reads.
 The app takes the report when it saves the shot. A shot can settle (the scale
 weight comes to rest) after the machine starts the next espresso. Then the
 record keeps the last report that the app saw before that start. The key is
 absent when the machine gave no report: on a DE1; when the read failed (an error, a timeout, a
-short reply, or a latch count that changed on each of three passes); when the
+short reply, or a latch count that changed on each of three passes); after a
+read with no reply stopped the reads until the next connect; when the
 latch count equals the count read before the shot (the machine did not latch
 for this shot). The app clears the report only when the next shot starts, so a
 profile upload or a raw profile write after the shot does not remove it from
