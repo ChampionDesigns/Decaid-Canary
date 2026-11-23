@@ -590,15 +590,50 @@ void main() {
       expect(NativeShapingReport.tryFromJson(null), isNull);
       expect(NativeShapingReport.tryFromJson(true), isNull);
       expect(NativeShapingReport.tryFromJson({'sourceCode': 'x'}), isNull);
+    });
+  });
+
+  group('NativeShapingReport.fromJson', () {
+    Map<String, dynamic> json({int source = 1, Object? settings}) => {
+      'sourceCode': source,
+      'refusalCode': 0,
+      'latchCount': 4,
+      'settingsRounded': true,
+      'settings': settings ?? _example(),
+    };
+
+    test('gives no settings for source 3, as fromBytes does', () {
+      final report = NativeShapingReport.fromJson(json(source: 3));
+
+      expect(report.source, NativeShapingSource.inactive);
+      expect(report.settings, isNull);
       expect(
-        NativeShapingReport.tryFromJson({
-          'sourceCode': 1,
-          'refusalCode': 0,
-          'latchCount': 1,
-          'settings': {'flow_tau': 9},
-        }),
-        isNull,
+        report,
+        NativeShapingReport.fromBytes(_report(source: 3, latch: 4, flags: 1)),
       );
     });
+
+    test(
+      'keeps the report with no settings when the settings do not parse',
+      () {
+        for (final settings in <Object>[
+          {'flow_tau': 9},
+          {'pump_curve': 'x'},
+          {'flow_mode': 7},
+        ]) {
+          final report = NativeShapingReport.fromJson(json(settings: settings));
+
+          expect(report.sourceCode, 1, reason: '$settings');
+          expect(report.refusalCode, 0);
+          expect(report.latchCount, 4);
+          expect(report.settingsRounded, isTrue);
+          expect(report.settings, isNull);
+          expect(
+            NativeShapingReport.tryFromJson(json(settings: settings)),
+            report,
+          );
+        }
+      },
+    );
   });
 }

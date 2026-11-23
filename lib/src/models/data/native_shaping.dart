@@ -429,16 +429,30 @@ class NativeShapingReport extends Equatable {
   }
 
   factory NativeShapingReport.fromJson(Map<String, dynamic> json) {
+    final sourceCode = json['sourceCode'] as int;
     final settings = json['settings'];
     return NativeShapingReport(
-      sourceCode: json['sourceCode'] as int,
+      sourceCode: sourceCode,
       refusalCode: json['refusalCode'] as int,
       latchCount: json['latchCount'] as int,
       settingsRounded: json['settingsRounded'] == true,
-      settings: settings is Map
-          ? NativeShaping.fromJson(Map<String, dynamic>.from(settings))
-          : null,
+      settings:
+          NativeShapingSource.fromCode(sourceCode) ==
+                  NativeShapingSource.inactive ||
+              settings is! Map
+          ? null
+          : _jsonSettingsOrNull(Map<String, dynamic>.from(settings)),
     );
+  }
+
+  static NativeShaping? _jsonSettingsOrNull(Map<String, dynamic> settings) {
+    try {
+      return NativeShaping.fromJson(settings);
+    } on ArgumentError {
+      return null;
+    } on TypeError {
+      return null;
+    }
   }
 
   Map<String, dynamic> toJson() => {
