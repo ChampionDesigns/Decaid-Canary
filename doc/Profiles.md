@@ -154,6 +154,47 @@ of the shot tail frame only when all of these are true:
 The stored flag does not change when the steps block it. Only the byte that
 Decaid sends changes.
 
+#### Native Shaping
+
+`native_shaping` is an optional profile-level block with the native shaping
+settings of a Bengle. An absent or `null` block means no block, and `toJson`
+then writes no key. Every machine parses and stores the block.
+
+| Key | Type | Unit | Range | Step | Default |
+|---|---|---|---|---|---|
+| `version` | integer | - | 1 | - | 1 |
+| `pump_curve` | array of 0-8 `{pressure, flow}` | bar, mL/s | pressure 0.5-13.5, each at least 0.5 above the previous point; flow 0-20, never rises | 0.1, 0.1 | `[]` (off) |
+| `flow_tau` | number | s | 0-5 | 0.02 | 0 |
+| `flow_mode` | string | - | `both`, `rise`, `fall` | - | `both` |
+| `pressure_tau` | number | s | 0-5 | 0.02 | 0 |
+| `pressure_mode` | string | - | `both`, `rise`, `fall` | - | `both` |
+| `ramp_factor` | number | - | 0-4 | 0.02 | 1 |
+
+The curve starts at a fixed point of 0 bar and 20 mL/s, which is not in the
+array. A key that is absent inside the block takes its default.
+
+`NativeShaping.fromJson` rounds each number half up to its wire step first,
+then checks the rounded value. So the stored value is the value the machine
+runs, and two blocks that round to the same bytes are equal. A value that
+breaks a rule throws an `ArgumentError`, and the REST API returns `400`.
+`toJson` writes every key of the block.
+
+Example:
+
+```json
+"native_shaping": {
+  "version": 1,
+  "pump_curve": [
+    {"pressure": 1.0, "flow": 20.0}, {"pressure": 3.0, "flow": 12.0},
+    {"pressure": 6.0, "flow": 6.0}, {"pressure": 9.0, "flow": 5.0},
+    {"pressure": 12.0, "flow": 4.0}
+  ],
+  "flow_tau": 0.5, "flow_mode": "both",
+  "pressure_tau": 0.5, "pressure_mode": "both",
+  "ramp_factor": 1.0
+}
+```
+
 #### Hash Types
 
 Profiles use three SHA-256 hashes:
@@ -162,6 +203,7 @@ Profiles use three SHA-256 hashes:
 - Calculated from execution-relevant fields:
   - `beverage_type`, `steps`, `tank_temperature`, `target_weight`, `target_volume`, `target_volume_count_start`, `version`
   - `de1_emulation`, only when it is `true`, so a profile without the flag keeps the hash it had before the field existed
+  - `native_shaping`, only when present, so a profile without the block keeps its hash and a change to the block makes a new ID
 - Format: `profile:<first_20_chars_of_hash>`
 - Example: `profile:a3f2c8b4d1e6f9a21c7d`
 - Used as the profile record's unique ID

@@ -496,6 +496,11 @@ Profile updates use tri-state patch semantics: omitting `metadata` preserves it,
 `metadata: null` clears it, and an object replaces it. The profile itself is
 non-nullable; `profile: null` returns `400`.
 
+A profile may carry a `native_shaping` block (`doc/Profiles.md`, Native Shaping).
+Decaid rounds each number to its wire step, checks it, and returns the rounded
+block. A value that breaks a rule, for example `"flow_tau": 6`, returns `400`.
+The block is part of the profile ID only when present.
+
 #### Extended step types (capability-gated)
 
 A profile step may set `pump: "power"` — a constant-hydraulic-power step carrying a `power` field and
