@@ -94,8 +94,28 @@ void main() {
       expect(report.settings, isNull);
     });
 
+    test('a read that times out gives no report, keeps the link and stops '
+        'reg 66 reads until the next connect', () async {
+      final (bengle, transport) = await nsConnectBengle();
+      transport.image = null;
+      final log = nsCapture('DE1');
+
+      transport.enterState(nsEspresso);
+      await nsUntil(() => transport.reportRequests.isNotEmpty);
+      await nsSettle();
+
+      expect(bengle.lastNativeShapingReport, isNull);
+      expect(
+        log.where((l) => l.startsWith('Native shaping report read failed')),
+        hasLength(1),
+      );
+      expect(transport.reportRequests, hasLength(1));
+      transport.image = nsImage(latch: 1);
+      await bengle.setProfile(nsProfile());
+      expect(transport.reportRequests, hasLength(1));
+    });
+
     for (final (label, setUp) in [
-      ('times out', (NativeShapeMachineTransport t) => t.image = null),
       (
         'throws',
         (NativeShapeMachineTransport t) =>

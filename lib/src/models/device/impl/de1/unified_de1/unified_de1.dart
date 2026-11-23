@@ -430,6 +430,8 @@ class UnifiedDe1
   int? _lastSeenLatchCount;
   int _nativeShapingEpoch = 0;
   bool _nativeShapingShotRunning = false;
+  int _nativeShapingLink = 0;
+  bool _nativeShapingUnanswered = false;
   int? _lastStateByteSeen;
   StreamSubscription<ByteData>? _nativeShapingStateSubscription;
 

@@ -214,7 +214,11 @@ A shot records what the machine reported that it ran in
 machine's native shaping report (MMR `NativeShapeLatched`, 32 bytes) after the
 machine enters espresso. The read takes bytes 0-15 and 16-31, then bytes 0-15
 again; the latch count (byte 2) of the first and the last read must agree, or
-the read starts again (at most three passes). Decaid keeps a report only when
+the read starts again (at most three passes). Each read waits 1 s for a reply.
+When a read gets no reply in that time (firmware without the report), Decaid
+logs that reg 66 did not answer and makes no more reg 66 reads until the next
+connect: no shot read, no read after an upload. A short reply, an error or a
+latch count that changed on each pass does not stop the reads. Decaid keeps a report only when
 its latch count differs from the count of the last read before the shot. It
 forgets that count at each connect, then reads bytes 0-15 once after the
 connect sequence, and again after each profile upload. A shot that starts

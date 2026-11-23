@@ -63,7 +63,7 @@ Profile nsProfile({String title = 'shaped'}) => Profile.fromJson(
 ).copyWith(title: title, nativeShaping: NativeShaping.fromJson(nsExample()));
 
 Future<(Bengle, NativeShapeMachineTransport)> nsConnectBengle({
-  int? connectLatch,
+  int? connectLatch = 0,
 }) async {
   final transport = NativeShapeMachineTransport();
   addTearDown(transport.dispose);
@@ -79,7 +79,7 @@ Future<(Bengle, NativeShapeMachineTransport)> nsConnectBengle({
 Future<void> nsConnect(
   Bengle bengle,
   NativeShapeMachineTransport transport, {
-  int? connectLatch,
+  int? connectLatch = 0,
 }) async {
   transport.queuePaletteHydrationResponses();
   transport.queueOnConnectResponses(v13Model: 128);
