@@ -7276,7 +7276,10 @@ components:
         breaks a rule is refused with a `400` that names the field. The block
         is part of the profile hash only when present, so a profile without
         it keeps its ID and a change to the block makes a new profile ID.
-        Every machine stores the block.
+        Every machine stores the block. The profile upload sends the block to
+        frame slots 21-23 of a Bengle only: it is skipped on a DE1 and with
+        DE1 emulation on (tail byte 1). The upload never refuses a profile
+        because of the block.
       properties:
         version:
           type: integer

@@ -196,6 +196,14 @@ Example:
 }
 ```
 
+Upload: on a Bengle, Decaid writes the 21-byte block to frame slots 21, 22
+and 23, after the extension frames and before the tail. Each write is the slot
+index and 7 block bytes. The upload skips the block on a DE1, with DE1
+emulation on (the tail byte that `de1_emulation` sets is 1), and for a profile
+without the block. The upload never refuses a profile because of the block. A
+header write clears all slots, so a profile without the block runs the
+machine's own settings.
+
 A shot records what the machine reported that it ran in
 `workflow.machine.nativeShaping` (see `doc/Api.md`, Shots).
 
