@@ -120,6 +120,42 @@ void main() {
       expect(bengle.lastNativeShapingReport!.latchCount, 5);
     });
 
+    test('a no-reply timeout of the old link does not stop reg 66 reads on '
+        'the new link', () async {
+      const slowTimings = NativeShapingReadTimings(
+        firstReadDelay: Duration(milliseconds: 20),
+        retryDelay: Duration(milliseconds: 150),
+        requestTimeout: Duration(milliseconds: 400),
+      );
+      final transport = NativeShapeMachineTransport();
+      addTearDown(transport.dispose);
+      final bengle = Bengle(
+        transport: transport,
+        nativeShapingReadTimings: slowTimings,
+      );
+      addTearDown(bengle.onDisconnect);
+      final log = nsCapture('DE1');
+      transport.queuePaletteHydrationResponses();
+      transport.queueOnConnectResponses(v13Model: 128);
+      await bengle.onConnect();
+      await nsUntil(() => transport.reportRequests.isNotEmpty);
+
+      await bengle.onDisconnect();
+      transport.queuePaletteHydrationResponses();
+      transport.queueOnConnectResponses(v13Model: 128);
+      transport.image = nsImage(latch: 4);
+      await bengle.onConnect();
+      await Future<void>.delayed(
+        slowTimings.requestTimeout + const Duration(milliseconds: 200),
+      );
+      expect(log.where((l) => l.contains('reg 66 did not answer')), isEmpty);
+
+      transport.image = nsImage(latch: 5);
+      transport.enterState(nsEspresso);
+      await nsUntil(() => nativeShapingReportedBy(bengle) != null);
+      expect(bengle.lastNativeShapingReport!.latchCount, 5);
+    });
+
     test('a reconnect sends one connect read for 0x00803974', () async {
       final (bengle, transport) = await _connectSilentBengle();
       await bengle.onDisconnect();

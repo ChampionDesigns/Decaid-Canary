@@ -430,7 +430,7 @@ nothing. After a profile upload during the shot, the app reads it again, and a
 new latch count replaces the report, or gives the first one when the shot has
 no report yet (the machine latches again in heat-up).
 On a Bengle, the app reads the report once after each connect, 1 s after
-espresso entry, 5 s after that read ends when it gives nothing, and after each
+espresso entry, 5 s after that read ends when it gives no new report, and after each
 profile upload. Each read waits 1 s for a reply. When a read gets no reply in
 that time (firmware without the report), the app logs that reg 66 did not
 answer and makes no more reg 66 reads until the next connect. A short reply, an

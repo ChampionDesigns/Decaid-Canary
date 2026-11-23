@@ -218,8 +218,8 @@ the read starts again (at most three passes). Each read waits 1 s for a reply.
 When a read gets no reply in that time (firmware without the report), Decaid
 logs that reg 66 did not answer and makes no more reg 66 reads until the next
 connect: no shot read, no read after an upload. A short reply, an error or a
-latch count that changed on each pass does not stop the reads. Decaid keeps a report only when
-its latch count differs from the count of the last read before the shot. It
+latch count that changed on each pass does not stop the reads. Decaid keeps a
+report only when its latch count differs from the count of the last read before the shot. It
 forgets that count at each connect, then reads bytes 0-15 once after the
 connect sequence, and again after each profile upload. A shot that starts
 before the connect read ends has no count: Decaid keeps the first good read
