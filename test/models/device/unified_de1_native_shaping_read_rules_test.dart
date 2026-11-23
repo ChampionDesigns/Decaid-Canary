@@ -70,6 +70,27 @@ void main() {
       expect(report.settings, NativeShaping.fromBlockBytes(nsOtherBlock));
     });
 
+    test('a post-upload read that a new shot start overtakes gives the new '
+        'shot no report', () async {
+      final (bengle, transport) = await shotWithNoLatch();
+      final log = nsCapture('DE1');
+      transport.image = nsImage(latch: 5, block: nsOtherBlock);
+      final readsBefore = transport.reportReads;
+      transport.afterRead = (i) {
+        if (i == readsBefore) {
+          transport.enterState(nsIdle);
+          transport.enterState(nsEspresso);
+        }
+        if (i == readsBefore + 2) transport.readError = StateError('gone');
+      };
+
+      await bengle.setProfile(nsProfile(title: 'during the shot'));
+      await nsSettle();
+
+      expect(bengle.lastNativeShapingReport, isNull);
+      expect(log.where((l) => l.contains('re-latched')), isEmpty);
+    });
+
     test('the baseline count at the post-upload read gives no report when '
         'the shot reads saw only the baseline', () async {
       final (bengle, transport) = await shotWithNoLatch();

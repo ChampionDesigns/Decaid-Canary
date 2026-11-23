@@ -133,8 +133,13 @@ extension UnifiedDe1NativeShaping on UnifiedDe1 {
 
   Future<void> _readNativeShapingRelatch() async {
     final countBefore = _lastSeenLatchCount;
+    final epoch = _nativeShapingEpoch;
     final report = await _readNativeShapeLatched();
-    if (report == null || !_nativeShapingShotRunning) return;
+    if (report == null ||
+        !_nativeShapingShotRunning ||
+        !_isCurrentNativeShapingRead(epoch)) {
+      return;
+    }
     final known = _nativeShapingReport?.latchCount ?? countBefore;
     if (known == null || known == report.latchCount) return;
     _log.info(
