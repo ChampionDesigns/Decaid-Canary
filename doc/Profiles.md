@@ -185,7 +185,8 @@ stores 2.
 The key `ramp_factor` is retired. A request that sends it in a block, on PUT
 `/api/v1/workflow` or POST `/api/v1/profiles`, returns `400`. A stored profile
 or workflow whose block has it loads without the block, and Decaid logs one
-line. A shot or steam record keeps such a block as it was recorded: the profile
+line. A visibility or metadata edit of such a profile keeps its ID and its
+stored block; only a content edit writes the profile without it. A shot or steam record keeps such a block as it was recorded: the profile
 block and the report `settings` read with no decoded settings, but an edit of
 the record (for example its notes) writes them back unchanged. When a recorded
 workflow becomes the current workflow (repeat a shot), it loses the block.

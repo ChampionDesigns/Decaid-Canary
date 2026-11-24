@@ -102,14 +102,13 @@ class ProfileRecord extends Equatable {
     Map<String, dynamic>? metadata,
     bool clearMetadata = false,
   }) {
-    final newProfile = profile ?? this.profile;
-    final hashes = ProfileHash.calculateAll(newProfile);
+    final hashes = profile == null ? null : ProfileHash.calculateAll(profile);
 
     return ProfileRecord(
-      id: id ?? hashes.profileHash,
-      profile: newProfile,
-      metadataHash: metadataHash ?? hashes.metadataHash,
-      compoundHash: compoundHash ?? hashes.compoundHash,
+      id: id ?? hashes?.profileHash ?? this.id,
+      profile: profile ?? this.profile,
+      metadataHash: metadataHash ?? hashes?.metadataHash ?? this.metadataHash,
+      compoundHash: compoundHash ?? hashes?.compoundHash ?? this.compoundHash,
       parentId: parentId ?? this.parentId,
       visibility: visibility ?? this.visibility,
       isDefault: isDefault ?? this.isDefault,
