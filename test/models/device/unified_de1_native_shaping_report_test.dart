@@ -71,27 +71,43 @@ void main() {
       },
     );
 
-    test('a rounded CLI report that breaks rule 8 keeps the report with no '
-        'settings', () async {
+    List<int> roundedCliBlock({required int secondPressure}) => [
+      0x02, 0x02, 0x00, 0x00, 0x00, 0x06, 0xC8, //
+      secondPressure, 0x96, 0x00, 0x00, 0x00, 0x00, 0x00, //
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    Future<NativeShapingReport> readRoundedCli(List<int> block) async {
       final (bengle, transport) = await nsConnectBengle();
-      transport.image = nsImage(
-        source: 0,
-        latch: 3,
-        flags: 1,
-        block: const [
-          0x01, 0x02, 0x00, 0x00, 0x32, 0x06, 0xC8, //
-          0x0A, 0x96, 0x00, 0x00, 0x00, 0x00, 0x00, //
-          0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ],
-      );
+      transport.image = nsImage(source: 0, latch: 3, flags: 0x03, block: block);
 
       transport.enterState(nsEspresso);
       await nsUntil(() => nativeShapingReportedBy(bengle) != null);
+      return bengle.lastNativeShapingReport!;
+    }
 
-      final report = bengle.lastNativeShapingReport!;
+    test('a rounded CLI report that breaks rule 8 keeps the report with no '
+        'settings', () async {
+      final report = await readRoundedCli(
+        roundedCliBlock(secondPressure: 0x0A),
+      );
+
       expect(report.source, NativeShapingSource.cli);
       expect(report.settingsRounded, isTrue);
+      expect(report.acceptsBlockV2, isTrue);
       expect(report.settings, isNull);
+    });
+
+    test('control: the same rounded CLI report with only the pressure rise '
+        'corrected decodes with settings', () async {
+      final report = await readRoundedCli(
+        roundedCliBlock(secondPressure: 0x0B),
+      );
+
+      expect(report.source, NativeShapingSource.cli);
+      expect(report.settingsRounded, isTrue);
+      expect(report.settings?.pumpCurve.map((p) => p.pressure), [0.6, 1.1]);
     });
 
     test('a read that times out gives no report, keeps the link and stops '

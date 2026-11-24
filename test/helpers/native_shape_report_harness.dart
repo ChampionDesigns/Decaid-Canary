@@ -20,7 +20,7 @@ const nsTimings = NativeShapingReadTimings(
 );
 
 Map<String, dynamic> nsExample() => {
-  'version': 1,
+  'version': 2,
   'pump_curve': [
     {'pressure': 1.0, 'flow': 20.0},
     {'pressure': 3.0, 'flow': 12.0},
@@ -32,13 +32,16 @@ Map<String, dynamic> nsExample() => {
   'flow_mode': 'both',
   'pressure_tau': 0.5,
   'pressure_mode': 'both',
-  'ramp_factor': 1.0,
+  'pressure_filter_tau': 0.0,
+  'pressure_ramp_tau': 1.0,
+  'flow_ramp_tau': 0.0,
 };
 
 const nsExampleBlock = exampleNativeShapingBlock;
 
 const nsOtherBlock = [
-  0x01, 0x01, 0x32, 0x0A, 0x32, 0x14, 0x64, //
+  0x02, 0x01, 0x32, 0x0A, 0x32, 0x14, 0x64, //
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];

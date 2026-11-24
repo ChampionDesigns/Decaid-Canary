@@ -43,7 +43,9 @@ class SteamRecord {
       measurements: (json['measurements'] as List? ?? const [])
           .map((e) => SteamSnapshot.fromJson(e as Map<String, dynamic>))
           .toList(),
-      workflow: Workflow.fromJson(json['workflow'] as Map<String, dynamic>),
+      workflow: Workflow.fromRecordedJson(
+        json['workflow'] as Map<String, dynamic>,
+      ),
       annotations: json['annotations'] != null
           ? ShotAnnotations.fromJson(
               json['annotations'] as Map<String, dynamic>,

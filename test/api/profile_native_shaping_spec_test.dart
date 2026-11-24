@@ -34,4 +34,29 @@ void main() {
     expect(shaping, isNot(contains(r'$ref')));
     expect(shaping['description'], contains('`null` removes the block'));
   });
+
+  test('NativeShaping has the three new time keys at 0-5 s, default 0, '
+      'version 2 only, and no ramp_factor', () {
+    final schema = _schemas()['NativeShaping'] as YamlMap;
+    final properties = schema['properties'] as YamlMap;
+
+    for (final key in [
+      'pressure_filter_tau',
+      'pressure_ramp_tau',
+      'flow_ramp_tau',
+    ]) {
+      final property = properties[key] as YamlMap;
+      expect(property['type'], 'number', reason: key);
+      expect(property['minimum'], 0, reason: key);
+      expect(property['maximum'], 5, reason: key);
+      expect(property['default'], 0, reason: key);
+      expect(property['description'], contains('step 0.02'), reason: key);
+    }
+    expect(properties.containsKey('ramp_factor'), isFalse);
+    expect((properties['version'] as YamlMap)['enum'], [2]);
+    expect((schema['example'] as YamlMap)['version'], 2);
+    expect((schema['example'] as YamlMap).containsKey('ramp_factor'), isFalse);
+    expect(schema['description'], contains('frame slots 21-24'));
+    expect(schema['description'], contains('`ramp_factor` is refused'));
+  });
 }

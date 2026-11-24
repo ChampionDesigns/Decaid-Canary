@@ -43,41 +43,56 @@ class PumpCurvePoint extends Equatable {
 
 @immutable
 class NativeShaping extends Equatable {
-  static const supportedVersion = 1;
+  static const version = 2;
   static const maxPumpCurvePoints = 8;
-  static const blockLength = 21;
+  static const blockLength = 28;
+  static const retiredKey = 'ramp_factor';
 
   static const _halfStepTolerance = 1e-9;
   static const _tauDivisor = 50.0;
-  static const _rampDivisor = 50.0;
   static const _pointDivisor = 10.0;
   static const _maxTauByte = 250;
-  static const _maxRampByte = 200;
   static const _minPressureByte = 5;
   static const _maxPressureByte = 135;
   static const _minPressureRiseBytes = 5;
   static const _maxFlowByte = 200;
+  static const _pointsOffset = 5;
+  static const _pointsEnd = 21;
+  static const _pressureFilterOffset = 21;
+  static const _flowRampOffset = 22;
+  static const _reservedOffset = 23;
 
-  final int version;
   final List<PumpCurvePoint> pumpCurve;
   final double flowTau;
   final NativeShapingMode flowMode;
   final double pressureTau;
   final NativeShapingMode pressureMode;
-  final double rampFactor;
+  final double pressureFilterTau;
+  final double pressureRampTau;
+  final double flowRampTau;
 
   const NativeShaping._({
-    required this.version,
     required this.pumpCurve,
     required this.flowTau,
     required this.flowMode,
     required this.pressureTau,
     required this.pressureMode,
-    required this.rampFactor,
+    required this.pressureFilterTau,
+    required this.pressureRampTau,
+    required this.flowRampTau,
   });
 
+  static bool hasRetiredKey(Map<dynamic, dynamic> json) =>
+      json.containsKey(retiredKey);
+
   factory NativeShaping.fromJson(Map<String, dynamic> json) {
-    final version = _parseVersion(json['version']);
+    if (hasRetiredKey(json)) {
+      throw ArgumentError(
+        'native_shaping "$retiredKey" is not supported; use '
+        '"pressure_ramp_tau" and "flow_ramp_tau"',
+      );
+    }
+    _parseVersion(json['version']);
     final rawCurve = json['pump_curve'] ?? const [];
     if (rawCurve is! List) {
       throw ArgumentError('native_shaping "pump_curve" must be an array');
@@ -113,38 +128,31 @@ class NativeShaping extends Equatable {
       );
     }
     return _checked(
-      version: version,
       pressureBytes: pressureBytes,
       flowBytes: flowBytes,
-      flowTauByte: _wireByte(json['flow_tau'], 'flow_tau', _tauDivisor),
+      flowTauByte: _tauByte(json, 'flow_tau'),
       flowMode: NativeShapingMode.parse(json['flow_mode'], 'flow_mode'),
-      pressureTauByte: _wireByte(
-        json['pressure_tau'],
-        'pressure_tau',
-        _tauDivisor,
-      ),
+      pressureTauByte: _tauByte(json, 'pressure_tau'),
       pressureMode: NativeShapingMode.parse(
         json['pressure_mode'],
         'pressure_mode',
       ),
-      rampByte: _wireByte(
-        json['ramp_factor'],
-        'ramp_factor',
-        _rampDivisor,
-        absent: 1,
-      ),
+      pressureFilterTauByte: _tauByte(json, 'pressure_filter_tau'),
+      pressureRampTauByte: _tauByte(json, 'pressure_ramp_tau'),
+      flowRampTauByte: _tauByte(json, 'flow_ramp_tau'),
     );
   }
 
   factory NativeShaping.fromBlockBytes(List<int> bytes) {
+    if (bytes.isEmpty || bytes[0] != version) {
+      throw ArgumentError(
+        'native_shaping block version '
+        '${bytes.isEmpty ? 'none' : bytes[0]} is not supported',
+      );
+    }
     if (bytes.length != blockLength) {
       throw ArgumentError(
         'native_shaping block must be $blockLength bytes, got ${bytes.length}',
-      );
-    }
-    if (bytes[0] != supportedVersion) {
-      throw ArgumentError(
-        'native_shaping block version ${bytes[0]} is not supported',
       );
     }
     final flowMode = NativeShapingMode.fromCode(bytes[1] >> 6 & 0x3);
@@ -158,70 +166,116 @@ class NativeShaping extends Equatable {
         'native_shaping block must have 0-$maxPumpCurvePoints points',
       );
     }
-    final pointBytes = bytes.sublist(5);
-    if (pointBytes.skip(count * 2).any((byte) => byte != 0)) {
+    final flowTauByte = bytes[2];
+    final pressureTauByte = bytes[3];
+    final pressureFilterTauByte = bytes[_pressureFilterOffset];
+    final pressureRampTauByte = bytes[4];
+    final flowRampTauByte = bytes[_flowRampOffset];
+    _checkTimes(
+      flowTauByte: flowTauByte,
+      pressureTauByte: pressureTauByte,
+      pressureFilterTauByte: pressureFilterTauByte,
+      pressureRampTauByte: pressureRampTauByte,
+      flowRampTauByte: flowRampTauByte,
+    );
+    final pointBytes = bytes.sublist(_pointsOffset, _pointsEnd);
+    if (pointBytes.skip(count * 2).any((byte) => byte != 0) ||
+        bytes.skip(_reservedOffset).any((byte) => byte != 0)) {
       throw ArgumentError(
         'native_shaping block has unused bytes that are not 0',
       );
     }
     return _checked(
-      version: supportedVersion,
       pressureBytes: [for (var i = 0; i < count; i++) pointBytes[i * 2]],
       flowBytes: [for (var i = 0; i < count; i++) pointBytes[i * 2 + 1]],
-      flowTauByte: bytes[2],
+      flowTauByte: flowTauByte,
       flowMode: flowMode,
-      pressureTauByte: bytes[3],
+      pressureTauByte: pressureTauByte,
       pressureMode: pressureMode,
-      rampByte: bytes[4],
+      pressureFilterTauByte: pressureFilterTauByte,
+      pressureRampTauByte: pressureRampTauByte,
+      flowRampTauByte: flowRampTauByte,
     );
   }
 
+  static void _checkTimes({
+    required int flowTauByte,
+    required int pressureTauByte,
+    required int pressureFilterTauByte,
+    required int pressureRampTauByte,
+    required int flowRampTauByte,
+  }) {
+    _checkRange(flowTauByte, 0, _maxTauByte, 'flow_tau', '0-5 s');
+    _checkRange(pressureTauByte, 0, _maxTauByte, 'pressure_tau', '0-5 s');
+    _checkRange(
+      pressureFilterTauByte,
+      0,
+      _maxTauByte,
+      'pressure_filter_tau',
+      '0-5 s',
+    );
+    _checkRange(
+      pressureRampTauByte,
+      0,
+      _maxTauByte,
+      'pressure_ramp_tau',
+      '0-5 s',
+    );
+    _checkRange(flowRampTauByte, 0, _maxTauByte, 'flow_ramp_tau', '0-5 s');
+  }
+
+  static void _checkPoint(List<int> pressureBytes, List<int> flowBytes, int i) {
+    _checkRange(
+      pressureBytes[i],
+      _minPressureByte,
+      _maxPressureByte,
+      'pump_curve[$i].pressure',
+      '0.5-13.5 bar',
+    );
+    if (i > 0 &&
+        pressureBytes[i] < pressureBytes[i - 1] + _minPressureRiseBytes) {
+      throw ArgumentError(
+        'native_shaping "pump_curve[$i].pressure" must be at least 0.5 bar '
+        'above the previous point after rounding to 0.1',
+      );
+    }
+    _checkRange(
+      flowBytes[i],
+      0,
+      _maxFlowByte,
+      'pump_curve[$i].flow',
+      '0-20 mL/s',
+    );
+    if (i > 0 && flowBytes[i] > flowBytes[i - 1]) {
+      throw ArgumentError(
+        'native_shaping "pump_curve[$i].flow" must not rise above the '
+        'previous point after rounding to 0.1',
+      );
+    }
+  }
+
   static NativeShaping _checked({
-    required int version,
     required List<int> pressureBytes,
     required List<int> flowBytes,
     required int flowTauByte,
     required NativeShapingMode flowMode,
     required int pressureTauByte,
     required NativeShapingMode pressureMode,
-    required int rampByte,
+    required int pressureFilterTauByte,
+    required int pressureRampTauByte,
+    required int flowRampTauByte,
   }) {
-    _checkRange(flowTauByte, 0, _maxTauByte, 'flow_tau', '0-5 s');
-    _checkRange(pressureTauByte, 0, _maxTauByte, 'pressure_tau', '0-5 s');
-    _checkRange(rampByte, 0, _maxRampByte, 'ramp_factor', '0-4');
+    _checkTimes(
+      flowTauByte: flowTauByte,
+      pressureTauByte: pressureTauByte,
+      pressureFilterTauByte: pressureFilterTauByte,
+      pressureRampTauByte: pressureRampTauByte,
+      flowRampTauByte: flowRampTauByte,
+    );
     for (var i = 0; i < pressureBytes.length; i++) {
-      _checkRange(
-        pressureBytes[i],
-        _minPressureByte,
-        _maxPressureByte,
-        'pump_curve[$i].pressure',
-        '0.5-13.5 bar',
-      );
-      if (i > 0 &&
-          pressureBytes[i] < pressureBytes[i - 1] + _minPressureRiseBytes) {
-        throw ArgumentError(
-          'native_shaping "pump_curve[$i].pressure" must be at least 0.5 bar '
-          'above the previous point after rounding to 0.1',
-        );
-      }
-    }
-    for (var i = 0; i < flowBytes.length; i++) {
-      _checkRange(
-        flowBytes[i],
-        0,
-        _maxFlowByte,
-        'pump_curve[$i].flow',
-        '0-20 mL/s',
-      );
-      if (i > 0 && flowBytes[i] > flowBytes[i - 1]) {
-        throw ArgumentError(
-          'native_shaping "pump_curve[$i].flow" must not rise above the '
-          'previous point after rounding to 0.1',
-        );
-      }
+      _checkPoint(pressureBytes, flowBytes, i);
     }
     return NativeShaping._(
-      version: version,
       pumpCurve: List.unmodifiable([
         for (var i = 0; i < pressureBytes.length; i++)
           PumpCurvePoint._(
@@ -233,26 +287,28 @@ class NativeShaping extends Equatable {
       flowMode: flowMode,
       pressureTau: pressureTauByte / _tauDivisor,
       pressureMode: pressureMode,
-      rampFactor: rampByte / _rampDivisor,
+      pressureFilterTau: pressureFilterTauByte / _tauDivisor,
+      pressureRampTau: pressureRampTauByte / _tauDivisor,
+      flowRampTau: flowRampTauByte / _tauDivisor,
     );
   }
 
-  static int _parseVersion(Object? raw) {
-    if (raw == null) return supportedVersion;
-    if (raw is num && raw == supportedVersion) return supportedVersion;
-    throw ArgumentError(
-      'native_shaping "version" must be $supportedVersion, got $raw',
-    );
+  static void _parseVersion(Object? raw) {
+    if (raw == null) return;
+    if (raw is num && raw == version) return;
+    throw ArgumentError('native_shaping "version" must be $version, got $raw');
   }
+
+  static int _tauByte(Map<String, dynamic> json, String field) =>
+      _wireByte(json[field], field, _tauDivisor);
 
   static int _wireByte(
     Object? raw,
     String field,
     double divisor, {
     bool required = false,
-    double absent = 0,
   }) {
-    if (raw == null && !required) return (absent * divisor).round();
+    if (raw == null && !required) return 0;
     final number = raw is num
         ? raw.toDouble()
         : raw is String
@@ -288,17 +344,23 @@ class NativeShaping extends Equatable {
     }
   }
 
+  static int _tauToByte(double seconds) => (seconds * _tauDivisor).round();
+
   List<int> toBlockBytes() {
     final bytes = List<int>.filled(blockLength, 0);
     bytes[0] = version;
     bytes[1] = flowMode.code << 6 | pressureMode.code << 4 | pumpCurve.length;
-    bytes[2] = (flowTau * _tauDivisor).round();
-    bytes[3] = (pressureTau * _tauDivisor).round();
-    bytes[4] = (rampFactor * _rampDivisor).round();
+    bytes[2] = _tauToByte(flowTau);
+    bytes[3] = _tauToByte(pressureTau);
+    bytes[4] = _tauToByte(pressureRampTau);
     for (final (index, point) in pumpCurve.indexed) {
-      bytes[5 + index * 2] = (point.pressure * _pointDivisor).round();
-      bytes[6 + index * 2] = (point.flow * _pointDivisor).round();
+      bytes[_pointsOffset + index * 2] = (point.pressure * _pointDivisor)
+          .round();
+      bytes[_pointsOffset + 1 + index * 2] = (point.flow * _pointDivisor)
+          .round();
     }
+    bytes[_pressureFilterOffset] = _tauToByte(pressureFilterTau);
+    bytes[_flowRampOffset] = _tauToByte(flowRampTau);
     return bytes;
   }
 
@@ -309,18 +371,21 @@ class NativeShaping extends Equatable {
     'flow_mode': flowMode.name,
     'pressure_tau': pressureTau,
     'pressure_mode': pressureMode.name,
-    'ramp_factor': rampFactor,
+    'pressure_filter_tau': pressureFilterTau,
+    'pressure_ramp_tau': pressureRampTau,
+    'flow_ramp_tau': flowRampTau,
   };
 
   @override
   List<Object?> get props => [
-    version,
     pumpCurve,
     flowTau,
     flowMode,
     pressureTau,
     pressureMode,
-    rampFactor,
+    pressureFilterTau,
+    pressureRampTau,
+    flowRampTau,
   ];
 }
 
@@ -366,19 +431,24 @@ class NativeShapingReport extends Equatable {
   static const length = 32;
   static const _settingsOffset = 4;
   static const _roundedFlag = 0x01;
+  static const _acceptsBlockV2Flag = 0x02;
 
   final int sourceCode;
   final int refusalCode;
   final int latchCount;
   final bool settingsRounded;
+  final bool acceptsBlockV2;
   final NativeShaping? settings;
+  final Map<String, dynamic>? retiredSettingsJson;
 
   const NativeShapingReport({
     required this.sourceCode,
     required this.refusalCode,
     required this.latchCount,
     required this.settingsRounded,
+    this.acceptsBlockV2 = false,
     required this.settings,
+    this.retiredSettingsJson,
   });
 
   NativeShapingSource get source => NativeShapingSource.fromCode(sourceCode);
@@ -397,21 +467,17 @@ class NativeShapingReport extends Equatable {
       refusalCode: bytes[1],
       latchCount: bytes[2],
       settingsRounded: bytes[3] & _roundedFlag != 0,
+      acceptsBlockV2: bytes[3] & _acceptsBlockV2Flag != 0,
       settings:
           NativeShapingSource.fromCode(bytes[0]) == NativeShapingSource.inactive
           ? null
-          : _settingsOrNull(
-              bytes.sublist(
-                _settingsOffset,
-                _settingsOffset + NativeShaping.blockLength,
-              ),
-            ),
+          : _settingsOrNull(bytes.sublist(_settingsOffset)),
     );
   }
 
-  static NativeShaping? _settingsOrNull(List<int> block) {
+  static NativeShaping? _settingsOrNull(List<int> registerBlock) {
     try {
-      return NativeShaping.fromBlockBytes(block);
+      return NativeShaping.fromBlockBytes(registerBlock);
     } on ArgumentError {
       return null;
     }
@@ -431,17 +497,23 @@ class NativeShapingReport extends Equatable {
   factory NativeShapingReport.fromJson(Map<String, dynamic> json) {
     final sourceCode = json['sourceCode'] as int;
     final settings = json['settings'];
+    final readSettings =
+        NativeShapingSource.fromCode(sourceCode) !=
+            NativeShapingSource.inactive &&
+        settings is Map;
+    final decoded = readSettings
+        ? _jsonSettingsOrNull(Map<String, dynamic>.from(settings))
+        : null;
     return NativeShapingReport(
       sourceCode: sourceCode,
       refusalCode: json['refusalCode'] as int,
       latchCount: json['latchCount'] as int,
       settingsRounded: json['settingsRounded'] == true,
-      settings:
-          NativeShapingSource.fromCode(sourceCode) ==
-                  NativeShapingSource.inactive ||
-              settings is! Map
-          ? null
-          : _jsonSettingsOrNull(Map<String, dynamic>.from(settings)),
+      acceptsBlockV2: json['acceptsBlockV2'] == true,
+      settings: decoded,
+      retiredSettingsJson: readSettings && decoded == null
+          ? Map<String, dynamic>.from(settings)
+          : null,
     );
   }
 
@@ -462,7 +534,11 @@ class NativeShapingReport extends Equatable {
     'refusalCode': refusalCode,
     'latchCount': latchCount,
     'settingsRounded': settingsRounded,
-    if (settings != null) 'settings': settings!.toJson(),
+    'acceptsBlockV2': acceptsBlockV2,
+    if (settings != null)
+      'settings': settings!.toJson()
+    else if (retiredSettingsJson != null)
+      'settings': retiredSettingsJson,
   };
 
   @override
@@ -471,6 +547,8 @@ class NativeShapingReport extends Equatable {
     refusalCode,
     latchCount,
     settingsRounded,
+    acceptsBlockV2,
     settings,
+    retiredSettingsJson,
   ];
 }

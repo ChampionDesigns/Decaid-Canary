@@ -17,7 +17,7 @@ const String _contractPath = 'assets/api/bengle_hw_v1.yml';
 
 /// The contract_version this registration table was written against.
 /// Bump deliberately, together with the enum updates the new contract needs.
-const int _expectedContractVersion = 5;
+const int _expectedContractVersion = 6;
 
 const int _expectedRegisterCount = 62;
 

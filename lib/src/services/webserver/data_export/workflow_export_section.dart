@@ -24,7 +24,7 @@ class WorkflowExportSection implements DataExportSection {
   ) async {
     try {
       final data = await input.readWhole();
-      final workflow = Workflow.fromJson(data as Map<String, dynamic>);
+      final workflow = Workflow.fromStoredJson(data as Map<String, dynamic>);
       _controller.setWorkflow(workflow);
       return const SectionImportResult(imported: 1);
     } catch (e) {

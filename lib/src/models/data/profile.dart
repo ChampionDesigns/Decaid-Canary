@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:equatable/equatable.dart';
+import 'package:logging/logging.dart';
 
 import 'native_shaping.dart';
 import 'utils.dart';
@@ -18,6 +19,7 @@ class Profile extends Equatable {
   final double tankTemperature;
   final bool de1Emulation;
   final NativeShaping? nativeShaping;
+  final Map<String, dynamic>? retiredNativeShapingJson;
 
   const Profile({
     required this.version,
@@ -32,6 +34,7 @@ class Profile extends Equatable {
     required this.tankTemperature,
     this.de1Emulation = false,
     this.nativeShaping,
+    this.retiredNativeShapingJson,
   });
 
   @override
@@ -48,19 +51,24 @@ class Profile extends Equatable {
     tankTemperature,
     de1Emulation,
     nativeShaping,
+    retiredNativeShapingJson,
   ];
 
   static const unknownTitle = 'Unknown profile';
 
   factory Profile.fromJson(Map<String, dynamic> json) =>
-      Profile._parse(json, requireExecutable: true);
+      Profile._parse(json, requireExecutable: true, mode: _BlockMode.strict);
+
+  factory Profile.fromStoredJson(Map<String, dynamic> json) =>
+      Profile._parse(json, requireExecutable: true, mode: _BlockMode.drop);
 
   factory Profile.fromRecordedJson(Map<String, dynamic> json) =>
-      Profile._parse(json, requireExecutable: false);
+      Profile._parse(json, requireExecutable: false, mode: _BlockMode.keep);
 
   static Profile _parse(
     Map<String, dynamic> json, {
     required bool requireExecutable,
+    required _BlockMode mode,
   }) {
     final title = parseOptionalString(json['title']);
     final rawSteps = json['steps'];
@@ -78,6 +86,9 @@ class Profile extends Equatable {
         throw ArgumentError('Profile must have "target_volume_count_start"');
       }
     }
+    final rawBlock = json['native_shaping'];
+    final retired = mode != _BlockMode.strict && _isRetiredBlock(rawBlock);
+    if (retired && mode == _BlockMode.drop) _logDroppedBlock(title);
     return Profile(
       version: parseOptionalString(json['version']),
       title: title == null || title.isEmpty ? unknownTitle : title,
@@ -99,7 +110,10 @@ class Profile extends Equatable {
       ),
       tankTemperature: _requireFiniteProfileNumber(json, 'tank_temperature'),
       de1Emulation: json['de1_emulation'] == true,
-      nativeShaping: _parseNativeShaping(json['native_shaping']),
+      nativeShaping: retired ? null : _parseNativeShaping(rawBlock),
+      retiredNativeShapingJson: retired && mode == _BlockMode.keep
+          ? Map<String, dynamic>.from(rawBlock as Map)
+          : null,
     );
   }
 
@@ -116,7 +130,10 @@ class Profile extends Equatable {
       'target_volume_count_start': targetVolumeCountStart,
       'tank_temperature': tankTemperature,
       if (de1Emulation) 'de1_emulation': true,
-      if (nativeShaping != null) 'native_shaping': nativeShaping!.toJson(),
+      if (nativeShaping != null)
+        'native_shaping': nativeShaping!.toJson()
+      else if (retiredNativeShapingJson != null)
+        'native_shaping': retiredNativeShapingJson,
     };
   }
 
@@ -151,6 +168,9 @@ class Profile extends Equatable {
       nativeShaping: clearNativeShaping
           ? null
           : nativeShaping ?? this.nativeShaping,
+      retiredNativeShapingJson: clearNativeShaping || nativeShaping != null
+          ? null
+          : retiredNativeShapingJson,
     );
   }
 
@@ -192,6 +212,21 @@ enum TemperatureSensor { coffee, water }
 enum ExitType { pressure, flow, power }
 
 enum ExitCondition { over, under }
+
+final _profileLog = Logger('Profile');
+
+enum _BlockMode { strict, drop, keep }
+
+bool _isRetiredBlock(Object? raw) =>
+    raw is Map && NativeShaping.hasRetiredKey(raw);
+
+void _logDroppedBlock(String? title) {
+  _profileLog.warning(
+    'Profile "${title ?? Profile.unknownTitle}": the stored native_shaping '
+    'block has "${NativeShaping.retiredKey}", a retired format; the profile '
+    'loads without the block',
+  );
+}
 
 NativeShaping? _parseNativeShaping(Object? raw) {
   if (raw == null) return null;

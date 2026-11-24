@@ -7,7 +7,7 @@ class ProfileMapper {
   static domain.ProfileRecord fromRow(db.ProfileRecord row) {
     return domain.ProfileRecord(
       id: row.id,
-      profile: Profile.fromJson(row.profileJson),
+      profile: Profile.fromStoredJson(row.profileJson),
       metadataHash: row.metadataHash,
       compoundHash: row.compoundHash,
       parentId: row.parentId,

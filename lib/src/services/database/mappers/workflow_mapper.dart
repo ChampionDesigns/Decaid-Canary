@@ -4,7 +4,7 @@ import 'package:reaprime/src/services/database/database.dart' as db;
 
 class WorkflowMapper {
   static domain.Workflow fromRow(db.Workflow row) {
-    return domain.Workflow.fromJson(row.workflowJson);
+    return domain.Workflow.fromStoredJson(row.workflowJson);
   }
 
   static db.WorkflowsCompanion toCompanion(
