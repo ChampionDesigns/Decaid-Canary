@@ -224,6 +224,36 @@ class NativeShaping extends Equatable {
     _checkRange(flowRampTauByte, 0, _maxTauByte, 'flow_ramp_tau', '0-5 s');
   }
 
+  static void _checkPoint(List<int> pressureBytes, List<int> flowBytes, int i) {
+    _checkRange(
+      pressureBytes[i],
+      _minPressureByte,
+      _maxPressureByte,
+      'pump_curve[$i].pressure',
+      '0.5-13.5 bar',
+    );
+    if (i > 0 &&
+        pressureBytes[i] < pressureBytes[i - 1] + _minPressureRiseBytes) {
+      throw ArgumentError(
+        'native_shaping "pump_curve[$i].pressure" must be at least 0.5 bar '
+        'above the previous point after rounding to 0.1',
+      );
+    }
+    _checkRange(
+      flowBytes[i],
+      0,
+      _maxFlowByte,
+      'pump_curve[$i].flow',
+      '0-20 mL/s',
+    );
+    if (i > 0 && flowBytes[i] > flowBytes[i - 1]) {
+      throw ArgumentError(
+        'native_shaping "pump_curve[$i].flow" must not rise above the '
+        'previous point after rounding to 0.1',
+      );
+    }
+  }
+
   static NativeShaping _checked({
     required List<int> pressureBytes,
     required List<int> flowBytes,
@@ -243,35 +273,7 @@ class NativeShaping extends Equatable {
       flowRampTauByte: flowRampTauByte,
     );
     for (var i = 0; i < pressureBytes.length; i++) {
-      _checkRange(
-        pressureBytes[i],
-        _minPressureByte,
-        _maxPressureByte,
-        'pump_curve[$i].pressure',
-        '0.5-13.5 bar',
-      );
-      if (i > 0 &&
-          pressureBytes[i] < pressureBytes[i - 1] + _minPressureRiseBytes) {
-        throw ArgumentError(
-          'native_shaping "pump_curve[$i].pressure" must be at least 0.5 bar '
-          'above the previous point after rounding to 0.1',
-        );
-      }
-    }
-    for (var i = 0; i < flowBytes.length; i++) {
-      _checkRange(
-        flowBytes[i],
-        0,
-        _maxFlowByte,
-        'pump_curve[$i].flow',
-        '0-20 mL/s',
-      );
-      if (i > 0 && flowBytes[i] > flowBytes[i - 1]) {
-        throw ArgumentError(
-          'native_shaping "pump_curve[$i].flow" must not rise above the '
-          'previous point after rounding to 0.1',
-        );
-      }
+      _checkPoint(pressureBytes, flowBytes, i);
     }
     return NativeShaping._(
       pumpCurve: List.unmodifiable([

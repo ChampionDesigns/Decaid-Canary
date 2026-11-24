@@ -75,11 +75,11 @@ Matcher _refuses(String text) => throwsA(
 const _tauRange = 'pressure_filter_tau';
 const _unusedBytes = 'unused bytes';
 
-List<int> _report(List<int> block, {int source = 1}) => [
+List<int> _report(List<int> block, {int source = 1, int flags = 0}) => [
   source,
   0,
   7,
-  0,
+  flags,
   ...block,
   ...List.filled(28 - block.length, 0),
 ];
@@ -357,6 +357,48 @@ void main() {
           jsonDecode(jsonEncode(fromBytes.toJson())) as Map<String, dynamic>;
 
       expect(NativeShapingReport.fromJson(json), fromBytes);
+    });
+  });
+
+  group('pump curve checks in the firmware order', () {
+    const mixed = [
+      {'pressure': 1.0, 'flow': 20.1},
+      {'pressure': 0.4, 'flow': 10.0},
+    ];
+    final mixedBlock = [
+      ..._hex('02 02 19 19 19 0A C9'),
+      ..._hex('04 64 00 00 00 00 00'),
+      ..._hex('00 00 00 00 00 00 00'),
+      ..._hex('00 19 00 00 00 00 00'),
+    ];
+
+    test('JSON: a flow range fault at point 0 wins over a pressure range '
+        'fault at point 1', () {
+      expect(
+        () => NativeShaping.fromJson({..._settings(), 'pump_curve': mixed}),
+        _refuses('pump_curve[0].flow'),
+      );
+    });
+
+    test('block: the same mixed curve is refused for the flow at point 0', () {
+      expect(
+        () => NativeShaping.fromBlockBytes(mixedBlock),
+        _refuses('pump_curve[0].flow'),
+      );
+    });
+
+    test('a pressure rise fault at point 1 wins over a flow range fault at '
+        'point 1', () {
+      expect(
+        () => NativeShaping.fromJson({
+          ..._settings(),
+          'pump_curve': const [
+            {'pressure': 6.0, 'flow': 10.0},
+            {'pressure': 6.2, 'flow': 20.5},
+          ],
+        }),
+        _refuses('pump_curve[1].pressure'),
+      );
     });
   });
 }
