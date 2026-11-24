@@ -267,6 +267,33 @@ void main() {
       );
     });
 
+    test('the time constants are checked in the order b2, b3, b21', () {
+      final all = List.of(_g2)
+        ..[2] = 0xFB
+        ..[3] = 0xFB
+        ..[21] = 0xFB;
+      final pressureAndFilter = List.of(_g2)
+        ..[3] = 0xFB
+        ..[21] = 0xFB;
+
+      expect(() => NativeShaping.fromBlockBytes(all), _refuses('flow_tau'));
+      expect(
+        () => NativeShaping.fromBlockBytes(pressureAndFilter),
+        _refuses('pressure_tau'),
+      );
+    });
+
+    test('the ramps are checked in the order b4, b22', () {
+      final both = List.of(_g2)
+        ..[4] = 0xFB
+        ..[22] = 0xFB;
+
+      expect(
+        () => NativeShaping.fromBlockBytes(both),
+        _refuses('pressure_ramp_tau'),
+      );
+    });
+
     test('a block that is not 28 bytes is refused', () {
       expect(
         () => NativeShaping.fromBlockBytes(_g2.sublist(0, 21)),
