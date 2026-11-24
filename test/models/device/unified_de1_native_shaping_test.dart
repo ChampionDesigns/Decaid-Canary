@@ -11,14 +11,14 @@ import 'package:reaprime/src/models/errors.dart';
 import '../../helpers/fake_ble_transport.dart';
 
 const _bengleModel = 128;
-const _blockSlots = [21, 22, 23];
+const _blockSlots = [21, 22, 23, 24];
 
 Map<String, dynamic> _json(String name) =>
     jsonDecode(File('assets/defaultProfiles/$name').readAsStringSync())
         as Map<String, dynamic>;
 
 Map<String, dynamic> _example() => {
-  'version': 1,
+  'version': 2,
   'pump_curve': [
     {'pressure': 1.0, 'flow': 20.0},
     {'pressure': 3.0, 'flow': 12.0},
@@ -30,7 +30,7 @@ Map<String, dynamic> _example() => {
   'flow_mode': 'both',
   'pressure_tau': 0.5,
   'pressure_mode': 'both',
-  'ramp_factor': 1.0,
+  'pressure_ramp_tau': 1.0,
 };
 
 Profile _profile({
@@ -115,7 +115,7 @@ List<FakeBleWrite> _profileWrites(FakeBleTransport transport) => transport
 void main() {
   group('step limit', () {
     test('a Bengle uploads a 20-step profile with the tail at 20 and the '
-        'block at 21-23', () async {
+        'block at 21-24', () async {
       final (bengle, transport) = await _connectBengle();
       final profile = _withSteps(_profile(), 20);
 
@@ -131,6 +131,7 @@ void main() {
         'block21',
         'block22',
         'block23',
+        'block24',
         'tail',
         'tank',
       ]);
@@ -140,6 +141,7 @@ void main() {
         21,
         22,
         23,
+        24,
         20,
       ]);
     });
@@ -189,20 +191,18 @@ void main() {
   });
 
   group('native shaping block upload', () {
-    test(
-      'a Bengle writes Ben\'s first values to slots 21, 22 and 23',
-      () async {
-        final (bengle, transport) = await _connectBengle();
+    test('a Bengle writes vector G4 to slots 21, 22, 23 and 24', () async {
+      final (bengle, transport) = await _connectBengle();
 
-        await bengle.setProfile(_profile());
+      await bengle.setProfile(_profile());
 
-        expect(_blockWrites(transport), {
-          21: _hex('01 05 19 19 32 0A C8'),
-          22: _hex('1E 78 3C 3C 5A 32 78'),
-          23: _hex('28 00 00 00 00 00 00'),
-        });
-      },
-    );
+      expect(_blockWrites(transport), {
+        21: _hex('02 05 19 19 32 0A C8'),
+        22: _hex('1E 78 3C 3C 5A 32 78'),
+        23: _hex('28 00 00 00 00 00 00'),
+        24: _hex('00 00 00 00 00 00 00'),
+      });
+    });
 
     test('the block goes after the extension frames and before the tail '
         'and the tank temperature', () async {
@@ -222,13 +222,14 @@ void main() {
         'block21',
         'block22',
         'block23',
+        'block24',
         'tail',
         'tank',
       ]);
-      expect(kinds.where((k) => k.startsWith('block')), hasLength(3));
+      expect(kinds.where((k) => k.startsWith('block')), hasLength(4));
     });
 
-    test('a stock DE1 writes nothing to slots 21-23', () async {
+    test('a stock DE1 writes nothing to slots 21-24', () async {
       final (de1, transport) = await _connectDe1(model: 1);
 
       await de1.setProfile(_profile());
@@ -291,7 +292,7 @@ void main() {
       },
     );
 
-    test('a one-point curve fills slots 22 and 23 with zeros', () async {
+    test('a one-point curve fills slots 22, 23 and 24 with zeros', () async {
       final (bengle, transport) = await _connectBengle();
 
       await bengle.setProfile(
@@ -306,9 +307,10 @@ void main() {
       );
 
       expect(_blockWrites(transport), {
-        21: _hex('01 01 19 19 32 0A C8'),
+        21: _hex('02 01 19 19 32 0A C8'),
         22: _hex('00 00 00 00 00 00 00'),
         23: _hex('00 00 00 00 00 00 00'),
+        24: _hex('00 00 00 00 00 00 00'),
       });
     });
   });

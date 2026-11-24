@@ -341,8 +341,7 @@ extension UnifiedDe1Profile on UnifiedDe1 {
     final shaping = profile.nativeShaping;
     if (!isBengle || shaping == null || tailDe1Emulation) return;
     final block = shaping.toBlockBytes();
-    final slotCount = block.length ~/ _nativeShapingSlotLength;
-    for (final (i, slot) in _nativeShapingSlots.take(slotCount).indexed) {
+    for (final (i, slot) in _nativeShapingSlots.indexed) {
       final data = Uint8List(8);
       data[0] = slot;
       data.setRange(1, 8, block, i * _nativeShapingSlotLength);

@@ -43,31 +43,33 @@ class PumpCurvePoint extends Equatable {
 
 @immutable
 class NativeShaping extends Equatable {
-  static const baseVersion = 1;
-  static const pressureFilterVersion = 2;
+  static const version = 2;
   static const maxPumpCurvePoints = 8;
-  static const baseBlockLength = 21;
-  static const pressureFilterBlockLength = 28;
+  static const blockLength = 28;
+  static const retiredKey = 'ramp_factor';
 
   static const _halfStepTolerance = 1e-9;
   static const _tauDivisor = 50.0;
-  static const _rampDivisor = 50.0;
   static const _pointDivisor = 10.0;
   static const _maxTauByte = 250;
-  static const _maxRampByte = 200;
   static const _minPressureByte = 5;
   static const _maxPressureByte = 135;
   static const _minPressureRiseBytes = 5;
   static const _maxFlowByte = 200;
-  static const _pressureFilterOffset = baseBlockLength;
+  static const _pointsOffset = 5;
+  static const _pointsEnd = 21;
+  static const _pressureFilterOffset = 21;
+  static const _flowRampOffset = 22;
+  static const _reservedOffset = 23;
 
   final List<PumpCurvePoint> pumpCurve;
   final double flowTau;
   final NativeShapingMode flowMode;
   final double pressureTau;
   final NativeShapingMode pressureMode;
-  final double rampFactor;
   final double pressureFilterTau;
+  final double pressureRampTau;
+  final double flowRampTau;
 
   const NativeShaping._({
     required this.pumpCurve,
@@ -75,22 +77,21 @@ class NativeShaping extends Equatable {
     required this.flowMode,
     required this.pressureTau,
     required this.pressureMode,
-    required this.rampFactor,
     required this.pressureFilterTau,
+    required this.pressureRampTau,
+    required this.flowRampTau,
   });
 
-  int get version =>
-      pressureFilterTau > 0 ? pressureFilterVersion : baseVersion;
-
-  static int blockLengthOf(int version) => switch (version) {
-    baseVersion => baseBlockLength,
-    pressureFilterVersion => pressureFilterBlockLength,
-    _ => throw ArgumentError(
-      'native_shaping block version $version is not supported',
-    ),
-  };
+  static bool hasRetiredKey(Map<dynamic, dynamic> json) =>
+      json.containsKey(retiredKey);
 
   factory NativeShaping.fromJson(Map<String, dynamic> json) {
+    if (hasRetiredKey(json)) {
+      throw ArgumentError(
+        'native_shaping "$retiredKey" is not supported; use '
+        '"pressure_ramp_tau" and "flow_ramp_tau"',
+      );
+    }
     _parseVersion(json['version']);
     final rawCurve = json['pump_curve'] ?? const [];
     if (rawCurve is! List) {
@@ -129,41 +130,29 @@ class NativeShaping extends Equatable {
     return _checked(
       pressureBytes: pressureBytes,
       flowBytes: flowBytes,
-      flowTauByte: _wireByte(json['flow_tau'], 'flow_tau', _tauDivisor),
+      flowTauByte: _tauByte(json, 'flow_tau'),
       flowMode: NativeShapingMode.parse(json['flow_mode'], 'flow_mode'),
-      pressureTauByte: _wireByte(
-        json['pressure_tau'],
-        'pressure_tau',
-        _tauDivisor,
-      ),
+      pressureTauByte: _tauByte(json, 'pressure_tau'),
       pressureMode: NativeShapingMode.parse(
         json['pressure_mode'],
         'pressure_mode',
       ),
-      rampByte: _wireByte(
-        json['ramp_factor'],
-        'ramp_factor',
-        _rampDivisor,
-        absent: 1,
-      ),
-      pressureFilterTauByte: _wireByte(
-        json['pressure_filter_tau'],
-        'pressure_filter_tau',
-        _tauDivisor,
-      ),
+      pressureFilterTauByte: _tauByte(json, 'pressure_filter_tau'),
+      pressureRampTauByte: _tauByte(json, 'pressure_ramp_tau'),
+      flowRampTauByte: _tauByte(json, 'flow_ramp_tau'),
     );
   }
 
   factory NativeShaping.fromBlockBytes(List<int> bytes) {
-    if (bytes.isEmpty) {
-      throw ArgumentError('native_shaping block is empty');
-    }
-    final version = bytes[0];
-    final length = blockLengthOf(version);
-    if (bytes.length != length) {
+    if (bytes.isEmpty || bytes[0] != version) {
       throw ArgumentError(
-        'native_shaping block version $version must be $length bytes, '
-        'got ${bytes.length}',
+        'native_shaping block version '
+        '${bytes.isEmpty ? 'none' : bytes[0]} is not supported',
+      );
+    }
+    if (bytes.length != blockLength) {
+      throw ArgumentError(
+        'native_shaping block must be $blockLength bytes, got ${bytes.length}',
       );
     }
     final flowMode = NativeShapingMode.fromCode(bytes[1] >> 6 & 0x3);
@@ -177,17 +166,21 @@ class NativeShaping extends Equatable {
         'native_shaping block must have 0-$maxPumpCurvePoints points',
       );
     }
-    final hasPressureFilter = version == pressureFilterVersion;
-    final pressureFilterTauByte = hasPressureFilter
-        ? bytes[_pressureFilterOffset]
-        : 0;
-    _checkTauAndRamp(bytes[2], bytes[3], pressureFilterTauByte, bytes[4]);
-    final pointBytes = bytes.sublist(5, baseBlockLength);
-    final reservedBytes = hasPressureFilter
-        ? bytes.sublist(_pressureFilterOffset + 1)
-        : const <int>[];
+    final flowTauByte = bytes[2];
+    final pressureTauByte = bytes[3];
+    final pressureFilterTauByte = bytes[_pressureFilterOffset];
+    final pressureRampTauByte = bytes[4];
+    final flowRampTauByte = bytes[_flowRampOffset];
+    _checkTimes(
+      flowTauByte: flowTauByte,
+      pressureTauByte: pressureTauByte,
+      pressureFilterTauByte: pressureFilterTauByte,
+      pressureRampTauByte: pressureRampTauByte,
+      flowRampTauByte: flowRampTauByte,
+    );
+    final pointBytes = bytes.sublist(_pointsOffset, _pointsEnd);
     if (pointBytes.skip(count * 2).any((byte) => byte != 0) ||
-        reservedBytes.any((byte) => byte != 0)) {
+        bytes.skip(_reservedOffset).any((byte) => byte != 0)) {
       throw ArgumentError(
         'native_shaping block has unused bytes that are not 0',
       );
@@ -195,21 +188,23 @@ class NativeShaping extends Equatable {
     return _checked(
       pressureBytes: [for (var i = 0; i < count; i++) pointBytes[i * 2]],
       flowBytes: [for (var i = 0; i < count; i++) pointBytes[i * 2 + 1]],
-      flowTauByte: bytes[2],
+      flowTauByte: flowTauByte,
       flowMode: flowMode,
-      pressureTauByte: bytes[3],
+      pressureTauByte: pressureTauByte,
       pressureMode: pressureMode,
-      rampByte: bytes[4],
       pressureFilterTauByte: pressureFilterTauByte,
+      pressureRampTauByte: pressureRampTauByte,
+      flowRampTauByte: flowRampTauByte,
     );
   }
 
-  static void _checkTauAndRamp(
-    int flowTauByte,
-    int pressureTauByte,
-    int pressureFilterTauByte,
-    int rampByte,
-  ) {
+  static void _checkTimes({
+    required int flowTauByte,
+    required int pressureTauByte,
+    required int pressureFilterTauByte,
+    required int pressureRampTauByte,
+    required int flowRampTauByte,
+  }) {
     _checkRange(flowTauByte, 0, _maxTauByte, 'flow_tau', '0-5 s');
     _checkRange(pressureTauByte, 0, _maxTauByte, 'pressure_tau', '0-5 s');
     _checkRange(
@@ -219,7 +214,14 @@ class NativeShaping extends Equatable {
       'pressure_filter_tau',
       '0-5 s',
     );
-    _checkRange(rampByte, 0, _maxRampByte, 'ramp_factor', '0-4');
+    _checkRange(
+      pressureRampTauByte,
+      0,
+      _maxTauByte,
+      'pressure_ramp_tau',
+      '0-5 s',
+    );
+    _checkRange(flowRampTauByte, 0, _maxTauByte, 'flow_ramp_tau', '0-5 s');
   }
 
   static NativeShaping _checked({
@@ -229,14 +231,16 @@ class NativeShaping extends Equatable {
     required NativeShapingMode flowMode,
     required int pressureTauByte,
     required NativeShapingMode pressureMode,
-    required int rampByte,
     required int pressureFilterTauByte,
+    required int pressureRampTauByte,
+    required int flowRampTauByte,
   }) {
-    _checkTauAndRamp(
-      flowTauByte,
-      pressureTauByte,
-      pressureFilterTauByte,
-      rampByte,
+    _checkTimes(
+      flowTauByte: flowTauByte,
+      pressureTauByte: pressureTauByte,
+      pressureFilterTauByte: pressureFilterTauByte,
+      pressureRampTauByte: pressureRampTauByte,
+      flowRampTauByte: flowRampTauByte,
     );
     for (var i = 0; i < pressureBytes.length; i++) {
       _checkRange(
@@ -281,30 +285,28 @@ class NativeShaping extends Equatable {
       flowMode: flowMode,
       pressureTau: pressureTauByte / _tauDivisor,
       pressureMode: pressureMode,
-      rampFactor: rampByte / _rampDivisor,
       pressureFilterTau: pressureFilterTauByte / _tauDivisor,
+      pressureRampTau: pressureRampTauByte / _tauDivisor,
+      flowRampTau: flowRampTauByte / _tauDivisor,
     );
   }
 
   static void _parseVersion(Object? raw) {
     if (raw == null) return;
-    if (raw is num && (raw == baseVersion || raw == pressureFilterVersion)) {
-      return;
-    }
-    throw ArgumentError(
-      'native_shaping "version" must be $baseVersion or '
-      '$pressureFilterVersion, got $raw',
-    );
+    if (raw is num && raw == version) return;
+    throw ArgumentError('native_shaping "version" must be $version, got $raw');
   }
+
+  static int _tauByte(Map<String, dynamic> json, String field) =>
+      _wireByte(json[field], field, _tauDivisor);
 
   static int _wireByte(
     Object? raw,
     String field,
     double divisor, {
     bool required = false,
-    double absent = 0,
   }) {
-    if (raw == null && !required) return (absent * divisor).round();
+    if (raw == null && !required) return 0;
     final number = raw is num
         ? raw.toDouble()
         : raw is String
@@ -340,20 +342,23 @@ class NativeShaping extends Equatable {
     }
   }
 
+  static int _tauToByte(double seconds) => (seconds * _tauDivisor).round();
+
   List<int> toBlockBytes() {
-    final bytes = List<int>.filled(blockLengthOf(version), 0);
+    final bytes = List<int>.filled(blockLength, 0);
     bytes[0] = version;
     bytes[1] = flowMode.code << 6 | pressureMode.code << 4 | pumpCurve.length;
-    bytes[2] = (flowTau * _tauDivisor).round();
-    bytes[3] = (pressureTau * _tauDivisor).round();
-    bytes[4] = (rampFactor * _rampDivisor).round();
+    bytes[2] = _tauToByte(flowTau);
+    bytes[3] = _tauToByte(pressureTau);
+    bytes[4] = _tauToByte(pressureRampTau);
     for (final (index, point) in pumpCurve.indexed) {
-      bytes[5 + index * 2] = (point.pressure * _pointDivisor).round();
-      bytes[6 + index * 2] = (point.flow * _pointDivisor).round();
+      bytes[_pointsOffset + index * 2] = (point.pressure * _pointDivisor)
+          .round();
+      bytes[_pointsOffset + 1 + index * 2] = (point.flow * _pointDivisor)
+          .round();
     }
-    if (version == pressureFilterVersion) {
-      bytes[_pressureFilterOffset] = (pressureFilterTau * _tauDivisor).round();
-    }
+    bytes[_pressureFilterOffset] = _tauToByte(pressureFilterTau);
+    bytes[_flowRampOffset] = _tauToByte(flowRampTau);
     return bytes;
   }
 
@@ -364,8 +369,9 @@ class NativeShaping extends Equatable {
     'flow_mode': flowMode.name,
     'pressure_tau': pressureTau,
     'pressure_mode': pressureMode.name,
-    'ramp_factor': rampFactor,
-    if (pressureFilterTau > 0) 'pressure_filter_tau': pressureFilterTau,
+    'pressure_filter_tau': pressureFilterTau,
+    'pressure_ramp_tau': pressureRampTau,
+    'flow_ramp_tau': flowRampTau,
   };
 
   @override
@@ -375,8 +381,9 @@ class NativeShaping extends Equatable {
     flowMode,
     pressureTau,
     pressureMode,
-    rampFactor,
     pressureFilterTau,
+    pressureRampTau,
+    flowRampTau,
   ];
 }
 
@@ -462,8 +469,7 @@ class NativeShapingReport extends Equatable {
 
   static NativeShaping? _settingsOrNull(List<int> registerBlock) {
     try {
-      final length = NativeShaping.blockLengthOf(registerBlock[0]);
-      return NativeShaping.fromBlockBytes(registerBlock.sublist(0, length));
+      return NativeShaping.fromBlockBytes(registerBlock);
     } on ArgumentError {
       return null;
     }

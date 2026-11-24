@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:equatable/equatable.dart';
+import 'package:logging/logging.dart';
 
 import 'native_shaping.dart';
 import 'utils.dart';
@@ -53,14 +54,18 @@ class Profile extends Equatable {
   static const unknownTitle = 'Unknown profile';
 
   factory Profile.fromJson(Map<String, dynamic> json) =>
-      Profile._parse(json, requireExecutable: true);
+      Profile._parse(json, requireExecutable: true, stored: false);
+
+  factory Profile.fromStoredJson(Map<String, dynamic> json) =>
+      Profile._parse(json, requireExecutable: true, stored: true);
 
   factory Profile.fromRecordedJson(Map<String, dynamic> json) =>
-      Profile._parse(json, requireExecutable: false);
+      Profile._parse(json, requireExecutable: false, stored: true);
 
   static Profile _parse(
     Map<String, dynamic> json, {
     required bool requireExecutable,
+    required bool stored,
   }) {
     final title = parseOptionalString(json['title']);
     final rawSteps = json['steps'];
@@ -99,7 +104,9 @@ class Profile extends Equatable {
       ),
       tankTemperature: _requireFiniteProfileNumber(json, 'tank_temperature'),
       de1Emulation: json['de1_emulation'] == true,
-      nativeShaping: _parseNativeShaping(json['native_shaping']),
+      nativeShaping: stored
+          ? _parseStoredNativeShaping(json['native_shaping'], title)
+          : _parseNativeShaping(json['native_shaping']),
     );
   }
 
@@ -192,6 +199,20 @@ enum TemperatureSensor { coffee, water }
 enum ExitType { pressure, flow, power }
 
 enum ExitCondition { over, under }
+
+final _profileLog = Logger('Profile');
+
+NativeShaping? _parseStoredNativeShaping(Object? raw, String? title) {
+  if (raw is Map && NativeShaping.hasRetiredKey(raw)) {
+    _profileLog.warning(
+      'Profile "${title ?? Profile.unknownTitle}": the stored native_shaping '
+      'block has "${NativeShaping.retiredKey}", a retired format; the profile '
+      'loads without the block',
+    );
+    return null;
+  }
+  return _parseNativeShaping(raw);
+}
 
 NativeShaping? _parseNativeShaping(Object? raw) {
   if (raw == null) return null;

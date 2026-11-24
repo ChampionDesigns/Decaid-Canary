@@ -1136,7 +1136,7 @@ void main() {
 
   group('PUT /api/v1/workflow — native_shaping is one value', () {
     Map<String, dynamic> example() => {
-      'version': 1,
+      'version': 2,
       'pump_curve': [
         {'pressure': 1.0, 'flow': 20.0},
         {'pressure': 3.0, 'flow': 12.0},
@@ -1148,7 +1148,9 @@ void main() {
       'flow_mode': 'both',
       'pressure_tau': 0.5,
       'pressure_mode': 'both',
-      'ramp_factor': 1.0,
+      'pressure_filter_tau': 0.0,
+      'pressure_ramp_tau': 1.0,
+      'flow_ramp_tau': 0.0,
     };
 
     final storedBlock = {
@@ -1160,7 +1162,8 @@ void main() {
       'flow_tau': 0.2,
       'flow_mode': 'rise',
       'pressure_tau': 2.0,
-      'ramp_factor': 2.0,
+      'pressure_ramp_tau': 2.0,
+      'flow_ramp_tau': 1.5,
     };
 
     Future<void> seedStoredBlock() async {
@@ -1296,7 +1299,9 @@ void main() {
       expect(block['pressure_tau'], defaults.pressureTau);
       expect(block['pressure_tau'], isNot(2.0));
       expect(block['flow_mode'], 'both');
-      expect(block['ramp_factor'], defaults.rampFactor);
+      expect(block['pressure_ramp_tau'], defaults.pressureRampTau);
+      expect(block['pressure_ramp_tau'], isNot(2.0));
+      expect(block['flow_ramp_tau'], defaults.flowRampTau);
       expect(block['pump_curve'], isEmpty);
       expect(storedJson(), block);
     });
@@ -1313,17 +1318,67 @@ void main() {
 
       final expected = {
         ...NativeShaping.fromJson(const {}).toJson(),
-        'version': 2,
         'pressure_filter_tau': 0.5,
       };
       expect(body['profile']['native_shaping'], expected);
       expect(storedJson(), expected);
-      expect(
-        workflowController.currentWorkflow.profile.nativeShaping!
-            .toBlockBytes(),
-        hasLength(28),
-      );
+      expect(storedJson()!['pressure_ramp_tau'], 0.0);
+      expect(storedJson()!['flow_ramp_tau'], 0.0);
     });
+
+    test('a sparse block with only the ramp times takes the defaults for '
+        'the other keys', () async {
+      await seedStoredBlock();
+
+      final body = await putAndDecode({
+        'profile': {
+          'native_shaping': {'pressure_ramp_tau': 0.51, 'flow_ramp_tau': 2},
+        },
+      });
+
+      final expected = {
+        ...NativeShaping.fromJson(const {}).toJson(),
+        'pressure_ramp_tau': 0.52,
+        'flow_ramp_tau': 2.0,
+      };
+      expect(body['profile']['native_shaping'], expected);
+      expect(storedJson(), expected);
+    });
+
+    for (final field in ['pressure_ramp_tau', 'flow_ramp_tau']) {
+      test('$field above 5 s gives 400 and keeps the stored block', () async {
+        await seedStoredBlock();
+        final before = storedJson();
+
+        final response = await put({
+          'profile': {
+            'native_shaping': {...example(), field: 5.02},
+          },
+        });
+
+        expect(response.statusCode, 400);
+        expect(await response.readAsString(), contains(field));
+        expect(storedJson(), before);
+      });
+    }
+
+    test(
+      'a block with ramp_factor gives 400 and keeps the stored block',
+      () async {
+        await seedStoredBlock();
+        final before = storedJson();
+
+        final response = await put({
+          'profile': {
+            'native_shaping': {...example(), 'ramp_factor': 1.0},
+          },
+        });
+
+        expect(response.statusCode, 400);
+        expect(await response.readAsString(), contains('ramp_factor'));
+        expect(storedJson(), before);
+      },
+    );
 
     test(
       'pressure_filter_tau above 5 s gives 400 and keeps the stored block',
@@ -1362,12 +1417,7 @@ void main() {
         'profile': {...completeProfileJson(), 'native_shaping': example()},
       });
 
-      expect(
-        (body['profile']['native_shaping'] as Map).containsKey(
-          'pressure_filter_tau',
-        ),
-        isFalse,
-      );
+      expect(body['profile']['native_shaping']['pressure_filter_tau'], 0.0);
       expect(storedJson(), example());
       expect(
         workflowController
