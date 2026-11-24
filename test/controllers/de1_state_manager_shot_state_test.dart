@@ -800,6 +800,43 @@ void main() {
       expect((machine['nativeShaping'] as Map)['source'], 'profile');
     });
 
+    test('a Bengle report with a version 2 block saves pressure_filter_tau '
+        'with the shot', () async {
+      final (bengle, transport) = await connectReportingBengle(
+        image: nativeShapeReportImage(
+          latch: 9,
+          block: [
+            ...[0x02, 0x05, 0x19, 0x19, 0x32, 0x0A, 0xC8],
+            ...[0x1E, 0x78, 0x3C, 0x3C, 0x5A, 0x32, 0x78],
+            ...[0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            ...[0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+          ],
+        ),
+      );
+
+      transport.emitNotification(Endpoint.stateInfo, [espressoStateByte, 0]);
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (bengle.lastNativeShapingReport == null &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      await driveShot();
+
+      final saved = storage.storedShots.single.workflow.machine?.nativeShaping;
+      expect(saved?.settings?.pressureFilterTau, 0.5);
+      final machine =
+          storage.storedShots.single.workflow.toJson()['machine'] as Map;
+      final settings = (machine['nativeShaping'] as Map)['settings'] as Map;
+      expect(settings['pressure_filter_tau'], 0.5);
+      expect(settings['version'], 2);
+      expect(
+        Workflow.fromJson(storage.storedShots.single.workflow.toJson())
+            .machine
+            ?.nativeShaping,
+        saved,
+      );
+    });
+
     for (final action in ['a profile upload', 'a raw profile write']) {
       test('$action between espresso end and the shot save keeps the report '
           'in the saved record', () async {

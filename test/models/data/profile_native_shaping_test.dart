@@ -202,7 +202,7 @@ void main() {
 
     group('refuses each rule with an ArgumentError', () {
       final cases = <String, (Map<String, dynamic>, String)>{
-        'version 2': ({..._example(), 'version': 2}, 'version'),
+        'version 3': ({..._example(), 'version': 3}, 'version'),
         'version 0': ({..._example(), 'version': 0}, 'version'),
         'version as text': ({..._example(), 'version': '1'}, 'version'),
         'pump_curve not an array': (
@@ -548,7 +548,7 @@ void main() {
     });
 
     test('gives no settings for a block it cannot decode', () {
-      final badBlock = List.of(_exampleBlock)..[0] = 2;
+      final badBlock = List.of(_exampleBlock)..[0] = 3;
 
       expect(
         NativeShapingReport.fromBytes(_report(block: badBlock)).settings,

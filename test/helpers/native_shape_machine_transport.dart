@@ -21,7 +21,14 @@ List<int> nativeShapeReportImage({
   required int latch,
   int flags = 0,
   List<int> block = exampleNativeShapingBlock,
-}) => [source, rule, latch, flags, ...block, 0, 0, 0, 0, 0, 0, 0];
+}) => [
+  source,
+  rule,
+  latch,
+  flags,
+  ...block,
+  ...List.filled(28 - block.length, 0),
+];
 
 class NativeShapeMachineTransport extends FakeBleTransport {
   List<int>? image;

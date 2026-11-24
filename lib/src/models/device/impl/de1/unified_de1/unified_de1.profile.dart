@@ -10,7 +10,8 @@ const double _bengleMaxFlowMlPerSec = 20.0;
 const double _maxStepTemperature = 127.5;
 const int _maxStepVolume = 1023;
 const double _maxPowerExitWatts = 25.5;
-const _nativeShapingSlots = [21, 22, 23];
+const _nativeShapingSlots = [21, 22, 23, 24];
+const _nativeShapingSlotLength = 7;
 const _maxProfileSteps = 20;
 
 class ProfileValueUnsupportedException extends ProfileModeUnsupportedException
@@ -340,10 +341,11 @@ extension UnifiedDe1Profile on UnifiedDe1 {
     final shaping = profile.nativeShaping;
     if (!isBengle || shaping == null || tailDe1Emulation) return;
     final block = shaping.toBlockBytes();
-    for (final (i, slot) in _nativeShapingSlots.indexed) {
+    final slotCount = block.length ~/ _nativeShapingSlotLength;
+    for (final (i, slot) in _nativeShapingSlots.take(slotCount).indexed) {
       final data = Uint8List(8);
       data[0] = slot;
-      data.setRange(1, 8, block, i * 7);
+      data.setRange(1, 8, block, i * _nativeShapingSlotLength);
       await _transport.writeWithResponse(Endpoint.frameWrite, data);
     }
   }

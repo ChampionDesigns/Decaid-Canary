@@ -168,4 +168,24 @@ void main() {
       expect(await storedReport(id), expected, reason: id);
     }
   });
+
+  test('a PUT keeps a stored version 2 report with its '
+      'pressure_filter_tau', () async {
+    final filterReport = NativeShapingReport.fromBytes([
+      1, 0, 4, 0, //
+      0x02, 0x05, 0x19, 0x19, 0x32, 0x0A, 0xC8, //
+      0x1E, 0x78, 0x3C, 0x3C, 0x5A, 0x32, 0x78, //
+      0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
+      0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ]);
+    expect(filterReport.settings?.pressureFilterTau, 0.5);
+    await storage.storeShot(shot('filtered', report: filterReport));
+
+    final body = await put('filtered', machineWith(_report.toJson()));
+
+    final saved = responseReport(body) as Map;
+    expect((saved['settings'] as Map)['pressure_filter_tau'], 0.5);
+    expect(saved, filterReport.toJson());
+    expect(await storedReport('filtered'), filterReport);
+  });
 }

@@ -1300,6 +1300,84 @@ void main() {
       expect(block['pump_curve'], isEmpty);
       expect(storedJson(), block);
     });
+
+    test('a sparse block with only pressure_filter_tau takes the defaults '
+        'for the other keys', () async {
+      await seedStoredBlock();
+
+      final body = await putAndDecode({
+        'profile': {
+          'native_shaping': {'pressure_filter_tau': 0.5},
+        },
+      });
+
+      final expected = {
+        ...NativeShaping.fromJson(const {}).toJson(),
+        'version': 2,
+        'pressure_filter_tau': 0.5,
+      };
+      expect(body['profile']['native_shaping'], expected);
+      expect(storedJson(), expected);
+      expect(
+        workflowController.currentWorkflow.profile.nativeShaping!
+            .toBlockBytes(),
+        hasLength(28),
+      );
+    });
+
+    test(
+      'pressure_filter_tau above 5 s gives 400 and keeps the stored block',
+      () async {
+        await seedStoredBlock();
+        final before = storedJson();
+
+        final response = await put({
+          'profile': {
+            'native_shaping': {...example(), 'pressure_filter_tau': 6},
+          },
+        });
+
+        expect(response.statusCode, 400);
+        expect(await response.readAsString(), contains('pressure_filter_tau'));
+        expect(storedJson(), before);
+      },
+    );
+
+    test('a complete profile whose block has no pressure_filter_tau stores '
+        'no filter', () async {
+      workflowController.setWorkflow(
+        workflowController.currentWorkflow.copyWith(
+          profile: workflowController.currentWorkflow.profile.copyWith(
+            nativeShaping: NativeShaping.fromJson({
+              ...storedBlock,
+              'pressure_filter_tau': 1.0,
+            }),
+          ),
+        ),
+      );
+      await _settleHandler(spy);
+      expect(storedJson()!['pressure_filter_tau'], 1.0);
+
+      final body = await putAndDecode({
+        'profile': {...completeProfileJson(), 'native_shaping': example()},
+      });
+
+      expect(
+        (body['profile']['native_shaping'] as Map).containsKey(
+          'pressure_filter_tau',
+        ),
+        isFalse,
+      );
+      expect(storedJson(), example());
+      expect(
+        workflowController
+            .currentWorkflow
+            .profile
+            .nativeShaping!
+            .pressureFilterTau,
+        0.0,
+      );
+    });
   });
 
   group('PUT /api/v1/workflow — read-modify-write race', () {

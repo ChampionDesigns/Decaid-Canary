@@ -162,16 +162,23 @@ then writes no key. Every machine parses and stores the block.
 
 | Key | Type | Unit | Range | Step | Default |
 |---|---|---|---|---|---|
-| `version` | integer | - | 1 | - | 1 |
+| `version` | integer | - | 1 or 2 | - | 1 |
 | `pump_curve` | array of 0-8 `{pressure, flow}` | bar, mL/s | pressure 0.5-13.5, each at least 0.5 above the previous point; flow 0-20, never rises | 0.1, 0.1 | `[]` (off) |
 | `flow_tau` | number | s | 0-5 | 0.02 | 0 |
 | `flow_mode` | string | - | `both`, `rise`, `fall` | - | `both` |
 | `pressure_tau` | number | s | 0-5 | 0.02 | 0 |
 | `pressure_mode` | string | - | `both`, `rise`, `fall` | - | `both` |
 | `ramp_factor` | number | - | 0-4 | 0.02 | 1 |
+| `pressure_filter_tau` | number | s | 0-5 | 0.02 | 0 (off) |
 
 The curve starts at a fixed point of 0 bar and 20 mL/s, which is not in the
 array. A key that is absent inside the block takes its default.
+
+`pressure_filter_tau` is the time constant of a second filter on the native
+pressure goal in fast pressure frames. It follows `pressure_mode`, and 0 turns
+it off. `version` is the block version. Decaid accepts 1 or 2 on input and
+does not check it against the other keys. It stores the canonical version: 1
+when `pressure_filter_tau` is 0, 2 when it is above 0.
 
 `NativeShaping.fromJson` rounds each number half up to its wire step first
 (a decimal half step such as `0.29` s rounds up to `0.30` s),
@@ -180,7 +187,9 @@ runs, and two blocks that round to the same bytes are equal. A PUT
 `/api/v1/workflow` treats the block as one value: a sent block replaces the
 stored one with no merge of keys or points (see `doc/Api.md`, Workflow). A value that
 breaks a rule throws an `ArgumentError`, and the REST API returns `400`.
-`toJson` writes every key of the block.
+`toJson` writes every key of the block, except `pressure_filter_tau`, which it
+writes only when it is above 0. So `"pressure_filter_tau": 0` and an absent key
+give the same block, the same JSON and the same profile hash.
 
 Example:
 
@@ -201,8 +210,11 @@ Example:
 Upload: a profile has at most 20 steps. Decaid refuses a profile with more
 steps before it writes anything, on a DE1 and on a Bengle: steps use frame
 slots 0 to 19 and the tail goes in the slot after the last step. On a Bengle,
-Decaid writes the 21-byte block to frame slots 21, 22
-and 23, after the extension frames and before the tail. Each write is the slot
+Decaid writes the 21-byte block (version 1) to frame slots 21, 22
+and 23, after the extension frames and before the tail. When
+`pressure_filter_tau` is above 0, the block is version 2 (28 bytes): byte 21
+is the filter time constant (U8, 0.02 s) and bytes 22-27 are 0, and Decaid
+writes block bytes 21-27 to slot 24 after slot 23. Each write is the slot
 index and 7 block bytes. The upload skips the block on a DE1, with DE1
 emulation on (the tail byte that `de1_emulation` sets is 1), and for a profile
 without the block. The upload never refuses a profile because of the block. A
@@ -212,7 +224,9 @@ machine's own settings.
 A shot records what the machine reported that it ran in
 `workflow.machine.nativeShaping` (see `doc/Api.md`, Shots). Decaid reads the
 machine's native shaping report (MMR `NativeShapeLatched`, 32 bytes) after the
-machine enters espresso. The read takes bytes 0-15 and 16-31, then bytes 0-15
+machine enters espresso. Bytes 4-31 hold the latched block in the canonical
+form: version 1 in bytes 4-24 (Decaid ignores bytes 25-31), or version 2 in
+bytes 4-31 with the pressure goal filter in byte 25. The read takes bytes 0-15 and 16-31, then bytes 0-15
 again; the latch count (byte 2) of the first and the last read must agree, or
 the read starts again (at most three passes). Each read waits 1 s for a reply.
 When a read gets no reply in that time (firmware without the report), Decaid

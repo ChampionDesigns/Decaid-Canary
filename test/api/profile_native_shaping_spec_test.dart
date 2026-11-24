@@ -34,4 +34,19 @@ void main() {
     expect(shaping, isNot(contains(r'$ref')));
     expect(shaping['description'], contains('`null` removes the block'));
   });
+
+  test('NativeShaping has pressure_filter_tau 0-5 s, default 0, and '
+      'version 1 or 2', () {
+    final properties =
+        (_schemas()['NativeShaping'] as YamlMap)['properties'] as YamlMap;
+    final filter = properties['pressure_filter_tau'] as YamlMap;
+
+    expect(filter['type'], 'number');
+    expect(filter['minimum'], 0);
+    expect(filter['maximum'], 5);
+    expect(filter['default'], 0);
+    expect(filter['description'], contains('step 0.02'));
+    expect(filter['description'], contains('Written only when it is above 0'));
+    expect((properties['version'] as YamlMap)['enum'], [1, 2]);
+  });
 }
