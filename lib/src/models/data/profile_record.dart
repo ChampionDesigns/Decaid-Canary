@@ -150,7 +150,7 @@ class ProfileRecord extends Equatable {
   factory ProfileRecord.fromJson(Map<String, dynamic> json) {
     return ProfileRecord(
       id: json['id'] as String,
-      profile: Profile.fromJson(json['profile'] as Map<String, dynamic>),
+      profile: Profile.fromStoredJson(json['profile'] as Map<String, dynamic>),
       metadataHash: json['metadataHash'] as String,
       compoundHash: json['compoundHash'] as String,
       parentId: json['parentId'] as String?,

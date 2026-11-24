@@ -470,7 +470,12 @@ Content-Type: application/json
 ]
 ```
 
-Batch import from backup. Skips profiles that already exist.
+Batch import from backup. Skips profiles that already exist. A record whose
+`native_shaping` block has the retired `ramp_factor` key imports without the
+block, as a stored profile loads. The backup restore does the same for the
+profiles and the workflow; shot and steam records keep such a block as
+recorded. A restore that overwrites a profile with the same content keeps the
+stored row and takes only the metadata.
 
 Response:
 ```json

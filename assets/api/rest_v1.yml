@@ -4321,7 +4321,10 @@ paths:
   /api/v1/profiles/import:
     post:
       summary: Import profiles
-      description: Batch import profiles from JSON array (e.g., from backup)
+      description: >
+        Batch import profiles from JSON array (e.g., from backup). A record
+        whose `native_shaping` block has the retired `ramp_factor` key imports
+        without the block, as a stored profile loads.
       tags: [Profiles]
       requestBody:
         required: true
