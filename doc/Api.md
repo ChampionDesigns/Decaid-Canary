@@ -423,7 +423,9 @@ title and find both kinds of shot.
 the native shaping that a Bengle reported for the shot: `source` (`cli`,
 `profile`, `cliBlockRefused`, `inactive` or `unknown`), `sourceCode`, `refusal`
 (the rule that refused the profile block, or `none`), `refusalCode`,
-`latchCount`, `settingsRounded`, and `settings` in the `native_shaping` format
+`latchCount`, `settingsRounded`, `acceptsBlockV2` (the machine image accepts
+the version 2 profile block; false in a record from before Decaid read it), and
+`settings` in the `native_shaping` format
 of `doc/Profiles.md`. The app reads the report from a Bengle after the machine
 enters espresso, and once more later in the shot if the first read gives
 nothing. After a profile upload during the shot, the app reads it again, and a
@@ -529,9 +531,11 @@ non-nullable; `profile: null` returns `400`.
 
 A profile may carry a `native_shaping` block (`doc/Profiles.md`, Native Shaping).
 Decaid rounds each number to its wire step, checks it, and returns the rounded
-block. A value that breaks a rule, for example `"flow_tau": 6`, returns `400`.
-The block is part of the profile ID only when present. The profile upload sends
-the block to a Bengle only: it is skipped on a DE1 and with DE1 emulation on.
+block with every key. A value that breaks a rule, for example `"flow_tau": 6`,
+returns `400`, and so does the retired key `ramp_factor`. The block is part of
+the profile ID only when present; `0` and an absent key give the same profile ID.
+The profile upload sends the block (version 2) to frame slots 21-24 of a Bengle
+only: it is skipped on a DE1 and with DE1 emulation on.
 
 #### Extended step types (capability-gated)
 

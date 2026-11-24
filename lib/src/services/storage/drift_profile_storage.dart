@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart';
 import 'package:reaprime/src/models/data/profile_record.dart' as domain;
 import 'package:reaprime/src/services/database/database.dart';
 import 'package:reaprime/src/services/database/mappers/profile_mapper.dart';
@@ -34,7 +35,20 @@ class DriftProfileStorageService implements ProfileStorageService {
 
   @override
   Future<void> update(domain.ProfileRecord record) {
-    return _db.profileDao.updateProfile(ProfileMapper.toCompanion(record));
+    return _db.transaction(() async {
+      final row = await _db.profileDao.getProfileById(record.id);
+      if (row == null) throw ArgumentError('Profile not found: ${record.id}');
+      final companion = ProfileMapper.toCompanion(record);
+      final unchanged = ProfileMapper.fromRow(row).profile == record.profile;
+      final written = await _db.profileDao.updateProfile(
+        unchanged
+            ? companion.copyWith(profileJson: const Value.absent())
+            : companion,
+      );
+      if (written != 1) {
+        throw StateError('Profile update wrote $written rows: ${record.id}');
+      }
+    });
   }
 
   @override

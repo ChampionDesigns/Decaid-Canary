@@ -140,7 +140,7 @@ void main() {
           jsonDecode(await response.readAsString()) as Map<String, dynamic>;
       final profile = record['profile'] as Map<String, dynamic>;
       expect(profile['native_shaping'], {
-        'version': 1,
+        'version': 2,
         'pump_curve': [
           {'pressure': 3.0, 'flow': 12.0},
         ],
@@ -148,8 +148,20 @@ void main() {
         'flow_mode': 'both',
         'pressure_tau': 0.0,
         'pressure_mode': 'both',
-        'ramp_factor': 1.0,
+        'pressure_filter_tau': 0.0,
+        'pressure_ramp_tau': 0.0,
+        'flow_ramp_tau': 0.0,
       });
+    });
+
+    test('returns 400 when native_shaping has ramp_factor', () async {
+      final body = profileWithoutMetadata()
+        ..['native_shaping'] = {'flow_tau': 0.5, 'ramp_factor': 1.0};
+
+      final response = await postProfile({'profile': body});
+
+      expect(response.statusCode, 400);
+      expect(await response.readAsString(), contains('ramp_factor'));
     });
 
     test('returns 400 when native_shaping breaks a rule', () async {

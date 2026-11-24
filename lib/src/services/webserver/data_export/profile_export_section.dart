@@ -46,7 +46,9 @@ class ProfileExportSection implements DataExportSection {
           if (strategy == ConflictStrategy.overwrite) {
             await _controller.update(
               record.id,
-              profile: record.profile,
+              profile: record.profile == existing.profile
+                  ? null
+                  : record.profile,
               metadata: record.metadata,
             );
             imported++;

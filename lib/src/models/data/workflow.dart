@@ -29,12 +29,19 @@ class Workflow {
   });
 
   factory Workflow.fromJson(Map<String, dynamic> json) =>
-      Workflow._parse(json, recorded: false);
+      Workflow._parse(json, recorded: false, stored: false);
+
+  factory Workflow.fromStoredJson(Map<String, dynamic> json) =>
+      Workflow._parse(json, recorded: false, stored: true);
 
   factory Workflow.fromRecordedJson(Map<String, dynamic> json) =>
-      Workflow._parse(json, recorded: true);
+      Workflow._parse(json, recorded: true, stored: true);
 
-  static Workflow _parse(Map<String, dynamic> json, {required bool recorded}) {
+  static Workflow _parse(
+    Map<String, dynamic> json, {
+    required bool recorded,
+    required bool stored,
+  }) {
     WorkflowContext? ctx;
     if (json['context'] != null) {
       ctx = WorkflowContext.fromJson(json['context'] as Map<String, dynamic>);
@@ -76,6 +83,8 @@ class Workflow {
       description: json['description'],
       profile: recorded
           ? Profile.fromRecordedJson(json['profile'])
+          : stored
+          ? Profile.fromStoredJson(json['profile'])
           : Profile.fromJson(json['profile']),
       context: ctx,
       steamSettings: json['steamSettings'] != null

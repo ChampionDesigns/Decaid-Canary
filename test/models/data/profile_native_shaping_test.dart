@@ -11,7 +11,7 @@ Map<String, dynamic> _bundledJson() =>
         as Map<String, dynamic>;
 
 Map<String, dynamic> _example() => {
-  'version': 1,
+  'version': 2,
   'pump_curve': [
     {'pressure': 1.0, 'flow': 20.0},
     {'pressure': 3.0, 'flow': 12.0},
@@ -23,13 +23,16 @@ Map<String, dynamic> _example() => {
   'flow_mode': 'both',
   'pressure_tau': 0.5,
   'pressure_mode': 'both',
-  'ramp_factor': 1.0,
+  'pressure_filter_tau': 0.0,
+  'pressure_ramp_tau': 1.0,
+  'flow_ramp_tau': 0.0,
 };
 
 const _exampleBlock = [
-  0x01, 0x05, 0x19, 0x19, 0x32, 0x0A, 0xC8, //
+  0x02, 0x05, 0x19, 0x19, 0x32, 0x0A, 0xC8, //
   0x1E, 0x78, 0x3C, 0x3C, 0x5A, 0x32, 0x78, //
-  0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
 Map<String, dynamic> _withCurve(List<List<num>> points) => {
@@ -49,8 +52,7 @@ List<int> _report({
   int latch = 7,
   int flags = 0,
   List<int> block = _exampleBlock,
-  List<int> tail = const [0, 0, 0, 0, 0, 0, 0],
-}) => [source, rule, latch, flags, ...block, ...tail];
+}) => [source, rule, latch, flags, ...block];
 
 void main() {
   group('NativeShaping.fromJson', () {
@@ -72,25 +74,29 @@ void main() {
       final shaping = NativeShaping.fromJson({});
 
       expect(shaping.toJson(), {
-        'version': 1,
+        'version': 2,
         'pump_curve': <dynamic>[],
         'flow_tau': 0.0,
         'flow_mode': 'both',
         'pressure_tau': 0.0,
         'pressure_mode': 'both',
-        'ramp_factor': 1.0,
+        'pressure_filter_tau': 0.0,
+        'pressure_ramp_tau': 0.0,
+        'flow_ramp_tau': 0.0,
       });
       expect(
         NativeShaping.fromJson({'flow_tau': 0.4, 'pressure_mode': 'rise'})
             .toJson(),
         {
-          'version': 1,
+          'version': 2,
           'pump_curve': <dynamic>[],
           'flow_tau': 0.4,
           'flow_mode': 'both',
           'pressure_tau': 0.0,
           'pressure_mode': 'rise',
-          'ramp_factor': 1.0,
+          'pressure_filter_tau': 0.0,
+          'pressure_ramp_tau': 0.0,
+          'flow_ramp_tau': 0.0,
         },
       );
     });
@@ -103,12 +109,14 @@ void main() {
         ]),
         'flow_tau': 0.509,
         'pressure_tau': 0.51,
-        'ramp_factor': 1.009,
+        'pressure_ramp_tau': 1.009,
+        'flow_ramp_tau': 0.29,
       });
 
       expect(shaping.flowTau, 0.5);
       expect(shaping.pressureTau, 0.52);
-      expect(shaping.rampFactor, 1.0);
+      expect(shaping.pressureRampTau, 1.0);
+      expect(shaping.flowRampTau, 0.3);
       expect(shaping.pumpCurve.map((p) => p.toJson()), [
         {'pressure': 3.0, 'flow': 19.9},
         {'pressure': 5.0, 'flow': 12.0},
@@ -128,11 +136,23 @@ void main() {
         final shaping = NativeShaping.fromJson({
           'flow_tau': raw,
           'pressure_tau': raw,
-          'ramp_factor': raw,
+          'pressure_filter_tau': raw,
+          'pressure_ramp_tau': raw,
+          'flow_ramp_tau': raw,
         });
         expect(shaping.flowTau, rounded, reason: 'flow_tau $raw');
         expect(shaping.pressureTau, rounded, reason: 'pressure_tau $raw');
-        expect(shaping.rampFactor, rounded, reason: 'ramp_factor $raw');
+        expect(
+          shaping.pressureFilterTau,
+          rounded,
+          reason: 'pressure_filter_tau $raw',
+        );
+        expect(
+          shaping.pressureRampTau,
+          rounded,
+          reason: 'pressure_ramp_tau $raw',
+        );
+        expect(shaping.flowRampTau, rounded, reason: 'flow_ramp_tau $raw');
       }
       for (var tenths = 5; tenths < 135; tenths++) {
         final raw = tenths / 10 + 0.05;
@@ -157,13 +177,15 @@ void main() {
           [0.96, 12.0],
         ]),
         'flow_tau': 5.009,
-        'ramp_factor': 4.009,
+        'pressure_ramp_tau': 5.009,
+        'flow_ramp_tau': 5.009,
       });
 
       expect(shaping.pumpCurve.first.toJson(), {'pressure': 0.5, 'flow': 20.0});
       expect(shaping.pumpCurve.last.pressure, 1.0);
       expect(shaping.flowTau, 5.0);
-      expect(shaping.rampFactor, 4.0);
+      expect(shaping.pressureRampTau, 5.0);
+      expect(shaping.flowRampTau, 5.0);
     });
 
     test('checks the rounded value, not the raw value, at each limit', () {
@@ -202,9 +224,10 @@ void main() {
 
     group('refuses each rule with an ArgumentError', () {
       final cases = <String, (Map<String, dynamic>, String)>{
-        'version 2': ({..._example(), 'version': 2}, 'version'),
+        'version 3': ({..._example(), 'version': 3}, 'version'),
         'version 0': ({..._example(), 'version': 0}, 'version'),
-        'version as text': ({..._example(), 'version': '1'}, 'version'),
+        'version 1': ({..._example(), 'version': 1}, 'version'),
+        'version as text': ({..._example(), 'version': '2'}, 'version'),
         'pump_curve not an array': (
           {..._example(), 'pump_curve': 'off'},
           'pump_curve',
@@ -275,12 +298,28 @@ void main() {
           {..._example(), 'pressure_tau': 5.02},
           'pressure_tau',
         ),
-        'ramp_factor above 4': (
-          {..._example(), 'ramp_factor': 4.02},
-          'ramp_factor',
+        'pressure_filter_tau above 5 s': (
+          {..._example(), 'pressure_filter_tau': 5.02},
+          'pressure_filter_tau',
         ),
-        'ramp_factor below 0': (
-          {..._example(), 'ramp_factor': -0.1},
+        'pressure_ramp_tau above 5 s': (
+          {..._example(), 'pressure_ramp_tau': 5.02},
+          'pressure_ramp_tau',
+        ),
+        'pressure_ramp_tau below 0 s': (
+          {..._example(), 'pressure_ramp_tau': -0.02},
+          'pressure_ramp_tau',
+        ),
+        'flow_ramp_tau above 5 s': (
+          {..._example(), 'flow_ramp_tau': 5.02},
+          'flow_ramp_tau',
+        ),
+        'flow_ramp_tau below 0 s': (
+          {..._example(), 'flow_ramp_tau': -0.02},
+          'flow_ramp_tau',
+        ),
+        'the retired ramp_factor key': (
+          {..._example(), 'ramp_factor': 1.0},
           'ramp_factor',
         ),
         'unknown flow_mode': ({..._example(), 'flow_mode': 'up'}, 'flow_mode'),
@@ -293,8 +332,8 @@ void main() {
           'flow_tau',
         ),
         'a boolean for a number': (
-          {..._example(), 'ramp_factor': true},
-          'ramp_factor',
+          {..._example(), 'pressure_ramp_tau': true},
+          'pressure_ramp_tau',
         ),
         'a value that is not finite': (
           {..._example(), 'pressure_tau': double.nan},
@@ -313,15 +352,14 @@ void main() {
     List<int> withByte(int index, int value) =>
         List.of(_exampleBlock)..[index] = value;
 
-    test('refuses a version that is not 1', () {
-      expect(
-        () => NativeShaping.fromBlockBytes(withByte(0, 0)),
-        throwsArgumentError,
-      );
-      expect(
-        () => NativeShaping.fromBlockBytes(withByte(0, 2)),
-        throwsArgumentError,
-      );
+    test('refuses a version that is not 2', () {
+      for (final version in [0, 1, 3, 255]) {
+        expect(
+          () => NativeShaping.fromBlockBytes(withByte(0, version)),
+          _refuses('version'),
+          reason: 'version $version',
+        );
+      }
     });
 
     test('refuses mode code 3 and a point count above 8', () {
@@ -456,6 +494,7 @@ void main() {
         ]),
         'flow_tau': 0.509,
         'pressure_tau': 0.49,
+        'pressure_ramp_tau': 0.99,
       });
 
       expect(near, exact);
@@ -502,7 +541,7 @@ void main() {
 
     test('decodes DE1 emulation with no settings', () {
       final report = NativeShapingReport.fromBytes(
-        _report(source: 3, block: List.filled(21, 0)),
+        _report(source: 3, block: List.filled(28, 0)),
       );
 
       expect(report.source, NativeShapingSource.inactive);
@@ -528,11 +567,37 @@ void main() {
       );
     });
 
-    test('ignores bytes 25-31', () {
-      expect(
-        NativeShapingReport.fromBytes(_report(tail: [1, 2, 3, 4, 5, 6, 7])),
-        NativeShapingReport.fromBytes(_report()),
-      );
+    test('reads bytes 25 and 26 as the filter and the flow ramp', () {
+      final block = List.of(_exampleBlock)
+        ..[21] = 0x19
+        ..[22] = 0x32;
+
+      final settings = NativeShapingReport.fromBytes(_report(block: block))
+          .settings!;
+
+      expect(settings.pressureFilterTau, 0.5);
+      expect(settings.flowRampTau, 1.0);
+    });
+
+    test('gives no settings when a byte in 27-31 is not 0', () {
+      for (var index = 23; index < 28; index++) {
+        final block = List.of(_exampleBlock)..[index] = 1;
+        expect(
+          NativeShapingReport.fromBytes(_report(block: block)).settings,
+          isNull,
+          reason: 'report byte ${index + 4}',
+        );
+      }
+    });
+
+    test('gives no settings for a version 1 block', () {
+      final v1Block = List.of(_exampleBlock)..[0] = 1;
+
+      final report = NativeShapingReport.fromBytes(_report(block: v1Block));
+
+      expect(report.source, NativeShapingSource.profile);
+      expect(report.settings, isNull);
+      expect(report.toJson().containsKey('settings'), isFalse);
     });
 
     test('keeps an unknown source or rule code as unknown', () {
@@ -548,7 +613,7 @@ void main() {
     });
 
     test('gives no settings for a block it cannot decode', () {
-      final badBlock = List.of(_exampleBlock)..[0] = 2;
+      final badBlock = List.of(_exampleBlock)..[0] = 3;
 
       expect(
         NativeShapingReport.fromBytes(_report(block: badBlock)).settings,
@@ -567,7 +632,7 @@ void main() {
       for (final bytes in [
         _report(flags: 1),
         _report(source: 2, rule: 10),
-        _report(source: 3, block: List.filled(21, 0)),
+        _report(source: 3, block: List.filled(28, 0)),
         _report(source: 9, rule: 42),
       ]) {
         final report = NativeShapingReport.fromBytes(bytes);
@@ -582,6 +647,7 @@ void main() {
         'refusalCode': 0,
         'latchCount': 7,
         'settingsRounded': false,
+        'acceptsBlockV2': false,
         'settings': _example(),
       });
     });

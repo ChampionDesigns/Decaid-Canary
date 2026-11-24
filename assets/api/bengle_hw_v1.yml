@@ -1,10 +1,23 @@
 # =============================================================================
 # Bengle firmware <-> app hardware contract (bengle_hw_v1.yml)
 # =============================================================================
-# contract_version: 5
+# contract_version: 6
 #
 # Generated from the firmware register table at firmware commit
 # ebb12ab36a571dd248319e946e89d09d41d366b7 (rev-list count 711).
+#
+# contract_version 6: the native shaping profile block is version 2 only (28
+# bytes); the firmware refuses version 1 with rule 1 (version). Block byte 0
+# version 2; byte 1 modes and point count; byte 2 flow tau; byte 3 pressure
+# tau; byte 4 pressure ramp tau; bytes 5-20 the points; byte 21 the pressure
+# goal filter tau; byte 22 flow ramp tau; bytes 23-27 reserved 0. Each tau is
+# U8, 0.02 s, 0-250. The app always writes the block to profile slots 21-24
+# (frame indexes 0x15-0x18), 7 bytes each, after the extension frames and
+# before the tail. Check order: version, modes, count, tau (bytes 2, 3, 21:
+# rule 4), ramp (bytes 4, 22: rule 5), unused (points, then bytes 23-27:
+# rule 6), curve. Row 66 bytes 4-31 hold the latched version 2 block. Row 66
+# byte 3 bit 1 is 1 on an image that accepts block version 2. Row 66 keeps
+# `since: unreleased`; the pin does not move.
 #
 # contract_version 5: adds row 66 NativeShapeLatched (read-only, 32 bytes),
 # with `since: unreleased`: no released firmware serves it yet, so the pin
@@ -87,13 +100,13 @@
 #     addresses is discarded).
 # =============================================================================
 
-contract_version: 5
+contract_version: 6
 firmware:
   commit: ebb12ab36a571dd248319e946e89d09d41d366b7
   build: 90
   source: the firmware register table
 generated: 2026-07-11
-updated: 2026-11-23 # contract_version 5: row 66 NativeShapeLatched
+updated: 2026-11-24 # contract_version 6: row 66 bytes 25-31, profile block version 2
 
 # -----------------------------------------------------------------------------
 # MMR register table
@@ -987,8 +1000,8 @@ registers:
     max: null
     unit: null
     since: unreleased
-    requires_firmware: "firmware newer than the pin (contract_version 5); not in a released build yet -- on firmware without it, reads fail and the app records no report"
-    semantics: "The native shaping settings that the machine latched for the shot. Byte n is at address 0x00803974 + n. Byte 0 source: 0 CLI values, 1 profile block, 2 CLI values because the profile block was refused, 3 DE1 emulation (latched but not used). Byte 1 block rule that refused the block: 0 none, 1 version, 2 mode code, 3 point count, 4 tau range, 5 ramp range, 6 unused bytes, 7 P range, 8 P rise, 9 Q range, 10 Q rise. Byte 2 latch count: +1 at each latch for a shot (espresso entry, or a re-latch after a profile upload in heat-up); the latches in the first second after boot do not count. Byte 3 flags: bit 0 = a CLI value is not on the wire step, so bytes 4-24 are rounded and can break the block rules (the app keeps the report with no settings). Bytes 4-24 the settings the shot runs with, in the profile block format (version 1), also for a CLI source. Bytes 25-31 zero. Read rule: read bytes 0-15 (Len 3 at 0x00803974) and bytes 16-31 (Len 3 at 0x00803984), then read bytes 0-15 again; equal byte 2 in the first and the last read means one latch, else start again (the app makes at most 3 passes). One Len 7 request gives the same 32 bytes in two reply frames (0x00803974, 0x00803984). The app reads it after the shot starts and accepts a latch count that differs from the count it read before the shot."
+    requires_firmware: "firmware newer than the pin (contract_version 6: the version 2 block in bytes 4-31); not in a released build yet -- on firmware without it, reads fail and the app records no report"
+    semantics: "The native shaping settings that the machine latched for the shot. Byte n is at address 0x00803974 + n. Byte 0 source: 0 CLI values, 1 profile block, 2 CLI values because the profile block was refused, 3 DE1 emulation (latched but not used). Byte 1 block rule that refused the block: 0 none, 1 version (every version but 2), 2 mode code, 3 point count, 4 tau range (flow, pressure, filter), 5 ramp range (pressure ramp, flow ramp), 6 unused bytes, 7 P range, 8 P rise, 9 Q range, 10 Q rise. Byte 2 latch count: +1 at each latch for a shot (espresso entry, or a re-latch after a profile upload in heat-up); the latches in the first second after boot do not count. Byte 3 flags: bit 0 = a CLI value is not on the wire step, so the settings in bytes 4-31 are rounded and can break the block rules (the app keeps the report with no settings); the bit covers the pressure goal filter tau too; bit 1 = this image accepts profile block version 2 (always 1 on such an image; information only, the app does not gate the upload on it). Bytes 4-31 the settings the shot runs with, as a version 2 profile block (28 bytes), also for a CLI source: byte 4 version 2, byte 8 pressure ramp tau, byte 25 the pressure goal filter tau, byte 26 flow ramp tau (each U8, 0.02 s, 0-250), bytes 27-31 zero. The app decodes only a version 2 block; any other version gives no settings. Read rule: read bytes 0-15 (Len 3 at 0x00803974) and bytes 16-31 (Len 3 at 0x00803984), then read bytes 0-15 again; equal byte 2 in the first and the last read means one latch, else start again (the app makes at most 3 passes). One Len 7 request gives the same 32 bytes in two reply frames (0x00803974, 0x00803984). The app reads it after the shot starts and accepts a latch count that differs from the count it read before the shot."
 
 # -----------------------------------------------------------------------------
 # 0xA013 BengleShotSample -- the sole shot/telemetry source on a Bengle

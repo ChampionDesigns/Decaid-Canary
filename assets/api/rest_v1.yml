@@ -1774,7 +1774,7 @@ paths:
         sends the key replaces the whole block, and `"native_shaping": null` removes it; a
         partial profile without the key keeps the block. A key that is absent inside a sent
         block takes its default, not the value of the stored block. A block that breaks a
-        rule returns `400`.
+        rule, or that has the retired `ramp_factor` key, returns `400`.
         The server does not debounce or combine separate requests. Machine side effects from
         workflow PUT requests do not execute concurrently,
         so a request may wait behind an in-flight machine operation. Each response describes
@@ -4321,7 +4321,10 @@ paths:
   /api/v1/profiles/import:
     post:
       summary: Import profiles
-      description: Batch import profiles from JSON array (e.g., from backup)
+      description: >
+        Batch import profiles from JSON array (e.g., from backup). A record
+        whose `native_shaping` block has the retired `ramp_factor` key imports
+        without the block, as a stored profile loads.
       tags: [Profiles]
       requestBody:
         required: true
@@ -7284,25 +7287,33 @@ components:
       type: object
       description: >
         Optional profile block with the native shaping settings of a Bengle:
-        the pump curve, the flow and pressure time constants and modes, and
-        the ramp factor. An absent or null block means no block, and the JSON
-        then has no `native_shaping` key. A key that is absent inside the
-        block takes its default. Decaid rounds each number half up to its wire
-        step first (0.02 for `flow_tau`, `pressure_tau` and `ramp_factor`;
-        0.1 for `pressure` and `flow`), then checks the rounded value, and
-        stores and returns the rounded value with every key. A value that
-        breaks a rule is refused with a `400` that names the field. The block
-        is part of the profile hash only when present, so a profile without
-        it keeps its ID and a change to the block makes a new profile ID.
-        Every machine stores the block. The profile upload sends the block to
-        frame slots 21-23 of a Bengle only: it is skipped on a DE1 and with
+        the pump curve, the flow and pressure time constants and modes, the
+        pressure goal filter, and the pressure and flow ramp time constants.
+        An absent or null block means no block, and the JSON then has no
+        `native_shaping` key. A key that is absent inside the block takes its
+        default. Decaid rounds each number half up to its wire step first
+        (0.02 for the five time constants; 0.1 for `pressure` and `flow`),
+        then checks the rounded value, and stores and returns the rounded
+        value with every key, also when it is 0. A value that breaks a rule
+        is refused with a `400` that names the field. The retired key
+        `ramp_factor` is refused with a `400` on input; a stored profile whose
+        block has it loads without the block. A shot or steam record keeps
+        such a block, and report settings in that format, as recorded, also
+        through an edit of the record. The block is part of the
+        profile hash only when present, so a profile without it keeps its ID
+        and a change to the block makes a new profile ID. Every machine stores
+        the block. The profile upload sends the block (version 2, 28 bytes) to
+        frame slots 21-24 of a Bengle only: it is skipped on a DE1 and with
         DE1 emulation on (tail byte 1). The upload never refuses a profile
         because of the block.
       properties:
         version:
           type: integer
-          enum: [1]
-          default: 1
+          enum: [2]
+          default: 2
+          description: >
+            The block version. Decaid accepts 2 or an absent key on input and
+            refuses every other value. Responses always give 2.
         pump_curve:
           type: array
           maxItems: 8
@@ -7345,14 +7356,29 @@ components:
           type: string
           enum: [both, rise, fall]
           default: both
-        ramp_factor:
+        pressure_filter_tau:
           type: number
           minimum: 0
-          maximum: 4
-          default: 1
-          description: Step 0.02.
+          maximum: 5
+          default: 0
+          description: >
+            Time constant in seconds, step 0.02, of the second filter on the
+            native pressure goal in fast pressure frames. It follows
+            `pressure_mode`. 0 turns it off.
+        pressure_ramp_tau:
+          type: number
+          minimum: 0
+          maximum: 5
+          default: 0
+          description: Pressure ramp time constant in seconds, step 0.02.
+        flow_ramp_tau:
+          type: number
+          minimum: 0
+          maximum: 5
+          default: 0
+          description: Flow ramp time constant in seconds, step 0.02.
       example:
-        version: 1
+        version: 2
         pump_curve:
           - {pressure: 1.0, flow: 20.0}
           - {pressure: 3.0, flow: 12.0}
@@ -7363,7 +7389,9 @@ components:
         flow_mode: both
         pressure_tau: 0.5
         pressure_mode: both
-        ramp_factor: 1.0
+        pressure_filter_tau: 0.0
+        pressure_ramp_tau: 1.0
+        flow_ramp_tau: 0.0
 
     NativeShapingReport:
       type: object
@@ -7371,8 +7399,9 @@ components:
         The native shaping that a Bengle reported for the shot. Decaid decodes
         it from the 32 bytes of the machine's native shaping report. An unknown
         source or refusal code reads as `unknown` and keeps its number in
-        `sourceCode` or `refusalCode`. Bytes 25-31 are ignored.
-      required: [source, sourceCode, refusal, refusalCode, latchCount, settingsRounded]
+        `sourceCode` or `refusalCode`. Bytes 4-31 hold the version 2 block.
+        A block with another version gives no `settings`.
+      required: [source, sourceCode, refusal, refusalCode, latchCount, settingsRounded, acceptsBlockV2]
       properties:
         source:
           type: string
@@ -7402,6 +7431,13 @@ components:
           description: >
             True when a machine setting was not on its wire step, so the
             settings are rounded.
+        acceptsBlockV2:
+          type: boolean
+          description: >
+            Bit 1 of byte 3 of the report: true when the machine image accepts
+            the version 2 profile block. Information only; Decaid uploads the
+            block either way, and an image that refuses it reports refusal
+            `version`. False in a record from before Decaid read this bit.
         settings:
           $ref: '#/components/schemas/NativeShaping'
           description: >
