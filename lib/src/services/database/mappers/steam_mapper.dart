@@ -9,7 +9,9 @@ import 'package:reaprime/src/services/database/database.dart' as db;
 
 class SteamMapper {
   static domain.SteamRecord fromRow(db.SteamRecord row) {
-    final workflow = domain_workflow.Workflow.fromStoredJson(row.workflowJson);
+    final workflow = domain_workflow.Workflow.fromRecordedJson(
+      row.workflowJson,
+    );
 
     ShotAnnotations? annotations;
     if (row.annotationsJson != null) {

@@ -7294,7 +7294,9 @@ components:
         value with every key, also when it is 0. A value that breaks a rule
         is refused with a `400` that names the field. The retired key
         `ramp_factor` is refused with a `400` on input; a stored profile whose
-        block has it loads without the block. The block is part of the
+        block has it loads without the block. A shot or steam record keeps
+        such a block, and report settings in that format, as recorded, also
+        through an edit of the record. The block is part of the
         profile hash only when present, so a profile without it keeps its ID
         and a change to the block makes a new profile ID. Every machine stores
         the block. The profile upload sends the block (version 2, 28 bytes) to

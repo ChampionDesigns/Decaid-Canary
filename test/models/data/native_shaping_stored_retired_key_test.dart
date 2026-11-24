@@ -127,4 +127,94 @@ void main() {
       );
     });
   });
+
+  group('a recorded block with ramp_factor is kept as recorded', () {
+    test('Profile.fromRecordedJson keeps the block raw, writes it back and '
+        'logs nothing', () {
+      final log = _captureProfileLog();
+
+      final profile = Profile.fromRecordedJson(_profileWith(_retiredBlock()));
+
+      expect(profile.nativeShaping, isNull);
+      expect(profile.retiredNativeShapingJson, _retiredBlock());
+      expect(profile.toJson()['native_shaping'], _retiredBlock());
+      expect(log, isEmpty);
+    });
+
+    test('a kept block makes the profile differ from one without it', () {
+      final kept = Profile.fromRecordedJson(_profileWith(_retiredBlock()));
+      final without = Profile.fromRecordedJson(_bundledJson());
+
+      expect(kept, isNot(without));
+    });
+
+    test('copyWith keeps the raw block until a new block replaces it or it '
+        'is cleared', () {
+      final kept = Profile.fromRecordedJson(_profileWith(_retiredBlock()));
+      final block = NativeShaping.fromJson({'flow_ramp_tau': 0.5});
+
+      expect(
+        kept.copyWith(title: 'x').toJson()['native_shaping'],
+        _retiredBlock(),
+      );
+      expect(
+        kept.copyWith(nativeShaping: block).toJson()['native_shaping'],
+        block.toJson(),
+      );
+      expect(
+        kept.copyWith(clearNativeShaping: true).toJson(),
+        isNot(contains('native_shaping')),
+      );
+    });
+
+    test('Workflow.fromRecordedJson round-trips the block through JSON', () {
+      final json = _workflowWith(_retiredBlock());
+
+      final workflow = domain.Workflow.fromRecordedJson(json);
+      final again = domain.Workflow.fromRecordedJson(
+        jsonDecode(jsonEncode(workflow.toJson())) as Map<String, dynamic>,
+      );
+
+      expect(
+        (again.toJson()['profile'] as Map)['native_shaping'],
+        _retiredBlock(),
+      );
+    });
+
+    test('a report with version 1 settings keeps them raw and gives no '
+        'decoded settings', () {
+      final json = {
+        'sourceCode': 1,
+        'refusalCode': 0,
+        'latchCount': 3,
+        'settingsRounded': false,
+        'settings': _retiredBlock(),
+      };
+
+      final report = NativeShapingReport.fromJson(json);
+
+      expect(report.settings, isNull);
+      expect(report.retiredSettingsJson, _retiredBlock());
+      expect(report.toJson()['settings'], _retiredBlock());
+      expect(
+        NativeShapingReport.fromJson(
+          jsonDecode(jsonEncode(report.toJson())) as Map<String, dynamic>,
+        ),
+        report,
+      );
+    });
+
+    test('an inactive report drops its settings, as fromBytes does', () {
+      final report = NativeShapingReport.fromJson({
+        'sourceCode': 3,
+        'refusalCode': 0,
+        'latchCount': 3,
+        'settingsRounded': false,
+        'settings': _retiredBlock(),
+      });
+
+      expect(report.retiredSettingsJson, isNull);
+      expect(report.toJson(), isNot(contains('settings')));
+    });
+  });
 }

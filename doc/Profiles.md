@@ -185,7 +185,10 @@ stores 2.
 The key `ramp_factor` is retired. A request that sends it in a block, on PUT
 `/api/v1/workflow` or POST `/api/v1/profiles`, returns `400`. A stored profile
 or workflow whose block has it loads without the block, and Decaid logs one
-line.
+line. A shot or steam record keeps such a block as it was recorded: the profile
+block and the report `settings` read with no decoded settings, but an edit of
+the record (for example its notes) writes them back unchanged. When a recorded
+workflow becomes the current workflow (repeat a shot), it loses the block.
 
 `NativeShaping.fromJson` rounds each number half up to its wire step first
 (a decimal half step such as `0.29` s rounds up to `0.30` s),

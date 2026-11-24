@@ -37,10 +37,17 @@ class WorkflowController extends ChangeNotifier {
   int get revision => _revision;
 
   void setWorkflow(Workflow newWorkflow) {
-    _currentWorkflow = newWorkflow;
+    _currentWorkflow = _withoutRetiredBlock(newWorkflow);
     _revision++;
     notifyListeners();
   }
+
+  static Workflow _withoutRetiredBlock(Workflow workflow) =>
+      workflow.profile.retiredNativeShapingJson == null
+      ? workflow
+      : workflow.copyWith(
+          profile: workflow.profile.copyWith(clearNativeShaping: true),
+        );
 
   bool setWorkflowIfRevision(Workflow newWorkflow, int expectedRevision) {
     if (_revision != expectedRevision) return false;
@@ -57,14 +64,16 @@ class WorkflowController extends ChangeNotifier {
     HotWaterData? hotWaterData,
     RinseData? rinseData,
   }) {
-    _currentWorkflow = _currentWorkflow.copyWith(
-      name: name,
-      description: description,
-      profile: profile,
-      context: context,
-      steamSettings: steamSettings,
-      hotWaterData: hotWaterData,
-      rinseData: rinseData,
+    _currentWorkflow = _withoutRetiredBlock(
+      _currentWorkflow.copyWith(
+        name: name,
+        description: description,
+        profile: profile,
+        context: context,
+        steamSettings: steamSettings,
+        hotWaterData: hotWaterData,
+        rinseData: rinseData,
+      ),
     );
     _revision++;
     notifyListeners();

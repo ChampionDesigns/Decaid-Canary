@@ -439,6 +439,7 @@ class NativeShapingReport extends Equatable {
   final bool settingsRounded;
   final bool acceptsBlockV2;
   final NativeShaping? settings;
+  final Map<String, dynamic>? retiredSettingsJson;
 
   const NativeShapingReport({
     required this.sourceCode,
@@ -447,6 +448,7 @@ class NativeShapingReport extends Equatable {
     required this.settingsRounded,
     this.acceptsBlockV2 = false,
     required this.settings,
+    this.retiredSettingsJson,
   });
 
   NativeShapingSource get source => NativeShapingSource.fromCode(sourceCode);
@@ -495,18 +497,23 @@ class NativeShapingReport extends Equatable {
   factory NativeShapingReport.fromJson(Map<String, dynamic> json) {
     final sourceCode = json['sourceCode'] as int;
     final settings = json['settings'];
+    final readSettings =
+        NativeShapingSource.fromCode(sourceCode) !=
+            NativeShapingSource.inactive &&
+        settings is Map;
+    final decoded = readSettings
+        ? _jsonSettingsOrNull(Map<String, dynamic>.from(settings))
+        : null;
     return NativeShapingReport(
       sourceCode: sourceCode,
       refusalCode: json['refusalCode'] as int,
       latchCount: json['latchCount'] as int,
       settingsRounded: json['settingsRounded'] == true,
       acceptsBlockV2: json['acceptsBlockV2'] == true,
-      settings:
-          NativeShapingSource.fromCode(sourceCode) ==
-                  NativeShapingSource.inactive ||
-              settings is! Map
-          ? null
-          : _jsonSettingsOrNull(Map<String, dynamic>.from(settings)),
+      settings: decoded,
+      retiredSettingsJson: readSettings && decoded == null
+          ? Map<String, dynamic>.from(settings)
+          : null,
     );
   }
 
@@ -528,7 +535,10 @@ class NativeShapingReport extends Equatable {
     'latchCount': latchCount,
     'settingsRounded': settingsRounded,
     'acceptsBlockV2': acceptsBlockV2,
-    if (settings != null) 'settings': settings!.toJson(),
+    if (settings != null)
+      'settings': settings!.toJson()
+    else if (retiredSettingsJson != null)
+      'settings': retiredSettingsJson,
   };
 
   @override
@@ -539,5 +549,6 @@ class NativeShapingReport extends Equatable {
     settingsRounded,
     acceptsBlockV2,
     settings,
+    retiredSettingsJson,
   ];
 }
