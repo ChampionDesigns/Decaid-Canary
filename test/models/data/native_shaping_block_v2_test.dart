@@ -401,4 +401,54 @@ void main() {
       );
     });
   });
+
+  group('reg 66 byte 3 bit 1: the image accepts block version 2', () {
+    test('bit set gives acceptsBlockV2 true, written to JSON', () {
+      final report = NativeShapingReport.fromBytes(_report(_g3, flags: 0x02));
+
+      expect(report.acceptsBlockV2, isTrue);
+      expect(report.settingsRounded, isFalse);
+      expect(report.toJson()['acceptsBlockV2'], isTrue);
+    });
+
+    test('bit clear gives acceptsBlockV2 false, written to JSON', () {
+      final report = NativeShapingReport.fromBytes(_report(_g3));
+
+      expect(report.acceptsBlockV2, isFalse);
+      expect(report.toJson()['acceptsBlockV2'], isFalse);
+    });
+
+    test('flags 0x03 give rounded and acceptsBlockV2, with settings', () {
+      final report = NativeShapingReport.fromBytes(_report(_g3, flags: 0x03));
+
+      expect(report.settingsRounded, isTrue);
+      expect(report.acceptsBlockV2, isTrue);
+      expect(report.settings?.pressureFilterTau, 0.5);
+    });
+
+    test('the flag reads also when the source is inactive', () {
+      final report = NativeShapingReport.fromBytes(
+        _report(const [], source: 3, flags: 0x02),
+      );
+
+      expect(report.source, NativeShapingSource.inactive);
+      expect(report.acceptsBlockV2, isTrue);
+    });
+
+    test(
+      'fromJson keeps the flag, and a record without the key reads false',
+      () {
+        final report = NativeShapingReport.fromBytes(_report(_g3, flags: 0x03));
+        final json =
+            jsonDecode(jsonEncode(report.toJson())) as Map<String, dynamic>;
+
+        expect(NativeShapingReport.fromJson(json), report);
+        expect(
+          NativeShapingReport.fromJson(json..remove('acceptsBlockV2'))
+              .acceptsBlockV2,
+          isFalse,
+        );
+      },
+    );
+  });
 }

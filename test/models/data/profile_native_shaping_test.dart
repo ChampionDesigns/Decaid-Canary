@@ -647,6 +647,7 @@ void main() {
         'refusalCode': 0,
         'latchCount': 7,
         'settingsRounded': false,
+        'acceptsBlockV2': false,
         'settings': _example(),
       });
     });

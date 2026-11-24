@@ -423,7 +423,9 @@ title and find both kinds of shot.
 the native shaping that a Bengle reported for the shot: `source` (`cli`,
 `profile`, `cliBlockRefused`, `inactive` or `unknown`), `sourceCode`, `refusal`
 (the rule that refused the profile block, or `none`), `refusalCode`,
-`latchCount`, `settingsRounded`, and `settings` in the `native_shaping` format
+`latchCount`, `settingsRounded`, `acceptsBlockV2` (the machine image accepts
+the version 2 profile block; false in a record from before Decaid read it), and
+`settings` in the `native_shaping` format
 of `doc/Profiles.md`. The app reads the report from a Bengle after the machine
 enters espresso, and once more later in the shot if the first read gives
 nothing. After a profile upload during the shot, the app reads it again, and a

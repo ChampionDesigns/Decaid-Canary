@@ -7396,7 +7396,7 @@ components:
         source or refusal code reads as `unknown` and keeps its number in
         `sourceCode` or `refusalCode`. Bytes 4-31 hold the version 2 block.
         A block with another version gives no `settings`.
-      required: [source, sourceCode, refusal, refusalCode, latchCount, settingsRounded]
+      required: [source, sourceCode, refusal, refusalCode, latchCount, settingsRounded, acceptsBlockV2]
       properties:
         source:
           type: string
@@ -7426,6 +7426,13 @@ components:
           description: >
             True when a machine setting was not on its wire step, so the
             settings are rounded.
+        acceptsBlockV2:
+          type: boolean
+          description: >
+            Bit 1 of byte 3 of the report: true when the machine image accepts
+            the version 2 profile block. Information only; Decaid uploads the
+            block either way, and an image that refuses it reports refusal
+            `version`. False in a record from before Decaid read this bit.
         settings:
           $ref: '#/components/schemas/NativeShaping'
           description: >

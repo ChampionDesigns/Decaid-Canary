@@ -431,11 +431,13 @@ class NativeShapingReport extends Equatable {
   static const length = 32;
   static const _settingsOffset = 4;
   static const _roundedFlag = 0x01;
+  static const _acceptsBlockV2Flag = 0x02;
 
   final int sourceCode;
   final int refusalCode;
   final int latchCount;
   final bool settingsRounded;
+  final bool acceptsBlockV2;
   final NativeShaping? settings;
 
   const NativeShapingReport({
@@ -443,6 +445,7 @@ class NativeShapingReport extends Equatable {
     required this.refusalCode,
     required this.latchCount,
     required this.settingsRounded,
+    this.acceptsBlockV2 = false,
     required this.settings,
   });
 
@@ -462,6 +465,7 @@ class NativeShapingReport extends Equatable {
       refusalCode: bytes[1],
       latchCount: bytes[2],
       settingsRounded: bytes[3] & _roundedFlag != 0,
+      acceptsBlockV2: bytes[3] & _acceptsBlockV2Flag != 0,
       settings:
           NativeShapingSource.fromCode(bytes[0]) == NativeShapingSource.inactive
           ? null
@@ -496,6 +500,7 @@ class NativeShapingReport extends Equatable {
       refusalCode: json['refusalCode'] as int,
       latchCount: json['latchCount'] as int,
       settingsRounded: json['settingsRounded'] == true,
+      acceptsBlockV2: json['acceptsBlockV2'] == true,
       settings:
           NativeShapingSource.fromCode(sourceCode) ==
                   NativeShapingSource.inactive ||
@@ -522,6 +527,7 @@ class NativeShapingReport extends Equatable {
     'refusalCode': refusalCode,
     'latchCount': latchCount,
     'settingsRounded': settingsRounded,
+    'acceptsBlockV2': acceptsBlockV2,
     if (settings != null) 'settings': settings!.toJson(),
   };
 
@@ -531,6 +537,7 @@ class NativeShapingReport extends Equatable {
     refusalCode,
     latchCount,
     settingsRounded,
+    acceptsBlockV2,
     settings,
   ];
 }
