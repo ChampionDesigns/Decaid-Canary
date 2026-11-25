@@ -16,7 +16,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Another Decide app is running'), findsOneWidget);
+    expect(find.text('Another Decaid Lab app is running'), findsOneWidget);
     expect(find.textContaining('Port 8080 is already in use'), findsOneWidget);
     expect(find.text('Check again'), findsOneWidget);
     expect(find.text('Close this app'), findsOneWidget);
@@ -38,15 +38,16 @@ void main() {
     expect(find.byType(OutlinedButton), findsNothing);
   });
 
-  testWidgets('WebServerPortConflictApp is rooted in the Decide Shad theme', (
-    tester,
-  ) async {
-    await tester.pumpWidget(const WebServerPortConflictApp(port: 8080));
+  testWidgets(
+    'WebServerPortConflictApp is rooted in the Decaid Lab Shad theme',
+    (tester) async {
+      await tester.pumpWidget(const WebServerPortConflictApp(port: 8080));
 
-    expect(find.byType(ShadApp), findsOneWidget);
-    final context = tester.element(find.byType(WebServerPortConflictScreen));
-    expect(ShadTheme.of(context).colorScheme, isA<DecentColorScheme>());
-  });
+      expect(find.byType(ShadApp), findsOneWidget);
+      final context = tester.element(find.byType(WebServerPortConflictScreen));
+      expect(ShadTheme.of(context).colorScheme, isA<DecentColorScheme>());
+    },
+  );
 
   testWidgets('says the port is still in use when the probe says so', (
     tester,

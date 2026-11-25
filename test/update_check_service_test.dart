@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:reaprime/build_info.dart';
 import 'package:reaprime/src/plugins/plugin_loader_service.dart';
 import 'package:reaprime/src/plugins/plugin_source_service.dart';
@@ -39,7 +41,7 @@ class _RecordingWebUIStorage extends WebUIStorage {
 }
 
 class _FakeUpdater extends AndroidUpdater {
-  _FakeUpdater() : super(owner: 'ChampionDesigns', repo: 'Decaid-Canary');
+  _FakeUpdater() : super(owner: 'ChampionDesigns', repo: 'Decaid-Lab');
 
   UpdateInfo? nextCheck;
   bool throwOnCheck = false;
@@ -126,6 +128,36 @@ void main() {
   }
 
   group('checkForUpdate', () {
+    test(
+      'the default updater asks GitHub for the Decaid-Lab releases',
+      () async {
+        final requested = <String>[];
+        final settings = MockSettingsService();
+        final svc = UpdateCheckService(
+          settingsService: settings,
+          webUIStorage: WebUIStorage(SettingsController(settings)),
+          httpClient: MockClient((request) async {
+            requested.add(request.url.toString());
+            return http.Response('[]', 200);
+          }),
+          platformIsAndroid: true,
+          platformIsMacOS: false,
+          externallyManaged: false,
+        );
+
+        await svc.checkForUpdate();
+
+        expect(requested, [
+          'https://api.github.com/repos/ChampionDesigns/Decaid-Lab/releases',
+        ]);
+        expect(
+          svc.getReleasesUrl(),
+          'https://github.com/ChampionDesigns/Decaid-Lab/releases',
+        );
+        svc.dispose();
+      },
+    );
+
     test('uses the selected update channel', () async {
       final svc = build();
       await settingsService.setUpdateChannel(UpdateChannel.beta);
@@ -170,7 +202,7 @@ void main() {
 
       expect(
         svc.getReleaseUrl(_update(version: '1.2.3')),
-        'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/v1.2.3',
+        'https://github.com/ChampionDesigns/Decaid-Lab/releases/tag/v1.2.3',
       );
       svc.dispose();
     });

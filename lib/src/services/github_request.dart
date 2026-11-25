@@ -55,7 +55,7 @@ Future<http.Response> githubGet(
   }
   final requestHeaders = {
     'Accept': 'application/vnd.github.v3+json',
-    'User-Agent': 'Decide',
+    'User-Agent': 'Decaid-Lab',
     ...headers,
   };
   final response = client == null

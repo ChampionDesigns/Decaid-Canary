@@ -40,7 +40,7 @@ done
 mkdir -p "${OUTDIR}"
 OUTDIR="$(cd "${OUTDIR}" && pwd)"
 
-CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/decaid-canary-appimage"
+CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/decaid-lab-appimage"
 TOOLS_DIR="${CACHE_DIR}/tools-${ARCH}"
 mkdir -p "${CACHE_DIR}"
 
@@ -73,13 +73,13 @@ export PATH="${TOOLS_DIR}/bin:${PATH}"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
-APPDIR="${WORK_DIR}/Decide.AppDir"
+APPDIR="${WORK_DIR}/Decaid-Lab.AppDir"
 mkdir -p "${APPDIR}/usr/lib/decaid-canary"
 cp -a "${BUNDLE}/." "${APPDIR}/usr/lib/decaid-canary/"
 install -m 0755 "${APPRUN}" "${APPDIR}/AppRun"
 install -m 0644 "${ICON}" "${APPDIR}/.DirIcon"
 
-OUTPUT="${OUTDIR}/decaid-canary-linux-${ARCH}-${VERSION}.AppImage"
+OUTPUT="${OUTDIR}/decaid-lab-linux-${ARCH}-${VERSION}.AppImage"
 export ARCH
 export DEPLOY_GTK_VERSION=3
 export OUTPUT

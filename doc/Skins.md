@@ -4336,4 +4336,4 @@ Once your skin is ready for public use:
 - Decaid will auto-download and check for updates
 - Uses HTTP headers for efficient version detection
 
-For questions or issues, open an issue on the [Decaid-Canary GitHub repository](https://github.com/ChampionDesigns/Decaid-Canary).
+For questions or issues, open an issue on the [Decaid Lab GitHub repository](https://github.com/ChampionDesigns/Decaid-Lab).

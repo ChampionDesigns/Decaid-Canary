@@ -11,6 +11,11 @@ import 'package:reaprime/src/services/github_rate_limit.dart';
 import 'package:reaprime/src/services/github_request.dart';
 import 'package:reaprime/src/util/remote_error.dart';
 
+const releaseRepoOwner = 'ChampionDesigns';
+const releaseRepoName = 'Decaid-Lab';
+const releasesPageUrl =
+    'https://github.com/$releaseRepoOwner/$releaseRepoName/releases';
+
 class UpdateInfo {
   final String version;
   final String downloadUrl;

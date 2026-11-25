@@ -446,7 +446,7 @@ class SettingsView extends StatelessWidget {
           title: const Text('Auto-update unavailable'),
           content: const Text(
             'The built-in updater could not be configured on this Mac. '
-            'Download the latest Decide build from GitHub Releases.',
+            'Download the latest Decaid Lab build from GitHub Releases.',
           ),
           actions: [
             TextButton(
@@ -456,11 +456,7 @@ class SettingsView extends StatelessWidget {
             ElevatedButton(
               onPressed: () async {
                 Navigator.of(dialogContext).pop();
-                await launchUrl(
-                  Uri.parse(
-                    'https://github.com/ChampionDesigns/Decaid-Canary/releases',
-                  ),
-                );
+                await launchUrl(Uri.parse(releasesPageUrl));
               },
               child: const Text('Open Releases'),
             ),
@@ -483,8 +479,8 @@ class SettingsView extends StatelessWidget {
       if (updateInfo != null) {
         if (Platform.isAndroid) {
           final updater = AndroidUpdater(
-            owner: 'ChampionDesigns',
-            repo: 'Decaid-Canary',
+            owner: releaseRepoOwner,
+            repo: releaseRepoName,
           );
           final releaseUrl = updateCheckService?.getReleaseUrl(updateInfo);
           await showDialog(

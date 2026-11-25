@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Decide</string>
+	<string>Decaid Lab</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Decide</string>
+	<string>Decaid Lab</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -27,7 +27,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Decide connects to your DE1 espresso machine and scales over Bluetooth to control shots and read live data.</string>
+	<string>Decaid Lab connects to your DE1 espresso machine and scales over Bluetooth to control shots and read live data.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Needed for local storage</string>
 	<key>NSDownloadsFolderUsageDescription</key>
@@ -35,7 +35,7 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2025-2026 Decent Espresso. Licensed under GPL v3.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Decide uses your local network to reach your espresso machine and scales, and to find nearby wireless scales.</string>
+	<string>Decaid Lab uses your local network to reach your espresso machine and scales, and to find nearby wireless scales.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_decentscale._tcp</string>

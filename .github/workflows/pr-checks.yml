@@ -236,7 +236,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APPIMAGE="$RUNNER_TEMP/decaid-canary-linux-x86_64-0.0.0-test.AppImage"
+          APPIMAGE="$RUNNER_TEMP/decaid-lab-linux-x86_64-0.0.0-test.AppImage"
           scripts/verify_appimage.sh "$APPIMAGE" x86-64
 
   tools:

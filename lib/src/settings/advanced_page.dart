@@ -278,7 +278,7 @@ class AdvancedPage extends StatelessWidget {
                     color: Theme.of(context).colorScheme.error,
                   ),
                   title: Text(
-                    'Exit Decide',
+                    'Exit Decaid Lab',
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                     ),
