@@ -1,7 +1,7 @@
 import Cocoa
 import FlutterMacOS
 import XCTest
-@testable import Decide
+@testable import Decaid_Lab
 
 @MainActor
 private final class FakeUpdaterController: SPUUpdaterControlling {

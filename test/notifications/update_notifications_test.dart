@@ -121,11 +121,11 @@ void main() {
     },
   );
 
-  test('the notice for an available update names the app Decide', () async {
+  test('the notice for an available update names the app Decaid Lab', () async {
     updater.next = update('99.0.0');
     await service.checkForUpdate();
     await updates.settled;
-    expect(center.value.single.sourceName, 'Decide');
+    expect(center.value.single.sourceName, 'Decaid Lab');
   });
 
   test('startup without a check and network failure retain unconfirmed saved notices', () async {
@@ -290,7 +290,7 @@ void main() {
           NativeNotification(
             namespace: NotificationNamespace.host,
             sourceId: UpdateNotifications.sourceId,
-            sourceName: 'Decide',
+            sourceName: 'Decaid Lab',
             id: version,
             message: 'Update available: $version',
           ),

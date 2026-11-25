@@ -634,7 +634,7 @@ void main() {
 
     expect(await upload(service), AppLogUploadResult.failed);
     expect(service.uploading, isFalse);
-    expect(service.lastResult, 'Upload failed; Decide will retry later');
+    expect(service.lastResult, 'Upload failed; Decaid Lab will retry later');
   });
 
   test('aborts stalled requests before reporting failure', () async {

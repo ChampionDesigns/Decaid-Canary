@@ -2,7 +2,7 @@
 
 Thanks for contributing. This guide tells you what's required to land a PR — items marked **(required)** are hard gates, not suggestions.
 
-> **Naming note:** The display name is **Decaid-Canary** (canary fork of upstream Decaid). The Dart package, database, and plugin extension retain legacy identifiers for compatibility; platform bundle IDs are fork-owned (`com.decentespresso.decaid.canary` Android, `com.decentespresso.decaid-canary` Apple/Linux). See the naming table in [`AGENTS.md`](AGENTS.md) before renaming anything.
+> **Naming note:** The display name is **Decaid Lab** (canary fork of upstream Decaid). The Dart package, database, and plugin extension retain legacy identifiers for compatibility; platform bundle IDs are fork-owned (`com.decentespresso.decaid.canary` Android, `com.decentespresso.decaid-canary` Apple/Linux). See the naming table in [`AGENTS.md`](AGENTS.md) before renaming anything.
 
 ## Quick Reference
 
@@ -40,7 +40,7 @@ See [`CLAUDE.md`](CLAUDE.md) for the full command reference.
 
 ## Branching & PRs
 
-- Branch from `main`. Push to your fork, open a PR against `ChampionDesigns/Decaid-Canary:main`.
+- Branch from `main`. Push to your fork, open a PR against `ChampionDesigns/Decaid-Lab:main`.
 - One feature or fix per PR. No bundling unrelated changes.
 - External contributions must reference an **open, accepted issue** using `Fixes #123`, `Closes #123`, `Resolves #123`, or `Related #123`. The issue must carry either the `ready-for-agent` or `ready-for-human` label when the PR is opened.
 - Do not finish an implementation first and then open an issue only to satisfy the PR gate. The issue-first process exists so the proposed change can be considered before code review becomes necessary.

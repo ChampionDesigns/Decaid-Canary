@@ -101,13 +101,13 @@ jobs:
         run: |
           APK=build/app/outputs/flutter-apk/app-release.apk
           test -f "$APK"
-          cp "$APK" decaid-canary-android-develop-${{ steps.build-id.outputs.short_sha }}.apk
+          cp "$APK" decaid-lab-android-develop-${{ steps.build-id.outputs.short_sha }}.apk
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-canary-android-develop
-          path: decaid-canary-android-develop-${{ steps.build-id.outputs.short_sha }}.apk
+          name: decaid-lab-android-develop
+          path: decaid-lab-android-develop-${{ steps.build-id.outputs.short_sha }}.apk
           if-no-files-found: error
 
   build-macos:
@@ -155,13 +155,13 @@ jobs:
       - name: Create development ZIP
         run: |
           cd build/macos/Build/Products/Release
-          ditto -c -k --keepParent Decide.app ../../../../../decaid-canary-macos-develop-${{ steps.build-id.outputs.short_sha }}.zip
+          ditto -c -k --keepParent "Decaid Lab.app" ../../../../../decaid-lab-macos-develop-${{ steps.build-id.outputs.short_sha }}.zip
 
       - name: Upload macOS app
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-canary-macos-develop
-          path: decaid-canary-macos-develop-${{ steps.build-id.outputs.short_sha }}.zip
+          name: decaid-lab-macos-develop
+          path: decaid-lab-macos-develop-${{ steps.build-id.outputs.short_sha }}.zip
           if-no-files-found: error
 
   build-linux:
@@ -207,13 +207,13 @@ jobs:
       - name: Create Linux archive
         run: |
           cd build/linux/x64/release
-          tar -czf ../../../../decaid-canary-linux-x64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz bundle
+          tar -czf ../../../../decaid-lab-linux-x64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz bundle
 
       - name: Upload Linux app
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-canary-linux-x64-develop
-          path: decaid-canary-linux-x64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz
+          name: decaid-lab-linux-x64-develop
+          path: decaid-lab-linux-x64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz
           if-no-files-found: error
 
   build-raspberrypi:
@@ -266,13 +266,13 @@ jobs:
       - name: Create Raspberry Pi archive
         run: |
           cd build/linux/arm64/release
-          tar -czf ../../../../decaid-canary-linux-arm64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz bundle
+          tar -czf ../../../../decaid-lab-linux-arm64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz bundle
 
       - name: Upload Raspberry Pi build (ARM64)
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-canary-linux-arm64-develop
-          path: decaid-canary-linux-arm64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz
+          name: decaid-lab-linux-arm64-develop
+          path: decaid-lab-linux-arm64-develop-${{ steps.build-id.outputs.short_sha }}.tar.gz
           if-no-files-found: error
 
   build-ios:
@@ -326,7 +326,7 @@ jobs:
       - name: Package unsigned IPA
         run: |
           APP_PATH="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
-          OUTPUT_PATH="$GITHUB_WORKSPACE/decaid-canary-ios-unsigned-develop-${{ steps.build-id.outputs.short_sha }}.ipa"
+          OUTPUT_PATH="$GITHUB_WORKSPACE/decaid-lab-ios-unsigned-develop-${{ steps.build-id.outputs.short_sha }}.ipa"
           PACKAGE_DIR="$RUNNER_TEMP/unsigned-ipa"
 
           test -d "$APP_PATH"
@@ -341,8 +341,8 @@ jobs:
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-canary-ios-unsigned-develop
-          path: decaid-canary-ios-unsigned-develop-${{ steps.build-id.outputs.short_sha }}.ipa
+          name: decaid-lab-ios-unsigned-develop
+          path: decaid-lab-ios-unsigned-develop-${{ steps.build-id.outputs.short_sha }}.ipa
           if-no-files-found: error
 
 
@@ -395,13 +395,13 @@ jobs:
 
       - name: Create Windows archive
         shell: pwsh
-        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath decaid-canary-windows-x64-develop-${{ steps.build-id.outputs.short_sha }}.zip
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath decaid-lab-windows-x64-develop-${{ steps.build-id.outputs.short_sha }}.zip
 
       - name: Upload Windows app
         uses: actions/upload-artifact@v7
         with:
-          name: decaid-canary-windows-x64-develop
-          path: decaid-canary-windows-x64-develop-${{ steps.build-id.outputs.short_sha }}.zip
+          name: decaid-lab-windows-x64-develop
+          path: decaid-lab-windows-x64-develop-${{ steps.build-id.outputs.short_sha }}.zip
           if-no-files-found: error
 
 

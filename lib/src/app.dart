@@ -265,8 +265,8 @@ class _MyAppState extends State<MyApp> {
     final context = NavigationService.context;
     if (context == null || !context.mounted) return;
     final updater = AndroidUpdater(
-      owner: 'ChampionDesigns',
-      repo: 'Decaid-Canary',
+      owner: releaseRepoOwner,
+      repo: releaseRepoName,
     );
     try {
       await showDialog<void>(
@@ -392,7 +392,7 @@ class _MyAppState extends State<MyApp> {
 
             supportedLocales: const [Locale('en', '')],
 
-            onGenerateTitle: (BuildContext context) => "Decide",
+            onGenerateTitle: (BuildContext context) => "Decaid Lab",
             theme: ShadThemeData(
               colorScheme: DecentColorScheme.light(),
               brightness: Brightness.light,

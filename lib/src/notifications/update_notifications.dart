@@ -89,7 +89,7 @@ class UpdateNotifications {
       NativeNotification(
         namespace: NotificationNamespace.host,
         sourceId: sourceId,
-        sourceName: 'Decide',
+        sourceName: 'Decaid Lab',
         id: update.version,
         message: 'Update available: ${update.version}',
         actions: [

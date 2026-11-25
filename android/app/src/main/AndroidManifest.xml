@@ -45,7 +45,7 @@
 
     <application
         android:usesCleartextTraffic="true"
-        android:label="Decide"
+        android:label="Decaid Lab"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon"
         android:roundIcon="@mipmap/launcher_icon"

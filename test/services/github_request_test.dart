@@ -56,7 +56,7 @@ void main() {
           () => MockClient((request) async {
             requests++;
             expect(request.headers['accept'], 'application/vnd.github.v3+json');
-            expect(request.headers['user-agent'], 'Decide');
+            expect(request.headers['user-agent'], 'Decaid-Lab');
             if (requests > 1) return http.Response('{"sha":"abc"}', 200);
             return http.Response(
               'quota exceeded',

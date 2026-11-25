@@ -1,13 +1,13 @@
-# Release Guide (Decaid-Canary)
+# Release Guide (Decaid Lab)
 
-This document describes how to create releases for the **Decaid-Canary** fork.
+This document describes how to create releases for the **Decaid Lab** fork.
 
 ## Overview
 
-Decaid-Canary is a canary fork of upstream Decaid. Releases are artifact-only:
+Decaid Lab is a canary fork of upstream Decaid. Releases are artifact-only:
 no Apple Developer ID / notarization, no TestFlight upload, and no Sparkle
 auto-update feed. Android APKs are signed in CI; every artifact is published to
-the `ChampionDesigns/Decaid-Canary` GitHub Release for manual download.
+the `ChampionDesigns/Decaid-Lab` GitHub Release for manual download.
 
 Signing exceptions:
 
@@ -23,7 +23,7 @@ Signing exceptions:
 
 ## Creating a Release
 
-Decaid-Canary uses git tags to trigger automatic releases. When you push a tag,
+Decaid Lab uses git tags to trigger automatic releases. When you push a tag,
 GitHub Actions will:
 
 1. Build all supported platforms (Android signed; other platforms unsigned)
@@ -39,55 +39,55 @@ Each tagged release attaches these files:
 
 | Platform | Artifact | Install |
 | --- | --- | --- |
-| macOS (Intel + Apple Silicon) | `decaid-canary-macos-<version>.dmg` | Open the DMG and drag Decide to Applications. Unsigned; right-click > Open on first launch. |
-| macOS (portable) | `decaid-canary-macos-<version>.zip` | Extract and run `Decide.app`. |
-| Windows x64 | `decaid-canary-windows-x64-<version>.zip` | Extract the whole ZIP and run `Decide.exe`. Portable and unsigned; the VC++ runtime is bundled. |
-| Linux x86_64 | `decaid-canary-linux-x86_64-<version>.AppImage` | `chmod +x` and run. No installation needed. |
-| Linux ARM64 | `decaid-canary-linux-aarch64-<version>.AppImage` | `chmod +x` and run. No installation needed. |
-| Linux portable | `decaid-canary-linux-x64-<version>.tar.gz`, `decaid-canary-linux-arm64-<version>.tar.gz` | Extract and run `decaid-canary` from the bundle directory. |
-| Android | `decaid-canary-android-<version>.apk` | Install directly; it is signed with the canary key. |
-| iOS | `decaid-canary-ios-unsigned-<version>.ipa` | Sign with your own provisioning profile before installing. |
+| macOS (Intel + Apple Silicon) | `decaid-lab-macos-<version>.dmg` | Open the DMG and drag Decaid Lab to Applications. Unsigned; right-click > Open on first launch. |
+| macOS (portable) | `decaid-lab-macos-<version>.zip` | Extract and run `Decaid Lab.app`. |
+| Windows x64 | `decaid-lab-windows-x64-<version>.zip` | Extract the whole ZIP and run `Decaid-Lab.exe`. Portable and unsigned; the VC++ runtime is bundled. |
+| Linux x86_64 | `decaid-lab-linux-x86_64-<version>.AppImage` | `chmod +x` and run. No installation needed. |
+| Linux ARM64 | `decaid-lab-linux-aarch64-<version>.AppImage` | `chmod +x` and run. No installation needed. |
+| Linux portable | `decaid-lab-linux-x64-<version>.tar.gz`, `decaid-lab-linux-arm64-<version>.tar.gz` | Extract and run `decaid-canary` from the bundle directory. |
+| Android | `decaid-lab-android-<version>.apk` | Install directly; it is signed with the canary key. |
+| iOS | `decaid-lab-ios-unsigned-<version>.ipa` | Sign with your own provisioning profile before installing. |
 
-All files are covered by `decaid-canary-<version>-SHA256SUMS.txt` in the release.
+All files are covered by `decaid-lab-<version>-SHA256SUMS.txt` in the release.
 
-Every file also ships as a `-latest` alias (`decaid-canary-android-latest.apk`,
-`decaid-canary-macos-latest.dmg`, `decaid-canary-linux-x86_64-latest.AppImage`, ...), so
-`https://github.com/ChampionDesigns/Decaid-Canary/releases/latest/download/decaid-canary-macos-latest.zip`
+Every file also ships as a `-latest` alias (`decaid-lab-android-latest.apk`,
+`decaid-lab-macos-latest.dmg`, `decaid-lab-linux-x86_64-latest.AppImage`, ...), so
+`https://github.com/ChampionDesigns/Decaid-Lab/releases/latest/download/decaid-lab-macos-latest.zip`
 always points at the newest stable release. The aliases are covered by
-`decaid-canary-latest-SHA256SUMS.txt`.
+`decaid-lab-latest-SHA256SUMS.txt`.
 
 ### Verifying checksums
 
 ```bash
 # macOS / Linux
-curl -sL -O https://github.com/ChampionDesigns/Decaid-Canary/releases/download/v<version>/decaid-canary-<version>-SHA256SUMS.txt
-shasum -a 256 -c decaid-canary-<version>-SHA256SUMS.txt --ignore-missing
+curl -sL -O https://github.com/ChampionDesigns/Decaid-Lab/releases/download/v<version>/decaid-lab-<version>-SHA256SUMS.txt
+shasum -a 256 -c decaid-lab-<version>-SHA256SUMS.txt --ignore-missing
 # download every artifact into the same directory first, or use --ignore-missing
 ```
 
 ```powershell
 # Windows PowerShell
-curl.exe -L -O https://github.com/ChampionDesigns/Decaid-Canary/releases/download/v<version>/decaid-canary-<version>-SHA256SUMS.txt
-Get-FileHash decaid-canary-windows-x64-<version>.zip -Algorithm SHA256
+curl.exe -L -O https://github.com/ChampionDesigns/Decaid-Lab/releases/download/v<version>/decaid-lab-<version>-SHA256SUMS.txt
+Get-FileHash decaid-lab-windows-x64-<version>.zip -Algorithm SHA256
 # compare the hash against the manifest entry
 ```
 
 ### AppImage notes
 
 - Optional desktop integration (menu entry, icon) is handled by AppImageLauncher or `appimaged` when installed; the AppImage itself always runs standalone.
-- On systems without FUSE, run `./decaid-canary-linux-<arch>-<version>.AppImage --appimage-extract-and-run` instead.
+- On systems without FUSE, run `./decaid-lab-linux-<arch>-<version>.AppImage --appimage-extract-and-run` instead.
 - Removal is deleting the file; the app stores its data under `~/.local/share` (or `$XDG_DATA_HOME`).
 
 ### Windows notes
 
-The Windows build is unsigned, so a clean machine may show an unknown-publisher warning when `Decide.exe` is first launched. There is no installer; the ZIP is portable. Decide stores user data and logs under `%APPDATA%`, not in the extraction folder, so deleting the extracted folder does not remove them.
+The Windows build is unsigned, so a clean machine may show an unknown-publisher warning when `Decaid-Lab.exe` is first launched. There is no installer; the ZIP is portable. Decaid Lab stores user data and logs under `%APPDATA%\net.tadel\Decide`, not in the extraction folder, so deleting the extracted folder does not remove them.
 
 ### macOS notes
 
 macOS builds are not signed with a Developer ID and not notarized. On first
 launch, right-click the app (or DMG) and choose **Open**, then confirm. The
 in-app "Check for updates" flow opens the Releases page for manual download;
-there is no Sparkle auto-update in the canary fork.
+there is no Sparkle auto-update in the canary fork. Decaid Lab.app keeps the bundle id of the earlier Decide.app, so both read the same data; delete Decide.app after you install Decaid Lab.app.
 
 ### Dry-run validation before tagging
 
@@ -120,13 +120,13 @@ git push origin v1.0.0-alpha.1
 
 ## Step 2: Monitor the Build
 
-1. Go to https://github.com/ChampionDesigns/Decaid-Canary/actions
+1. Go to https://github.com/ChampionDesigns/Decaid-Lab/actions
 2. Watch the "Create Release" workflow
 3. Wait for it to complete (usually 5-10 minutes)
 
 ## Step 3: Verify the Release
 
-1. Go to https://github.com/ChampionDesigns/Decaid-Canary/releases
+1. Go to https://github.com/ChampionDesigns/Decaid-Lab/releases
 2. Your new release should appear with all platform artifacts attached
 3. Download and test the relevant artifacts
 4. On an Android or iOS device, run a bulk de1app import (a few hundred shots)
@@ -137,7 +137,7 @@ git push origin v1.0.0-alpha.1
 
 ## Version Numbering
 
-Decaid-Canary follows [Semantic Versioning](https://semver.org/):
+Decaid Lab follows [Semantic Versioning](https://semver.org/):
 
 - **MAJOR.MINOR.PATCH** (e.g., `v1.2.3`)
   - **MAJOR**: Breaking changes or major new features
@@ -162,7 +162,7 @@ Pre-releases are automatically detected by:
 - Version suffix (beta, alpha, rc)
 - GitHub's pre-release flag
 
-Update checks query `ChampionDesigns/Decaid-Canary` releases. Android shows an
+Update checks query `ChampionDesigns/Decaid-Lab` releases. Android shows an
 in-app download/install flow for canary-signed builds; all other platforms open
 the Release page.
 
@@ -181,12 +181,12 @@ Development builds use stable GitHub Actions artifact names, while the packaged 
 
 | Platform | Actions artifact | Downloaded file |
 | --- | --- | --- |
-| Android | `decaid-canary-android-develop` | `decaid-canary-android-develop-<short-sha>.apk` |
-| macOS | `decaid-canary-macos-develop` | `decaid-canary-macos-develop-<short-sha>.zip` |
-| Linux x64 | `decaid-canary-linux-x64-develop` | `decaid-canary-linux-x64-develop-<short-sha>.tar.gz` |
-| Linux ARM64 | `decaid-canary-linux-arm64-develop` | `decaid-canary-linux-arm64-develop-<short-sha>.tar.gz` |
-| Windows x64 | `decaid-canary-windows-x64-develop` | `decaid-canary-windows-x64-develop-<short-sha>.zip` |
-| iOS | `decaid-canary-ios-unsigned-develop` | `decaid-canary-ios-unsigned-develop-<short-sha>.ipa` |
+| Android | `decaid-lab-android-develop` | `decaid-lab-android-develop-<short-sha>.apk` |
+| macOS | `decaid-lab-macos-develop` | `decaid-lab-macos-develop-<short-sha>.zip` |
+| Linux x64 | `decaid-lab-linux-x64-develop` | `decaid-lab-linux-x64-develop-<short-sha>.tar.gz` |
+| Linux ARM64 | `decaid-lab-linux-arm64-develop` | `decaid-lab-linux-arm64-develop-<short-sha>.tar.gz` |
+| Windows x64 | `decaid-lab-windows-x64-develop` | `decaid-lab-windows-x64-develop-<short-sha>.zip` |
+| iOS | `decaid-lab-ios-unsigned-develop` | `decaid-lab-ios-unsigned-develop-<short-sha>.ipa` |
 
 ## Distribution Signing
 

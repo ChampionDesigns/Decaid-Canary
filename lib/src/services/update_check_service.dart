@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:reaprime/src/util/remote_error.dart';
 import 'package:rxdart/rxdart.dart';
@@ -43,12 +44,14 @@ class UpdateCheckService {
     bool? platformIsAndroid,
     bool? platformIsMacOS,
     GithubRateLimit? rateLimit,
+    http.Client? httpClient,
     this.externallyManaged = BuildInfo.appStore,
   }) : _updater =
            updater ??
            AndroidUpdater(
-             owner: 'ChampionDesigns',
-             repo: 'Decaid-Canary',
+             owner: releaseRepoOwner,
+             repo: releaseRepoName,
+             httpClient: httpClient,
              rateLimit: rateLimit,
            ),
        _isAndroid = platformIsAndroid ?? Platform.isAndroid,
@@ -275,13 +278,13 @@ class UpdateCheckService {
   }
 
   String getReleasesUrl() {
-    return 'https://github.com/ChampionDesigns/Decaid-Canary/releases';
+    return releasesPageUrl;
   }
 
   String? getReleaseUrl([UpdateInfo? update]) {
     final release = update ?? _availableUpdate;
     if (release == null) return null;
-    return 'https://github.com/ChampionDesigns/Decaid-Canary/releases/tag/${release.tagName}';
+    return '$releasesPageUrl/tag/${release.tagName}';
   }
 
   Future<void> enableAutomaticChecks() async {
@@ -311,7 +314,9 @@ class UpdateCheckService {
     _hasCompletedCheck = true;
     _availableUpdate = UpdateInfo(
       version: version,
-      downloadUrl: downloadUrl ?? 'https://github.com/ChampionDesigns/Decaid-Canary/releases/download/v0.7.7/decent-android-0.7.7.apk',
+      downloadUrl:
+          downloadUrl ??
+          '$releasesPageUrl/download/v0.7.7/decent-android-0.7.7.apk',
       releaseNotes: 'Forced update for testing the update API.',
       isPrerelease: false,
       tagName: 'v$version',

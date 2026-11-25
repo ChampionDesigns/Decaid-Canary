@@ -79,7 +79,7 @@ Widget onboardingScaffoldPreview() {
       builder: (context) {
         final theme = ShadTheme.of(context);
         return OnboardingScaffold(
-          title: 'Welcome to Decide',
+          title: 'Welcome to Decaid Lab',
           semanticsLabel: 'Welcome screen',
           body: [
             Text(

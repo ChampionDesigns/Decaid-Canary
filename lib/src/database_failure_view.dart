@@ -109,7 +109,7 @@ class _DatabaseFailureViewState extends State<DatabaseFailureView> {
       if (!mounted) return;
       setState(() {
         _status = report.isClean
-            ? 'Data cleared. Close and reopen Decide.'
+            ? 'Data cleared. Close and reopen Decaid Lab.'
             : _resetFailureStatus(report);
       });
     } catch (error) {
@@ -153,7 +153,7 @@ class _DatabaseFailureViewState extends State<DatabaseFailureView> {
                   spacing: 12,
                   children: [
                     const Text(
-                      'Decide stopped because its local database could not be '
+                      'Decaid Lab stopped because its local database could not be '
                       'opened or updated. Your existing data has been left in '
                       'place.',
                     ),
@@ -166,7 +166,7 @@ class _DatabaseFailureViewState extends State<DatabaseFailureView> {
                     const Text(
                       'Please preserve your data and share your logs (and a '
                       'data package if one is available) with Decent support, '
-                      'then use an updated Decide build or assisted repair '
+                      'then use an updated Decaid Lab build or assisted repair '
                       'before trying again.',
                     ),
                     SizedBox(

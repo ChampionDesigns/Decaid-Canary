@@ -30,7 +30,7 @@ void main() {
     AndroidUpdater updaterFor(List<Map<String, Object>> releases) {
       return AndroidUpdater(
         owner: 'ChampionDesigns',
-        repo: 'Decaid-Canary',
+        repo: 'Decaid-Lab',
         httpClient: MockClient(
           (_) async => http.Response(jsonEncode(releases), 200),
         ),
@@ -138,7 +138,7 @@ void main() {
           capturedRequest.headers['accept'],
           'application/vnd.github.v3+json',
         );
-        expect(capturedRequest.headers['user-agent'], 'Decide');
+        expect(capturedRequest.headers['user-agent'], 'Decaid-Lab');
         expect(update?.version, '0.7.15');
         expect(update?.downloadUrl, 'https://example.com/0.7.15.apk');
       },
@@ -442,7 +442,7 @@ void main() {
       var callCount = 0;
       final updater = AndroidUpdater(
         owner: 'ChampionDesigns',
-        repo: 'Decaid-Canary',
+        repo: 'Decaid-Lab',
         httpClient: MockClient((_) async {
           final releases = callCount++ == 0
               ? [
@@ -508,7 +508,7 @@ void main() {
 
         final updater = AndroidUpdater(
           owner: 'ChampionDesigns',
-          repo: 'Decaid-Canary',
+          repo: 'Decaid-Lab',
           httpClient: client,
         );
 
@@ -751,7 +751,7 @@ void main() {
       });
       final updater = AndroidUpdater(
         owner: 'ChampionDesigns',
-        repo: 'Decaid-Canary',
+        repo: 'Decaid-Lab',
         httpClient: client,
       );
 
@@ -779,7 +779,7 @@ void main() {
       });
       final updater = AndroidUpdater(
         owner: 'ChampionDesigns',
-        repo: 'Decaid-Canary',
+        repo: 'Decaid-Lab',
         httpClient: client,
       );
 
