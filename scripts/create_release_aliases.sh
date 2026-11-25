@@ -11,7 +11,7 @@ VERSION="$2"
 [ -d "$ARTIFACTS_DIR" ] || { echo "FAIL: missing $ARTIFACTS_DIR" >&2; exit 1; }
 
 ARTIFACTS_DIR="$(cd "$ARTIFACTS_DIR" && pwd)"
-MANIFEST="$(dirname "$ARTIFACTS_DIR")/decaid-canary-latest-SHA256SUMS.txt"
+MANIFEST="$(dirname "$ARTIFACTS_DIR")/decaid-lab-latest-SHA256SUMS.txt"
 cd "$ARTIFACTS_DIR"
 
 SOURCES=()

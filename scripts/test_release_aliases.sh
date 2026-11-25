@@ -7,28 +7,28 @@ trap 'rm -rf "$TMP"' EXIT
 
 VERSION=1.2.3
 ARTIFACTS="$TMP/release-artifacts"
-MANIFEST="$TMP/decaid-canary-latest-SHA256SUMS.txt"
+MANIFEST="$TMP/decaid-lab-latest-SHA256SUMS.txt"
 SOURCE_PATHS=(
-  "android-apk/decaid-canary-android-${VERSION}.apk"
-  "macos-app/decaid-canary-macos-${VERSION}.zip"
-  "macos-app/decaid-canary-macos-${VERSION}.dmg"
-  "linux-app/decaid-canary-linux-x64-${VERSION}.tar.gz"
-  "linux-app/decaid-canary-linux-x86_64-${VERSION}.AppImage"
-  "raspberrypi-linux-arm64-app/decaid-canary-linux-arm64-${VERSION}.tar.gz"
-  "raspberrypi-linux-arm64-app/decaid-canary-linux-aarch64-${VERSION}.AppImage"
-  "windows-app/decaid-canary-windows-x64-${VERSION}.zip"
-  "ios-ipa-unsigned/decaid-canary-ios-unsigned-${VERSION}.ipa"
+  "android-apk/decaid-lab-android-${VERSION}.apk"
+  "macos-app/decaid-lab-macos-${VERSION}.zip"
+  "macos-app/decaid-lab-macos-${VERSION}.dmg"
+  "linux-app/decaid-lab-linux-x64-${VERSION}.tar.gz"
+  "linux-app/decaid-lab-linux-x86_64-${VERSION}.AppImage"
+  "raspberrypi-linux-arm64-app/decaid-lab-linux-arm64-${VERSION}.tar.gz"
+  "raspberrypi-linux-arm64-app/decaid-lab-linux-aarch64-${VERSION}.AppImage"
+  "windows-app/decaid-lab-windows-x64-${VERSION}.zip"
+  "ios-ipa-unsigned/decaid-lab-ios-unsigned-${VERSION}.ipa"
 )
 ALIAS_PATHS=(
-  "android-apk/decaid-canary-android-latest.apk"
-  "macos-app/decaid-canary-macos-latest.zip"
-  "macos-app/decaid-canary-macos-latest.dmg"
-  "linux-app/decaid-canary-linux-x64-latest.tar.gz"
-  "linux-app/decaid-canary-linux-x86_64-latest.AppImage"
-  "raspberrypi-linux-arm64-app/decaid-canary-linux-arm64-latest.tar.gz"
-  "raspberrypi-linux-arm64-app/decaid-canary-linux-aarch64-latest.AppImage"
-  "windows-app/decaid-canary-windows-x64-latest.zip"
-  "ios-ipa-unsigned/decaid-canary-ios-unsigned-latest.ipa"
+  "android-apk/decaid-lab-android-latest.apk"
+  "macos-app/decaid-lab-macos-latest.zip"
+  "macos-app/decaid-lab-macos-latest.dmg"
+  "linux-app/decaid-lab-linux-x64-latest.tar.gz"
+  "linux-app/decaid-lab-linux-x86_64-latest.AppImage"
+  "raspberrypi-linux-arm64-app/decaid-lab-linux-arm64-latest.tar.gz"
+  "raspberrypi-linux-arm64-app/decaid-lab-linux-aarch64-latest.AppImage"
+  "windows-app/decaid-lab-windows-x64-latest.zip"
+  "ios-ipa-unsigned/decaid-lab-ios-unsigned-latest.ipa"
 )
 
 for i in "${!SOURCE_PATHS[@]}"; do
