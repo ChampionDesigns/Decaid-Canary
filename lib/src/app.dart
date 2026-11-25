@@ -265,8 +265,8 @@ class _MyAppState extends State<MyApp> {
     final context = NavigationService.context;
     if (context == null || !context.mounted) return;
     final updater = AndroidUpdater(
-      owner: 'ChampionDesigns',
-      repo: 'Decaid-Canary',
+      owner: releaseRepoOwner,
+      repo: releaseRepoName,
     );
     try {
       await showDialog<void>(
