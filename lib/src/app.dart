@@ -392,7 +392,7 @@ class _MyAppState extends State<MyApp> {
 
             supportedLocales: const [Locale('en', '')],
 
-            onGenerateTitle: (BuildContext context) => "Decide",
+            onGenerateTitle: (BuildContext context) => "Decaid Lab",
             theme: ShadThemeData(
               colorScheme: DecentColorScheme.light(),
               brightness: Brightness.light,

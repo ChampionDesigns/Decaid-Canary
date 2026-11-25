@@ -440,7 +440,7 @@ class De1StateManager with WidgetsBindingObserver {
           title: const Text('Link your Decent account'),
           content: const Text(
             'This machine does not report a serial number or machine model. '
-            'Link your Decent account so Decide can identify it.',
+            'Link your Decent account so Decaid Lab can identify it.',
           ),
           actions: [
             TextButton(

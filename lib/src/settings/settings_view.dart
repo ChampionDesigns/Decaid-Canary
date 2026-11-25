@@ -446,7 +446,7 @@ class SettingsView extends StatelessWidget {
           title: const Text('Auto-update unavailable'),
           content: const Text(
             'The built-in updater could not be configured on this Mac. '
-            'Download the latest Decide build from GitHub Releases.',
+            'Download the latest Decaid Lab build from GitHub Releases.',
           ),
           actions: [
             TextButton(

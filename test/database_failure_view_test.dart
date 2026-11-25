@@ -110,7 +110,10 @@ void main() {
     await tester.tap(find.text('Reset without a saved copy'));
     await tester.pumpAndSettle();
     expect(resets, 1);
-    expect(find.text('Data cleared. Close and reopen Decide.'), findsOneWidget);
+    expect(
+      find.text('Data cleared. Close and reopen Decaid Lab.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('save failure shows status and re-enables both buttons', (
@@ -154,7 +157,10 @@ void main() {
     await tester.tap(find.text('Reset without a saved copy'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Data cleared. Close and reopen Decide.'), findsNothing);
+    expect(
+      find.text('Data cleared. Close and reopen Decaid Lab.'),
+      findsNothing,
+    );
     expect(find.textContaining('/db/streamline_bridge.sqlite'), findsOneWidget);
     expect(find.textContaining('/db/store.reset-1'), findsOneWidget);
   });

@@ -483,7 +483,7 @@ void main() {
             (e) => e.message,
             'message',
             allOf(
-              startsWith('Not a Decide shot export'),
+              startsWith('Not a Decaid Lab shot export'),
               contains('Import from De1App'),
             ),
           ),

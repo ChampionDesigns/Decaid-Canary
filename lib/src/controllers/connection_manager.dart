@@ -980,7 +980,7 @@ class ConnectionManager {
           message: 'Bluetooth permission was denied.',
           suggestion:
               'Go to Settings > Privacy & Security > Bluetooth and enable '
-              'permission for Decide.',
+              'permission for Decaid Lab.',
         );
         _setTransportCondition(error);
         _emit(error);
