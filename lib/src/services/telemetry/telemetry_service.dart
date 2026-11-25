@@ -20,7 +20,7 @@ abstract class TelemetryService {
 
   String getLogBuffer();
 
-  // Decaid-Canary fork: no upstream Firebase project; telemetry is disabled.
+  // Decaid Lab fork: no upstream Firebase project; telemetry is disabled.
   static TelemetryService create({required LogBuffer logBuffer}) {
     return NoOpTelemetryService();
   }

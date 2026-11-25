@@ -1,6 +1,6 @@
-# Decaid-Canary
+# Decaid Lab
 
-> **Decaid-Canary** connects your Decent Espresso machine to beautiful,
+> **Decaid Lab** connects your Decent Espresso machine to beautiful,
 modern user interfaces (called "skins").  
 Think of it as the bridge between your
 DE1 (or Bengle) and sleek touchscreen experiences like [Streamline.js](https://github.com/allofmeng/streamline_project).
@@ -49,7 +49,7 @@ complexity of machine communication and device connectivity.
 
 To browse the complete API documentation:
 
-1. Start Decide
+1. Start Decaid Lab
 2. Navigate to [http://localhost:4001](http://localhost:4001)
 
 Or:  
@@ -294,15 +294,16 @@ This reduces startup races but does not replace the application's Bluetooth reco
 
 ## About the Name
 
-**Decaid-Canary** is a canary fork of **Decaid** (formerly REA → ReaPrime → Streamline Bridge), the companion app for Decent Espresso machines.
+**Decaid Lab** is a canary fork of **Decaid** (formerly REA → ReaPrime → Streamline Bridge), the companion app for Decent Espresso machines.
 
 ### The Evolution
 
-The original name **REA** stood for "Reasonable Espresso App" — a tongue-in-cheek reference to brewing something "reasonably decent" with a Decent Espresso machine. As the project evolved through **ReaPrime** and **Streamline Bridge**, it eventually became **Decent.app**, then **Decaid**. This fork publishes pre-release canary builds under the name **Decaid-Canary**.
+The original name **REA** stood for "Reasonable Espresso App" — a tongue-in-cheek reference to brewing something "reasonably decent" with a Decent Espresso machine. As the project evolved through **ReaPrime** and **Streamline Bridge**, it eventually became **Decent.app**, then **Decaid**. This fork publishes pre-release canary builds under the name **Decaid Lab**.
 
 - **Internal identifiers** remain unchanged where they do not identify the installed application (`reaprime` Dart package, `streamline_bridge` database, and `.reaplugin` extension) to avoid breaking integrations.
 - **Platform identifiers** are fork-owned so canary builds coexist with upstream Decaid: Android `com.decentespresso.decaid.canary`, Apple/Linux `com.decentespresso.decaid-canary`.
-- **Display name** is **Decide** on all platforms. On macOS, Finder displays the application bundle as **Decide.app**; use **Decide** in prose.
+- **Display name** is **Decaid Lab** on all platforms. On macOS, Finder displays the application bundle as **Decaid Lab.app**; on Windows the binary is **Decaid-Lab.exe**; use **Decaid Lab** in prose.
+- **Data folders** keep their earlier names, so an installed Decide build keeps its data: the Windows version resource keeps `ProductName` **Decide**, from which the data folder `%APPDATA%\net.tadel\Decide` is built.
 
 ## Credits
 
@@ -320,6 +321,6 @@ See the [LICENSE](LICENSE.txt) file for details.
 
 ---
 
-**Need help?** Check our [documentation](/doc) or open an [issue](https://github.com/ChampionDesigns/Decaid-Canary/issues).
+**Need help?** Check our [documentation](/doc) or open an [issue](https://github.com/ChampionDesigns/Decaid-Lab/issues).
 
 
