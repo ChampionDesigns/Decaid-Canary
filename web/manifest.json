@@ -1,11 +1,11 @@
 {
-    "name": "Decide",
-    "short_name": "Decide",
+    "name": "Decaid Lab",
+    "short_name": "Decaid Lab",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#hexcode",
     "theme_color": "#hexcode",
-    "description": "Decide - Gateway for Decent Espresso Machines",
+    "description": "Decaid Lab - Gateway for Decent Espresso Machines",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
